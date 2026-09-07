@@ -1,0 +1,3 @@
+[submodule "Plugins/RacetrackSurface"]
+	path = Plugins/RacetrackSurface
+	url = https://github.com/Balazs200001/RacetrackSurfacePlugin.git
