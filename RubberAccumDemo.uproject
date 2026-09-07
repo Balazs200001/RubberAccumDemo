@@ -8,11 +8,6 @@
       "Name": "RubberAccumDemo",
       "Type": "Runtime",
       "LoadingPhase": "Default"
-    },
-    {
-      "Name": "RacetrackSurfaceEditor",
-      "Type": "Editor",
-      "LoadingPhase": "PostEngineInit"
     }
   ],
   "Plugins": [
