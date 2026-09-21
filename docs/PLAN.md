@@ -59,6 +59,11 @@ of it is wasted whichever way the phase B gate resolves.
 
 *Exit: the write API exists, is callable from C++ and Blueprint, and stores nothing yet.*
 
+**Status 2026-09-22: complete.** Builds in isolation (`BuildPlugin`), as the unity game target, and
+as the editor target. Twelve automation tests pass headlessly. Not verified: A7 has not been
+exercised from an actual Blueprint graph, only compiled, because no map exists in `Content/` yet.
+Carried into phase C.
+
 ## Phase B — Feasibility gate (owed from week 2)
 
 The measurement that the architecture argument depends on. Run through MCP against the running
