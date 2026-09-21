@@ -66,14 +66,26 @@ Carried into phase C.
 
 ## Phase B — Feasibility gate (owed from week 2)
 
-The measurement that the architecture argument depends on. Run through MCP against the running
-editor: automation test plus `stat GPU` / CSV profiler, not by hand.
+The measurement that the architecture argument depends on.
+
+Amended 2026-09-22, B3 method. The original plan said to drive `stat GPU` and the CSV profiler
+through MCP. The UE 5.8 toolsets expose no console-command or CVar-set tool — `EditorAppToolset`
+offers `SearchCVars` for lookup only, and nothing anywhere executes a console command. So
+`stat GPU`, `CsvProfile` and `FreezeRendering` are not reachable from MCP at all.
+
+B3 instead times the passes directly with RHI timestamp queries inside a C++ automation test:
+`RHICreateRenderQuery(RQT_AbsoluteTime)` bracketing each pass, read back with
+`RHIGetRenderQueryResult`, gated on the RHI's timestamp-query support flag. This is a better
+measurement than the original anyway: it isolates the passes under test rather than the whole
+frame, returns a number in a log rather than one read off a screenshot, and re-runs unattended for
+the later profiling passes in D6, E6 and H4. Run headlessly via `UnrealEditor-Cmd.exe`, and from
+the live editor via `AutomationTestToolset`.
 
 | # | Task | Exit |
 |---|---|---|
 | B1 | Persistent render target allocated and drawn into by the canvas path | A streak persists across frames |
-| B2 | Receiving material function sampling by world position (authored in editor, logged in `EDITOR_SETUP.md`) | Streak visible on a surface |
-| B3 | Measure: one paint call, N paint calls, full-buffer decay pass | Real numbers recorded in `docs/MEASUREMENTS.md` |
+| B2 | Receiving material function sampling by world position (authored through `MaterialTools` over MCP, logged in `EDITOR_SETUP.md`) | Streak visible on a surface |
+| B3 | Measure: one paint call, N paint calls, full-buffer decay pass, via RHI timestamp queries in an automation test | Real numbers recorded in `docs/MEASUREMENTS.md` |
 | B4 | Area vs texel density decision: region size, memory, channel count, precision | Decision recorded with the numbers behind it |
 | B5 | Decide saturating accumulator: hardware blend vs double buffer | Decision recorded |
 | B6 | Channel packing, with the constraint that skid and buildup are sampleable together | Layout recorded |
