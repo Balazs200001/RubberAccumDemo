@@ -94,7 +94,8 @@ the live editor via `AutomationTestToolset`.
 the flush strategy is redesigned before anything else is built. If no usable region size fits
 memory at skid-mark density, the region strategy changes here.*
 
-**Status 2026-09-22: gate PASSED, B3 to B6 decided, B1 and B2 outstanding.**
+**Status 2026-09-22: gate PASSED, B3 to B6 decided, B2 authored, B1 and B2 not yet seen on a
+surface.**
 
 Four contacts cost 0.3610 ms and 0.3040 ms across two runs, inside the 0.5 ms budget unbatched.
 The flush strategy is not redesigned. Numbers and reasoning in
@@ -118,11 +119,40 @@ Two findings that change later phases:
   gives 36.62 cm per texel over 1500 m. The single-region design is a 200 m instrument, and the
   circuit case needs a following region or tiling. Folded into D5.
 
-Still outstanding in this phase, both needing the editor open:
+Still outstanding in this phase:
 
+- **B2 is authored but not demonstrated.** `MF_SampleRacetrackSurface`, `MPC_RacetrackSurface` and
+  the debug material exist and compile, and the material renders on a 200 m plane in
+  `/Game/Maps/L_SurfaceVerification`. It currently renders black, which is the designed
+  not-yet-published state rather than a working sample. See
+  [EDITOR_SETUP.md](EDITOR_SETUP.md).
 - **B1 is written and tested but not visually verified.** A streak is proven to persist by readback
   in the automation tests, not yet seen on a surface.
-- **B2 has not started.** The receiving material function is the remaining editor-side work.
+
+Both are blocked on the same thing: `ASurfaceVerificationRig`, the actor that configures the
+region, binds the render target to the material and sweeps a contact, compiles and links on the
+game target but cannot be loaded into the running editor. Live Coding cannot introduce a newly
+exported cross-module symbol, so the editor target needs a full build with the editor closed.
+Reason and evidence in [EDITOR_SETUP.md](EDITOR_SETUP.md).
+
+### Where the saturation constant lives, decided 2026-09-22
+
+B5 left `1 - exp(-k * E)` needing the same `k` in the material and in the phase F query path.
+
+`RacetrackSurfaceMapping::SaturationConstant` in `SurfaceAccumulationMapping.h` is the single
+source of truth, at **3.0**. `ExposureToCoverage` beside it is what phase F calls directly.
+`USurfaceAccumulationSubsystem` pushes the constant, the region centre and the region world size
+into `MPC_RacetrackSurface` on `ConfigureRegion` and on first buffer allocation, and the material
+function reads them as collection parameters. Nothing is typed into the graph, and the collection
+asset defaults `k` to 0 so that a missing push shows up as no coverage anywhere rather than as a
+stale second copy that quietly works.
+
+3.0 is derived from B6 rather than chosen for looks: at the 0.002 per contact buildup increment
+that the RGBA8 precision floor ruled out, 500 contacts give an exposure of 1.0, which maps to 0.95
+coverage.
+
+**Not verified.** The mapping has never been evaluated against a real buffer. That is what the
+outstanding visual check is for, and no automation test covers `ExposureToCoverage` yet.
 
 ## Phase C — Test harness
 
