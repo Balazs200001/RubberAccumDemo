@@ -102,9 +102,10 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 	SetActorLocation(Position);
 	SetActorRotation(Direction.Rotation());
 
-	Subsystem->RegisterSurfaceContact(
-		Position,
-		Direction * SpeedCentimetresPerSecond,
+	Subsystem->RegisterSurfaceContactInTrackSpace(
+		DistanceAlongTrack,
+		LateralOffsetAlpha,
+		SpeedCentimetresPerSecond,
 		SlipAmount,
 		ContactWidth,
 		Channel);

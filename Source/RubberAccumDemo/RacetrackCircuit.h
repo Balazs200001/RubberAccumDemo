@@ -16,6 +16,13 @@ public:
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 
+	virtual void PostInitializeComponents() override;
+
+	const USplineComponent* GetCentreline() const
+	{
+		return Spline;
+	}
+
 	double GetTrackLength() const;
 
 	double GetTrackWidth() const
@@ -39,6 +46,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "2", ClampMax = "64"))
 	int32 PointsPerCorner = 8;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "0.5"))
+	double SurfaceCentimetresPerTexel = 9.765625;
 
 private:
 	void GenerateTrackSpline();

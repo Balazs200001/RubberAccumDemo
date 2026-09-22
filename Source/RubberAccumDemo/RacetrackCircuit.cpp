@@ -1,6 +1,9 @@
 #include "RacetrackCircuit.h"
 
 #include "Components/SplineComponent.h"
+#include "Engine/World.h"
+#include "SurfaceAccumulationSubsystem.h"
+#include "SurfaceTrackRibbon.h"
 
 ARacetrackCircuit::ARacetrackCircuit()
 {
@@ -15,6 +18,33 @@ void ARacetrackCircuit::OnConstruction(const FTransform& Transform)
 	Super::OnConstruction(Transform);
 
 	GenerateTrackSpline();
+}
+
+void ARacetrackCircuit::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	UWorld* World = GetWorld();
+
+	if (World == nullptr || Spline == nullptr)
+	{
+		return;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		return;
+	}
+
+	FSurfaceTrackRibbon Ribbon;
+	Ribbon.TrackLength = GetTrackLength();
+	Ribbon.TrackWidth = TrackWidth;
+	Ribbon.CentimetresPerTexel = SurfaceCentimetresPerTexel;
+	Ribbon.bClosedLoop = Spline->IsClosedLoop();
+
+	Subsystem->ConfigureTrackRibbon(Spline, Ribbon);
 }
 
 void ARacetrackCircuit::GenerateTrackSpline()
