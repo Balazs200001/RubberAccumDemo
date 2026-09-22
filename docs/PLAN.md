@@ -566,10 +566,31 @@ flat in stroke count. **Recorded here rather than discovered in C4. Not implemen
 |---|---|---|
 | R1 | `FSurfaceTrackRibbon` and the world to (distance, offset) mapping, with headless tests | Pure math, no rendering, no assets. A point on the centreline maps to offset 0; offset sign is consistent around both left and right hand corners; distance wraps on a closed loop; a point beyond the track edge is reported out-of-bounds rather than clamped |
 | R2 | Measure the conversion cost at 4 and at 80 contacts per frame | Number in `MEASUREMENTS.md`. **Bail-out gate, see below** |
-| R3 | Buffer domain and paint path moved to track space, including the lap-seam split | Contacts land on the ribbon, and no stroke is smeared across the buffer at the seam |
-| R4 | Read the painted stroke width back from the buffer | A texel profile, settling whether D1's "narrow" requirement is already violated |
-| R5 | Receiving material samples by mesh UV, and a spline-mesh road carrying track-space UVs | Rubber appears on the road where the cars drive |
+| R3 | Buffer domain and paint path moved to track space, including the lap-seam split | Contacts land on the ribbon, and no stroke is smeared across the buffer at the seam — **met 2026-09-23** |
+| R4 | Read the painted stroke width back from the buffer | A texel profile, settling whether D1's "narrow" requirement is already violated — **met 2026-09-23** |
+| R5 | Receiving material samples by mesh UV, and a road carrying track-space UVs | Rubber appears on the road where the cars drive |
 | R6 | Re-take the real-scene measurement and compare against the five-car baseline | Numbers in `MEASUREMENTS.md` against median 0.0460 ms, p99 0.4450 ms, 1346 samples |
+
+**Status 2026-09-23: R1 to R4 complete, R5 and R6 outstanding.** 36 of 36 automation tests pass
+headlessly, twice. All three build paths pass.
+
+**R2 gate: passed, and the headless re-take moved the conclusion.** Eighty contacts at the harness
+circuit's 18-point spline cost 0.5053 ms on the worst of two headless runs, 3.03 % of a 60 Hz
+frame. The earlier editor-only reading was 0.1332 ms — optimistic by four times. Cost is linear in
+spline points and flat in contact count, consistently across three runs, so **the per-contact
+segment cache is mandatory for any track more detailed than this harness**, not merely at
+real-circuit scale as the editor numbers suggested. Not implemented; sized and located.
+
+**R4 closed a carried unknown and opened a smaller one.** A 20 cm contact patch stores exactly
+19.53 cm — 2 texels at the production density, 8 at four times it. D1's "narrow" requirement was
+never violated. The readback also showed every inked texel at exactly 1.0000 with no falloff at
+all: the additive blend state is declared `CW_RGB`, so the brush's alpha channel takes no part in
+either the blend factors or the written channels, and `BuildRadialBandTexels`' smoothstep is
+discarded entirely on the production path. **The paint path draws hard-edged rectangles and always
+has.** That is what D1 wants, so nothing is fixed now, but D2 and E4 start from a hard edge rather
+than the soft one the brush implies.
+
+Numbers for both in [MEASUREMENTS.md](MEASUREMENTS.md).
 
 *Exit: the same five cars lap and paint as they do today, on a ribbon sized from the centreline
 rather than a square world region, with the memory figures above demonstrated rather than argued.*

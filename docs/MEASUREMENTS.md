@@ -558,6 +558,9 @@ Treat the two as agreeing to about a factor of two, not better.
   `r.BloomQuality` needs console access that MCP does not have. **If the bands are genuinely
   wider than 2 texels, D1's "narrow" requirement is already violated and every later intensity
   figure is affected** — worth settling with a readback before D1, not after.
+  *Closed 2026-09-23 by [R4](#2026-09-23--r4-the-painted-stroke-width-read-back-at-last). The
+  buffer stores exactly 2 texels, 19.53 cm, for a 20 cm patch. D1's requirement is not violated
+  and the later intensity figures are safe.*
 - **Frame rate was not recorded.** `stat unit` is unreachable over MCP, so the cost of the paint
   pass *as a share of the frame* is not known, only its absolute time.
 
@@ -575,39 +578,80 @@ measurement, not a GPU one — no rendering is involved — so it uses wall-cloc
 (`FPlatformTime::Seconds`, 64 samples, median reported) rather than the RHI timestamp queries the
 GPU passes use.
 
-```
-Build:    Development, editor target, run IN THE EDITOR over MCP — see the caveat below
-Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, 20 physical cores, 32472 MB system memory
-Scene:    No scene. A closed circular USplineComponent built in the test, 150 m radius,
-          12 m track width, contacts spread evenly around the lap at five lateral offsets
-Method:   C++ automation test, wall-clock, 64 samples per figure, median reported
-```
+Standing hardware and method, plus: no scene at all. A closed circular `USplineComponent` built in
+the test, 150 m radius, 12 m track width, contacts spread evenly around the lap at five lateral
+offsets. 64 samples per figure, median reported.
+
+Three runs were taken: two headless under the standing method, and one earlier in the running
+editor. **The headless runs are the numbers of record.** All three are given because the spread
+between them is itself a result.
+
+### Headless run A, the number to carry forward
 
 | Spline points | Contacts | Full search | per contact | Known segment | per contact | Speedup |
 |---|---|---|---|---|---|---|
-| 18 | 4 | 0.0070 ms | 0.0017 ms | 0.0006 ms | 0.0001 ms | 11.7x |
-| **18** | **80** | **0.1332 ms** | 0.0017 ms | 0.0092 ms | 0.0001 ms | 14.5x |
-| 64 | 4 | 0.0149 ms | 0.0037 ms | 0.0003 ms | 0.0001 ms | 49.4x |
-| 64 | 80 | 0.3025 ms | 0.0038 ms | 0.0072 ms | 0.0001 ms | 42.0x |
-| 256 | 4 | 0.0505 ms | 0.0126 ms | 0.0004 ms | 0.0001 ms | 126.7x |
-| 256 | 80 | 1.0773 ms | 0.0135 ms | 0.0081 ms | 0.0001 ms | 133.0x |
-| 1024 | 4 | 0.1973 ms | 0.0493 ms | 0.0005 ms | 0.0001 ms | 395.2x |
-| 1024 | 80 | 4.1797 ms | 0.0522 ms | 0.0092 ms | 0.0001 ms | 454.2x |
+| 18 | 4 | 0.0256 ms | 0.0064 ms | 0.0020 ms | 0.0005 ms | 12.8x |
+| **18** | **80** | **0.5053 ms** | 0.0063 ms | 0.0335 ms | 0.0004 ms | 15.1x |
+| 64 | 4 | 0.0586 ms | 0.0147 ms | 0.0012 ms | 0.0003 ms | 48.9x |
+| 64 | 80 | 1.1915 ms | 0.0149 ms | 0.0277 ms | 0.0003 ms | 43.0x |
+| 256 | 4 | 0.1983 ms | 0.0496 ms | 0.0014 ms | 0.0004 ms | 141.6x |
+| 256 | 80 | 4.0437 ms | 0.0505 ms | 0.0316 ms | 0.0004 ms | 128.0x |
+| 1024 | 4 | 0.7644 ms | 0.1911 ms | 0.0018 ms | 0.0004 ms | 424.8x |
+| 1024 | 80 | 15.5313 ms | 0.1941 ms | 0.0339 ms | 0.0004 ms | 458.1x |
+
+### Headless run B, same binary, same command, minutes later
+
+| Spline points | Contacts | Full search | per contact | Known segment | per contact | Speedup |
+|---|---|---|---|---|---|---|
+| 18 | 4 | 0.0177 ms | 0.0044 ms | 0.0014 ms | 0.0004 ms | 12.6x |
+| **18** | **80** | **0.2830 ms** | 0.0035 ms | 0.0138 ms | 0.0002 ms | 20.5x |
+| 64 | 4 | 0.0235 ms | 0.0059 ms | 0.0006 ms | 0.0001 ms | 39.2x |
+| 64 | 80 | 0.5334 ms | 0.0067 ms | 0.0113 ms | 0.0001 ms | 47.2x |
+| 256 | 4 | 0.0882 ms | 0.0220 ms | 0.0005 ms | 0.0001 ms | 176.7x |
+| 256 | 80 | 1.7317 ms | 0.0216 ms | 0.0128 ms | 0.0002 ms | 135.3x |
+| 1024 | 4 | 0.3281 ms | 0.0820 ms | 0.0009 ms | 0.0002 ms | 363.9x |
+| 1024 | 80 | 6.4214 ms | 0.0803 ms | 0.0129 ms | 0.0002 ms | 497.9x |
 
 18 spline points is the harness circuit's actual complexity, read from `ARacetrackCircuit`.
 
+### The spread is a result, and it is large
+
+| Spline points, 80 contacts | Editor | Headless A | Headless B | A / B |
+|---|---|---|---|---|
+| 18 | 0.1332 ms | 0.5053 ms | 0.2830 ms | 1.79 |
+| 64 | 0.3025 ms | 1.1915 ms | 0.5334 ms | 2.23 |
+| 256 | 1.0773 ms | 4.0437 ms | 1.7317 ms | 2.33 |
+| 1024 | 4.1797 ms | 15.5313 ms | 6.4214 ms | 2.42 |
+
+Run A is uniformly about twice run B across every configuration, and the editor run is faster again.
+A uniform whole-run scale factor is not per-configuration noise; it is the machine running at a
+different clock. This is a laptop part, the test is a short burst of single-threaded work with no
+sustained load to provoke a boost state, and nothing in the test can control for that.
+
+**What that does and does not invalidate:**
+
+- **The shape is identical in all three runs** and is the thing every conclusion below rests on:
+  cost linear in spline points, flat in contact count, single-segment lookup flat at O(1). Three
+  independent runs agreeing on shape is stronger evidence than one agreeing on a constant.
+- **No absolute figure here should be quoted to better than a factor of three.** Where a decision
+  needs an absolute number, the worst observed run is used, not the median of the three.
+
 ### Gate: PASSED, no bail-out
 
-Eighty contacts at harness spline complexity cost **0.1332 ms**, which is **0.80 % of a 60 Hz
-frame**. The phase continues. For scale, the paint pass this sits alongside costs 0.0460 ms median
-in the same five-car scene, so conversion is about three times paint and both together are under
-1 % of a frame.
+Eighty contacts at harness spline complexity cost **0.5053 ms** on the worst run, which is
+**3.03 % of a 60 Hz frame**. The gate asked whether this cost makes the restructure a bad trade,
+and 3 % of a frame for the whole conversion does not. The phase continues.
+
+For scale, the paint pass this sits beside costs 0.0460 ms median in the five-car scene, so
+conversion is now the larger of the two by about ten times. That is a change in where the cost
+lives, and it is worth stating plainly: **track space moved cost from the GPU to the game thread.**
 
 ### Reading: the cost is linear in spline points, and that is the number that matters
 
-Per-contact cost against spline point count: 0.0017, 0.0038, 0.0135, 0.0522 ms for 18, 64, 256 and
-1024 points. From 64 points upward that is very nearly proportional — 4x the points for 3.6x and
-3.9x the cost.
+Per-contact cost against spline point count, run A: 0.0063, 0.0149, 0.0505, 0.1941 ms for 18, 64,
+256 and 1024 points. From 64 points upward that is very nearly proportional — 4x the points for
+3.4x and 3.8x the cost. Run B gives 0.0035, 0.0067, 0.0216, 0.0803, the same proportionality at a
+different constant.
 
 This is the behaviour predicted by reading the engine source rather than discovered by surprise.
 `FindInputKeyClosestToWorldLocation` (`SplineComponent.cpp:2859`) delegates to
@@ -624,31 +668,114 @@ spline complexity, so twenty cars cost twenty times one car and nothing worse.
 (`SplineComponent.h:837`) searches one named segment and skips the scan entirely. Measured at
 **0.0001 ms per contact, flat at every spline complexity** — genuinely O(1), as the source says.
 
-That is a 14x saving at harness complexity and a **454x** saving at 1024 points. It is not taken
-now because the gate passes without it and the plan's standing rule is to measure before
-optimising. What the table does is convert that from a judgement into a threshold:
+That is a 15x saving at harness complexity and a **458x** saving at 1024 points, and unlike the
+search itself the single-segment figure is essentially the same in both headless runs. It is not
+taken now because the gate passes without it and the plan's standing rule is to measure before
+optimising. What the table does is convert that from a judgement into a threshold.
 
-**At 80 contacts, the full search passes 1 ms at about 256 spline points.** A 7 km circuit with a
-point every 27 m has 256 points. So a real circuit lands exactly on the threshold, and **the
-per-contact segment cache becomes mandatory somewhere between the harness and real Spa** — it is a
-known, sized, and already-located piece of work rather than an unknown.
+**At 80 contacts the full search passes 1 ms somewhere between 64 and 256 spline points** — run A
+crosses at 64 points (1.1915 ms), run B at about 150. A 7 km circuit with a point every 27 m has
+256 points; with a point every 100 m it has 70. **So a real circuit is over the threshold on either
+run, and the per-contact segment cache is mandatory for any track more detailed than this
+harness.** That is a firmer conclusion than the editor-only numbers supported, and it is the one
+correction the headless re-take actually produced.
 
-Two things make the cache cheap when it is needed: the contacts that matter most are the ones from
+Two things make the cache cheap when it is needed: the contacts that matter most come from
 `ASplineFollowingCar`, which already uses the track-space overload and never searches at all; and a
 car's segment index changes by at most one or two per frame, so the previous index plus its
 neighbours is almost always the answer.
 
-### Caveat: these are editor numbers
+### The editor run, kept for the comparison rather than as evidence
 
-Taken in the running editor over MCP rather than headless, because the editor was open for the
-phase R work and the editor target cannot be rebuilt while Live Coding holds it. They are labelled
-as editor numbers per the rule at the top of this file.
+An earlier run was taken in the running editor over MCP, before the editor could be closed for the
+phase R editor-target rebuild. Its 18-point, 80-contact figure was 0.1332 ms, 0.80 % of a frame —
+**optimistic by about four times against the worst headless run**, and it is what the first draft
+of this entry recorded.
 
-For a pure CPU measurement with no rendering in the timed region this matters much less than it
-would for a GPU pass — there is no frame-rate smoothing to hide anything — but the editor's own
-game thread work is still in the machine.
+It is kept here because being wrong by 4x in the favourable direction is the useful part. The
+conclusion it supported ("the cache becomes mandatory somewhere around 256 spline points, so
+perhaps at real-circuit scale") was weaker and later than the headless runs justify. An editor
+number that looks harmless because the work is pure CPU and has no frame-rate smoothing to hide
+behind still misled the decision it fed.
 
-**OUTSTANDING: re-take headless once the editor is closed for the phase R editor-target rebuild.**
-The gate conclusion does not depend on it — the margin is 0.80 % of a frame against a threshold
-that would need to be wrong by two orders of magnitude — but the table is not yet a
-standing-method number.
+---
+
+## 2026-09-23 — R4, the painted stroke width, read back at last
+
+Test `RacetrackSurface.Accumulator.PaintedStrokeWidth`. This closes the "stored stroke width was
+not read back" item that has been carried since the first real-scene measurement, and which was
+flagged as potentially invalidating D1's "narrow" requirement before D1 had begun.
+
+One stroke, 20 cm contact width, intensity 1.0, additive, painted horizontally through the centre
+of a 512 by 512 RGBA16f buffer. A 25-texel column is read back through the middle of the mark with
+`ReadRenderTargetRawPixelArea(..., bNormalize = false)`, which is the only readback path that
+preserves float precision on `PF_FloatRGBA`. Run twice, headless, identical both times.
+
+| cm/texel | Quad height, texels | Peak | Inked texels | **Inked width** | Half-max texels |
+|---|---|---|---|---|---|
+| 9.765625 | 2.048 | 1.0000 | 2 | **19.53 cm** | 2 |
+| 2.441406 | 8.192 | 1.0000 | 8 | **19.53 cm** | 8 |
+
+Raw profiles, exactly as logged:
+
+```
+9.765625 cm/texel:  [255]=1.0000 [256]=1.0000
+2.441406 cm/texel:  [252]=1.0000 [253]=1.0000 [254]=1.0000 [255]=1.0000
+                    [256]=1.0000 [257]=1.0000 [258]=1.0000 [259]=1.0000
+```
+
+### D1's "narrow" requirement is not broken, and the arithmetic was right
+
+A 20 cm contact patch paints **19.53 cm**, which is 2 texels at the production density and 8 texels
+at four times that density. The physical width is the same to the last decimal at both, so the
+stroke width is genuinely set by the world-space contact width through the texel mapping, not by
+anything resolution-dependent. The earlier arithmetic — 2.05 texels for a 20 cm patch — was
+correct, and the visibly wider bands in the captured frames are therefore something in the *display*
+path, not the buffer. Bloom on an unlit emissive material remains the likely explanation and is now
+the only remaining candidate, since the buffer has been eliminated.
+
+**Every later intensity figure is safe.** That was the thing at risk: if the buffer had been laying
+down marks several times wider than asked, coverage per pass would have been wrong and every
+saturation number with it.
+
+### The finding nobody was looking for: the brush falloff does nothing
+
+Every inked texel reads **exactly 1.0000**, and the inked count is exactly the quad height. There is
+no falloff at all — not a soft edge, not a gradient, not even a partially-covered edge texel.
+
+At 2 texels that could be dismissed as too few samples to show a gradient. At 8 texels it cannot:
+`BuildRadialBandTexels` generates a smoothstep falloff from the centre row to the edges, so eight
+texels should read something like 0.1, 0.5, 0.9, 1.0, 1.0, 0.9, 0.5, 0.1. They read 1.0 eight times.
+
+The reason is in the blend state. Additive is
+`TStaticBlendState<CW_RGB, BO_Add, BF_One, BF_One>` (`BatchedElements.cpp:484`, already read for
+B5). Source factor One, destination factor One, **and `CW_RGB` masks alpha out of the colour
+write**. The brush texture is white with a varying alpha, so with alpha taking no part in either
+the blend factors or the written channels, the brush contributes its RGB — solid white — and
+nothing else. The falloff is discarded.
+
+So the production paint path draws **hard-edged rectangles**, and has done since the brush was
+written in phase B. Three consequences:
+
+1. **`BuildRadialBandTexels` is dead weight in the additive path.** A 1 by 1 white texture would
+   produce identical output. It still matters for `ESurfacePaintMode::Saturating`, where alpha *is*
+   the blend factor rather than a masked-out channel. The B5 table already contained this contrast
+   without it being read that way: additive's first pass stored 0.09998 for an increment of 0.1,
+   the full value with no falloff applied, while the translucent column's first pass stored 0.06494
+   for the same increment. The additive figure is exactly what "alpha is ignored" predicts. The
+   translucent figure is lower because alpha is *not* ignored there — the precise 0.065 has not
+   been re-derived here and B5's explanation of it is not re-checked by this test.
+2. **Any expectation of soft-edged marks is wrong.** D2 and E4 are where mark edges become a visual
+   quality question, and they start from a hard edge, not a soft one.
+3. **It is not a defect to fix now.** A crisp edge is what D1 wants, and the measured width is
+   correct. Recorded so that the first person to want a soft edge knows why they do not have one
+   and where it went.
+
+### What is not verified
+
+- **Only the additive path was measured.** The saturating path uses the same brush with alpha as
+  the blend factor, so it should retain the falloff, but no readback confirms that.
+- **Bloom is still not ruled out by measurement**, only by elimination. Setting `r.BloomQuality`
+  needs console access MCP does not have, so a bloom-off capture has still never been taken.
+- **The mark's shape along its length was not examined**, only its width. The end caps add half the
+  width to the quad's length and nothing has checked what that looks like.
