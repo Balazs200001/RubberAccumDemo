@@ -94,6 +94,36 @@ the live editor via `AutomationTestToolset`.
 the flush strategy is redesigned before anything else is built. If no usable region size fits
 memory at skid-mark density, the region strategy changes here.*
 
+**Status 2026-09-22: gate PASSED, B3 to B6 decided, B1 and B2 outstanding.**
+
+Four contacts cost 0.3610 ms and 0.3040 ms across two runs, inside the 0.5 ms budget unbatched.
+The flush strategy is not redesigned. Numbers and reasoning in
+[MEASUREMENTS.md](MEASUREMENTS.md).
+
+Decisions taken:
+
+| # | Decision |
+|---|---|
+| B4 | 2048 square RGBA16f over a 200 m region, 32 MiB, 9.77 cm per texel. 4096 square stays configurable at 128 MiB |
+| B5 | Additive write of an unbounded exposure value, saturation applied at sample time. Rejects both hardware-blend saturation and the double buffer |
+| B6 | One RGBA16f target: R buildup, G skid, B marbles, A unused and not writable through the canvas path |
+
+Two findings that change later phases:
+
+- **Paint cost is per contact, not per texel**, at roughly 0.075 ms per contact and flat across a
+  64-fold range of buffer sizes. Eighty contacts costs 5.0 to 6.0 ms. **Batching moves from phase H
+  to a prerequisite of phase C**: unbatched, the harness supports about six cars, not the twenty
+  that C3 and E7 need. Added as C0 below.
+- **A 1500 m circuit does not fit in one region at any resolution measured.** 4096 square still
+  gives 36.62 cm per texel over 1500 m. The single-region design is a 200 m instrument, and the
+  circuit case needs a following region or tiling. Folded into D5.
+
+Still outstanding in this phase, both needing the editor open:
+
+- **B1 is written and tested but not visually verified.** A streak is proven to persist by readback
+  in the automation tests, not yet seen on a surface.
+- **B2 has not started.** The receiving material function is the remaining editor-side work.
+
 ## Phase C — Test harness
 
 Validation instrument, not demo dressing. Needed before D and E can be judged at all, because
@@ -101,6 +131,7 @@ buildup takes dozens of laps and marbles hundreds.
 
 | # | Task | Exit |
 |---|---|---|
+| C0 | Batch the per-frame strokes into one draw rather than one draw per contact. Added 2026-09-22 from the B3 measurement | Eighty contacts within the four-contact budget |
 | C1 | Spline-generated track | Closed circuit in the level |
 | C2 | Autonomous spline-following cars, no physics, driving the public API only | Cars lap unattended |
 | C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line |
