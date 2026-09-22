@@ -54,6 +54,7 @@ First measurement taken in the project. Replaces the proposal's estimates.
 ```
 Region:   20000 cm square (200 m), 2048 texels, 9.77 cm per texel
 Target:   RGBA8, 16777216 bytes (16.0 MiB), one render target
+          (see the note below: this is no longer the production default)
 Stroke:   91.7 cm long (5500 cm/s at 60 Hz), 20 cm wide, so about 9.4 by 2.0 texels
 Samples:  64 per figure, median and minimum reported, no batching
 ```
@@ -64,6 +65,18 @@ Samples:  64 per figure, median and minimum reported, no batching
 | Paint, 4 contacts | 0.3610 ms | 0.2760 ms |
 | Paint, 80 contacts | 5.9910 ms | 5.0240 ms |
 | Full-buffer decay, 2048 square | 0.1570 ms | 0.1370 ms |
+
+### Note added 2026-09-22: the test now pins its format explicitly
+
+These figures were taken when `USurfaceAccumulationBuffer::Allocate` still defaulted to RGBA8, and
+`Performance.PaintAndDecay` inherited that default. The B4 and B6 decisions changed the production
+default to RGBA16f, which would have silently changed the conditions of this measurement on the
+next run.
+
+The test now passes `RTF_RGBA8` explicitly, so the numbers above stay reproducible and keep meaning
+what they say. The figures are therefore still RGBA8 figures and are *not* representative of the
+shipping configuration's decay cost — for that, read the 2048 RGBA16f row of the B4 sweep below,
+0.2400 ms. Paint cost is unaffected, because the same sweep shows paint is independent of format.
 
 ### Gate: PASSED
 
