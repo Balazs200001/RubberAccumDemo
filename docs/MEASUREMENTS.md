@@ -381,3 +381,104 @@ ideal. Setting the flag explicitly in `Allocate` was therefore a no-op that cost
 `UpdateResource`, and it was removed. The test stays as the guard on the invariant instead, so if
 a future engine version changes that constructor default the suite fails rather than the
 accumulator quietly going non-linear.
+
+---
+
+## 2026-09-22 — C0, stroke batching: before and after
+
+Test `RacetrackSurface.Performance.PaintAndDecay`, same standing hardware and method as above. The
+test still pins `RTF_RGBA8` deliberately, so these figures remain comparable with the B3 numbers
+recorded at the top of this file.
+
+**The change.** One line of behaviour in `USurfaceAccumulationBuffer::PaintStrokes`: the canvas
+returned by `UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget` has its `Allow_Flush` bit
+cleared for the duration of the stroke loop, through a scoped guard, and restored before
+`EndDrawCanvasToRenderTarget`. Nothing else about the paint path changed — same brush, same blend
+states, same per-stroke geometry.
+
+### Before, two runs of the identical pre-change code
+
+| Pass | Run A | Run B |
+|---|---|---|
+| Paint, 1 contact | 0.0900 ms | 0.0920 ms |
+| Paint, 4 contacts | 0.2620 ms | 0.2820 ms |
+| Paint, 80 contacts | 4.2230 ms | 4.5860 ms |
+| Full-buffer decay | 0.1290 ms | 0.1210 ms |
+
+### After, three runs
+
+| Pass | Run A | Run B | Run C |
+|---|---|---|---|
+| Paint, 1 contact | 0.0920 ms | 0.1000 ms | 0.0910 ms |
+| Paint, 4 contacts | 0.0930 ms | 0.1050 ms | 0.0910 ms |
+| Paint, 80 contacts, uniform heading | 0.0960 ms | 0.0890 ms | 0.0900 ms |
+| Paint, 80 contacts, 80 distinct headings | 0.1060 ms | 0.1150 ms | 0.0980 ms |
+| Full-buffer decay | 0.1290 ms | 0.1200 ms | 0.1210 ms |
+
+### C0 exit condition: MET
+
+The exit condition in [PLAN.md](PLAN.md) is *eighty contacts within the four-contact budget*. The
+four-contact budget before the change was 0.2620 to 0.2820 ms. Eighty contacts now cost **0.0890 to
+0.1150 ms**, so eighty contacts are not merely inside the old four-contact budget — they cost less
+than four contacts used to. Against the 80-contact baseline it is a **40 to 50 times** reduction.
+
+### Reading: cost is now flat in contact count, which is the proof the batching is real
+
+The important number is not the speedup, it is the shape. One contact, four contacts and eighty
+contacts now all cost the same 0.09 to 0.11 ms, where before they cost 0.09, 0.27 and 4.4 ms. A
+flat line against contact count is what one submission per call looks like.
+
+The residual 0.09 ms is also self-validating: it is, to two significant figures, exactly the
+*old* one-contact figure. That is expected, because the old one-contact case was already one flush.
+The per-flush cost has not changed at all; what changed is how many of them a frame pays for. This
+is the strongest available evidence that the diagnosis was right — the cost removed was N-1
+redundant flushes, not fill, not state, not anything else.
+
+Decay is unchanged at 0.12 to 0.13 ms, as expected: it was always a single draw and was never
+affected by the per-item flush.
+
+### The rotation case, measured rather than assumed
+
+Batches are keyed partly on the canvas transform, and `FCanvasTileItem::Draw` pushes a per-stroke
+rotation transform whenever the rotation is non-zero, so strokes at different headings land in
+separate batches. The existing 80-contact benchmark happens to use strokes that are all exactly
+horizontal, so all 80 share one batch — a best case that does not represent a field of cars at
+varying headings.
+
+Rather than report that best case as though it were general, a second 80-contact figure was added
+with 80 distinct headings. It costs **0.0980 to 0.1150 ms** against 0.0890 to 0.0960 ms for the
+uniform case. Batch fragmentation is therefore real but nearly free here, roughly 0.01 to 0.02 ms
+across 80 strokes, because the cost that dominated was the per-item flush rather than the draw
+call. Production traffic with varying headings gets essentially the full win.
+
+### Correctness: the batched result is identical, not merely similar
+
+Test `RacetrackSurface.Accumulator.BatchedPaintMatchesSequential`. Twelve strokes at twelve
+distinct headings, all crossing the centre so they overlap heavily, painted two ways into two
+RGBA16f buffers: once as a single batched call, once as twelve separate calls. A 16 by 16 grid of
+texels centred on the overlap is read back from each and compared.
+
+```
+12 strokes at 12 distinct headings, 256 grid samples, 256 inked, peak 0.59961,
+max batched-vs-sequential difference 0.000000
+```
+
+All 256 samples are inked and the peak is 0.59961, against 12 x 0.05 = 0.6 for twelve fully
+overlapping strokes, so the window genuinely samples the overlap rather than isolated strokes. The
+maximum difference between the two buffers is **0.000000** — identical, not close.
+
+This matters because additive blending being order-independent is an argument, not a measurement,
+and the first version of this test was wrong in a way worth recording: its sample grid straddled
+the centre without ever landing on it, so every sample saw exactly one stroke (peak 0.04999) and
+the test passed without exercising overlap at all. The assertion that the peak must exceed one
+stroke's worth was added so it cannot silently degrade back into that.
+
+### What is not verified
+
+- **Draw-call count was not read from a counter.** `GNumDrawCallsRHI` exists and could be sampled,
+  but it is a global incremented by everything drawing in the process, so a delta around the paint
+  would also catch editor viewport work. The claim that submissions collapsed rests on the flat
+  cost curve and the uniform-versus-fanned comparison, both of which are measurements, rather than
+  on a direct count.
+- **Not measured in a real scene.** These are automation-test figures with nothing else drawing.
+  The harness in C2 onward is what will show the cost with twenty cars actually running.

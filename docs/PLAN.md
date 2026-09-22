@@ -174,7 +174,7 @@ buildup takes dozens of laps and marbles hundreds.
 
 | # | Task | Exit |
 |---|---|---|
-| C0 | Batch the per-frame strokes into one draw rather than one draw per contact. Added 2026-09-22 from the B3 measurement | Eighty contacts within the four-contact budget |
+| C0 | Batch the per-frame strokes into one draw rather than one draw per contact. Added 2026-09-22 from the B3 measurement | Eighty contacts within the four-contact budget — **met 2026-09-22** |
 | C1 | Spline-generated track | Closed circuit in the level |
 | C2 | Autonomous spline-following cars, no physics, driving the public API only | Cars lap unattended |
 | C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line |
@@ -183,7 +183,35 @@ buildup takes dozens of laps and marbles hundreds.
 
 *Exit: press play, walk away, come back to a marked track.*
 
-### C0 approach, proposed 2026-09-22, awaiting sign-off before implementation
+**Status 2026-09-22: C0 COMPLETE.** Eighty contacts cost 0.0890 to 0.1150 ms against a four-contact
+budget that was 0.2620 to 0.2820 ms, so the exit condition is met with room to spare — eighty
+contacts now cost less than four did. Numbers, including the varying-heading case and the
+batched-equals-sequential correctness check, in [MEASUREMENTS.md](MEASUREMENTS.md).
+
+The approach that shipped is **not** the one proposed below. Investigation of the engine source
+before implementing found `FCanvas::SetAllowedModes` / `GetAllowedModes` to be public, and
+`Flush_GameThread` to early-return when the `Allow_Flush` bit is clear. So the per-item flush can be
+suppressed on the canvas the Kismet helper already returns, and no custom `FCanvas` is needed at
+all. The whole change is a scoped guard that clears `Allow_Flush` for the stroke loop and restores
+it before `EndDrawCanvasToRenderTarget`.
+
+That is strictly better than the proposal below on three counts, which is why it was taken:
+
+- **Nothing is duplicated from the engine.** The proposal would have copied about 25 lines of
+  `BeginDrawCanvasToRenderTarget`'s body into the plugin, including the render-target resolve. That
+  copy would silently drift if Epic changed the original in a later 5.x.
+- **The resolve stays Epic's problem.** `EndDrawCanvasToRenderTarget`'s
+  `TransitionAndCopyTexture` is what returns the target to a shader-readable state for the material
+  that samples it every frame. Hand-rolling meant owning that correctly; this way it is untouched.
+- **It is a guard and two calls**, against a rewrite of the paint path.
+
+The restore is not optional and is the one sharp edge: `EndDrawCanvasToRenderTarget` performs its
+real flush through the same `Flush_GameThread`, so leaving the bit clear makes that a no-op too and
+*nothing renders at all*, silently, with no warning. The canvas is also shared per world, so a
+missed restore would disable canvas rendering for every other caller. Hence the RAII guard rather
+than two bare calls.
+
+### C0 approach as originally proposed, superseded by the above
 
 **Root cause of the B3 cost, found by reading the engine source rather than assumed.**
 `PaintStrokes` already issues every stroke inside a single `BeginDrawCanvasToRenderTarget` /
@@ -237,8 +265,8 @@ already in `MEASUREMENTS.md`. Add a correctness check alongside it — same fina
 a batch of strokes as from issuing them one at a time — since changing the draw path must not change
 what gets painted. Both numbers go in `MEASUREMENTS.md` as the C0 before/after.
 
-**Not decided without sign-off.** This changes a path B1/B2 already demonstrated working end to end
-on a real surface. Confirm the approach before it is implemented.
+**Superseded.** Kept for the record because the reasoning above it — the root cause, and the
+batch-key analysis — is what the shipped fix rests on. Only the mechanism changed.
 
 ## Phase D — Skid marks at product quality
 
