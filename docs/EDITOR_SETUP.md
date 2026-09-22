@@ -341,6 +341,61 @@ class and a log call inside the plugin's own module. Consistent with the rule es
 2026-09-22: Live Coding handles anything short of a symbol newly exported by one module and
 consumed by another.
 
+## 2026-09-22 — R3, the region display stops configuring the region
+
+### `/Game/Blueprints/BP_SurfaceRegionDisplay`
+
+Change: modified
+Why: [phase R](PLAN.md) replaces `FSurfaceRegion` with `FSurfaceTrackRibbon`, and the ribbon is
+sized from the centreline rather than typed into a map. This Blueprint held an instance-editable
+`FSurfaceRegion` member and called `ConfigureSurfaceRegion` from `EventBeginPlay`; both are gone.
+Configuration moved to `ARacetrackCircuit::PostInitializeComponents`, which is the actor that
+actually knows the track's length, width and closure.
+Made via: `BlueprintTools.write_graph_dsl`, `remove_variable`, `compile_blueprint`, then
+`AssetTools.save_assets`
+
+`EventBeginPlay` now reads back as:
+
+```
+(event EventBeginPlay
+  (RacetrackSurface|ResetSurface)
+  (bind _returnvalue (RacetrackSurface|GetAccumulationTarget))
+  (bind _returnvalue_1 (Rendering|Material|CreateDynamicMaterialInstance
+                         (Variables|StaticMeshActor|GetStaticMeshComponent)))
+  (Rendering|Material|SetTextureParameterValue _returnvalue_1
+                         "AccumulationTarget" _returnvalue))
+```
+
+`list_variables` returns an empty array, so the `FSurfaceRegion` member is genuinely gone rather
+than orphaned. Verified saved with `is_dirty`, which returns false — the `AssetTools.delete`
+lesson recorded further up this file is that a boolean return is not evidence.
+
+**Ordering mattered and is the reason this was done before the C++ change, not after.** Deleting
+`FSurfaceRegion` while a Blueprint still holds one as a member breaks that Blueprint on load. The
+editor was still running the pre-phase-R C++ when this edit was made, so the variable and the node
+both still existed and could be removed cleanly.
+
+**`PostInitializeComponents`, not `BeginPlay`, is where the circuit configures the ribbon.** All
+actors get `PostInitializeComponents` during `InitializeActorsForPlay` before any actor gets
+`BeginPlay`, so the ribbon is configured before this Blueprint's `GetAccumulationTarget` allocates
+the buffer. With configuration in `BeginPlay` the order would be undefined, and a buffer allocated
+at the default ribbon size would be bound into the material and then thrown away when the real
+ribbon arrived.
+
+### `ReadRenderTargetRawPixelArea` takes a width and a height, not a max
+
+Recorded because the parameter names say otherwise.
+`UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(WorldContextObject, Target, MinX, MinY,
+MaxX, MaxY, bNormalize)` passes its last two coordinate arguments to the file-local
+`ReadRenderTargetHelper` as `Width` and `Height`, which builds
+`FIntRect SampleRect(X, Y, X + Width, Y + Height)` at `KismetRenderingLibrary.cpp:326`. So
+`MaxX`/`MaxY` are counts, not coordinates, and passing a real maximum reads a rect twice as far as
+intended.
+
+`bNormalize = false` is the one that matters for a float target: it selects `RCM_MinMax`, which
+the RHI documents as leaving values unchanged. With the default `true` the read goes through
+`RCM_UNorm` and the accumulator's unbounded exposure values would be rescaled.
+
 ### Why the rig owns its plane rather than the level
 
 First placement of the rig produced a plane 1 m across instead of 200 m. `OnConstruction` sets the
