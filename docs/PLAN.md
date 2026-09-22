@@ -177,6 +177,77 @@ buildup takes dozens of laps and marbles hundreds.
 | C0 | Batch the per-frame strokes into one draw rather than one draw per contact. Added 2026-09-22 from the B3 measurement | Eighty contacts within the four-contact budget — **met 2026-09-22** |
 | C1 | Spline-generated track | Closed circuit in the level |
 | C2 | Autonomous spline-following cars, no physics, driving the public API only | Cars lap unattended |
+
+**Status 2026-09-22: C1 and C2 code complete, exit conditions not yet demonstrated.** Both live in
+`Source/RubberAccumDemo/`, the host module, not the plugin. `ARacetrackCircuit` and
+`ASplineFollowingCar` build against all three targets (`BuildPlugin`, the editor target, the game
+target) and three new headless automation tests pass alongside the existing 24:
+`RubberAccumDemo.Track.IsClosedLoopWithPositiveLength`,
+`.WrapsDistanceBeyondTrackLength`, `.LateralOffsetMovesAcrossTrackWidth`. Run with
+`-ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"` to cover both prefixes in one
+pass.
+
+**Not verified — needs the editor.** C1's exit is "closed circuit in the level" and C2's is "cars
+lap unattended". Neither has been placed in a level; nothing has rendered or ticked in a live
+world. The headless tests prove the geometry and distance math are correct in isolation, not that
+the exit conditions are met. The editor was closed for this pass and the `unreal-mcp` server did
+not connect (`ConnectionRefused`), so step 3 — placing the track and cars in a map and confirming
+they lap and paint rubber — is blocked until the editor is open and the MCP port is reachable from
+this session's working directory.
+
+### C1: how track width and the racing-line corridor are expressed
+
+Decided 2026-09-22. `ARacetrackCircuit` exposes a single scalar `TrackWidth` (constant along the
+whole circuit, not per-point) and a lateral offset `Alpha` in `[-1, 1]`, `0` at the centreline and
+clamped at the edges. `GetWorldPositionAtDistance(Distance, Alpha)` is the one function that turns
+a point on the circuit into a world position: it samples the spline at the (wrapped) arc-length
+distance for the centreline, then moves along the spline's right vector by
+`Alpha * TrackWidth * 0.5`.
+
+This is the hook both later tasks need without either being implemented yet:
+
+- **C3** spreads traffic by giving each car a different constant `Alpha` (already a per-car
+  property on `ASplineFollowingCar`, unused for anything but a fixed offset in C2).
+- **F**'s on-line/off-line query does not need a geometric "racing line" at all — the racing line
+  is supposed to be emergent from measured rubber buildup, not authored — but it does need the
+  same `(Distance, Alpha)` coordinate to interpret *where across the width* a buildup reading came
+  from. That inverse mapping, world position back to `(Distance, Alpha)`, is not implemented; it
+  is not needed until F and adding it now would be scope not asked for yet.
+
+**Rejected:** per-spline-point width, and an authored second "racing line" spline distinct from
+the centreline. Both add a parallel data structure to keep in sync with the centreline for a
+project where nothing through phase E needs width to vary or a line to be pre-drawn — the racing
+line is meant to come from where cars actually drive, not from a curve someone placed by hand.
+
+**Track shape, decided 2026-09-22.** The circuit is a stadium: two straights joined by two 180°
+semicircular corners, radius and straight length both editable. This is the simplest closed-form
+shape that is guaranteed non-self-intersecting for any positive parameter values, which matters
+more here than corner variety — a self-intersecting generated track would cost time to debug for
+no benefit before phase E. Default dimensions (60 m straights, 30 m corner radius, 12 m width)
+keep the whole circuit's footprint under the default 200 m single region from B4, since D5's
+region-follows-track work for larger circuits has not happened yet; a track that does not fit the
+active region would silently discard most contacts as outside-region.
+
+Spline points use `ESplinePointType::Curve` (Catmull-Rom auto-tangent) rather than hand-computed
+tangents for true circular arcs. Exactness was not needed by anything through C2's exit condition,
+only closure and reasonable smoothness, and auto-tangent is the simpler code.
+
+### C2: what the car does not yet do
+
+`ASplineFollowingCar` calls the same `RegisterSurfaceContact` overload
+`ASurfaceVerificationRig` already used, with the same velocity-based interpolation assumption (see
+`BuildStroke`). Speed, slip amount, contact width, channel and the lateral offset are all constant
+per car for now — C3 is what makes speed and slip vary with position and gives the offset a reason
+to differ car-to-car. Channel defaults to `RubberBuildup` rather than `SkidMark`, since steady-
+state lapping without braking events reads as tyre scrub building rubber, not a lockup mark; that
+distinction is a C2 decision, not a C3 one, because it is about what a car with no physics is
+plausibly doing to the surface, not about position-dependent behaviour.
+
+If `Track` is left unset on a car instance, `BeginPlay` finds the first `ARacetrackCircuit` in the
+world, so placing several car instances in a level does not need each one wired up individually.
+
+`ASurfaceVerificationRig` is not yet deleted. PLAN.md says to delete it once the cars work; that is
+an editor-verified fact, not a headless one, so it waits for step 3.
 | C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line |
 | C4 | Time compression with lap counter | 50 laps in about two minutes |
 | C5 | Fixed-camera observation mode | Repeatable identical load per run |
