@@ -574,12 +574,19 @@ flat in stroke count. **Recorded here rather than discovered in C4. Not implemen
 **Status 2026-09-23: R1 to R4 complete, R5 and R6 outstanding.** 36 of 36 automation tests pass
 headlessly, twice. All three build paths pass.
 
-**R2 gate: passed, and the headless re-take moved the conclusion.** Eighty contacts at the harness
-circuit's 18-point spline cost 0.5053 ms on the worst of two headless runs, 3.03 % of a 60 Hz
-frame. The earlier editor-only reading was 0.1332 ms — optimistic by four times. Cost is linear in
-spline points and flat in contact count, consistently across three runs, so **the per-contact
-segment cache is mandatory for any track more detailed than this harness**, not merely at
-real-circuit scale as the editor numbers suggested. Not implemented; sized and located.
+**R2 gate: passed.** Eighty contacts at the harness circuit's 18-point spline cost 0.5053 ms on the
+worst of three runs, 3.03 % of a 60 Hz frame, comfortably inside any reading of the gate.
+
+**The three runs spread by up to 4x, and the cause is that the laptop was on battery.** Cost is
+linear in spline points and flat in contact count in all three, so the shape is solid; the constant
+is not. The 1 ms crossover at eighty contacts lands between 64 and 256 spline points depending on
+the run, and a real circuit has 70 to 256 points depending on authoring density — so the crossover
+and the target overlap, and which side they fall on is not yet known. **The per-contact segment
+cache is needed somewhere between this harness and a real circuit, is not needed for this harness,
+and a mains-power re-take is what turns that into a number.** Not implemented.
+
+A method rule follows for the rest of the project: **record the power state with every
+measurement.** No entry in `MEASUREMENTS.md` before this one does.
 
 **R4 closed a carried unknown and opened a smaller one.** A 20 cm contact patch stores exactly
 19.53 cm — 2 texels at the production density, 8 at four times it. D1's "narrow" requirement was

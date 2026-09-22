@@ -26,12 +26,18 @@ Unless an entry says otherwise, every number below came from this configuration.
 Build:    Development, editor target, run headless through UnrealEditor-Cmd.exe
 Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, 7948 MB dedicated, driver 592.82
           D3D12, SM6 feature level, 32472 MB system memory
+Power:    UNRECORDED for every entry before 2026-09-23 — see the method note under R2
 Scene:    Engine OpenWorld template map, no actors, no vehicle systems, nothing else drawing
 Method:   C++ automation test, RHI timestamp queries (RQT_AbsoluteTime) bracketing each pass
 Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
           -ExecCmds="Automation RunTests RacetrackSurface"
           -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
 ```
+
+**Every entry must state mains or battery.** This is a laptop, and the R2 measurement on
+2026-09-23 spread by up to 4x across three runs for that reason alone. Entries written before that
+date do not record it and their absolute figures should be read as indicative; the ratios and
+shapes measured *within* a single run are unaffected.
 
 ### What the timestamp bracket actually contains
 
@@ -625,16 +631,27 @@ between them is itself a result.
 
 Run A is uniformly about twice run B across every configuration, and the editor run is faster again.
 A uniform whole-run scale factor is not per-configuration noise; it is the machine running at a
-different clock. This is a laptop part, the test is a short burst of single-threaded work with no
-sustained load to provoke a boost state, and nothing in the test can control for that.
+different clock.
+
+**Cause identified after the fact: the laptop was on battery, not mains.** So the spread is a power
+state, and it is controllable — it is not thermal drift, not scheduling, and not anything the test
+can be rewritten to avoid. All three runs above were taken unplugged, progressively later into a
+discharge.
 
 **What that does and does not invalidate:**
 
 - **The shape is identical in all three runs** and is the thing every conclusion below rests on:
   cost linear in spline points, flat in contact count, single-segment lookup flat at O(1). Three
   independent runs agreeing on shape is stronger evidence than one agreeing on a constant.
-- **No absolute figure here should be quoted to better than a factor of three.** Where a decision
-  needs an absolute number, the worst observed run is used, not the median of the three.
+- **No absolute figure in this entry is a mains-power figure**, so none of them is comparable with
+  the rest of this file, which is the real problem. Every other number recorded in this project was
+  taken under whatever power state happened to apply and none of them says which.
+- **The conclusion this entry draws about when the segment cache becomes necessary depends on the
+  constant**, and the constant is exactly what is unreliable here. That conclusion is therefore
+  provisional — see below.
+
+**OUTSTANDING: re-take on mains power.** Until then this table establishes the shape and a
+pessimistic bound, not a figure to compare against the paint-pass numbers elsewhere in this file.
 
 ### Gate: PASSED, no bail-out
 
@@ -673,12 +690,16 @@ search itself the single-segment figure is essentially the same in both headless
 taken now because the gate passes without it and the plan's standing rule is to measure before
 optimising. What the table does is convert that from a judgement into a threshold.
 
-**At 80 contacts the full search passes 1 ms somewhere between 64 and 256 spline points** — run A
-crosses at 64 points (1.1915 ms), run B at about 150. A 7 km circuit with a point every 27 m has
-256 points; with a point every 100 m it has 70. **So a real circuit is over the threshold on either
-run, and the per-contact segment cache is mandatory for any track more detailed than this
-harness.** That is a firmer conclusion than the editor-only numbers supported, and it is the one
-correction the headless re-take actually produced.
+**At 80 contacts the full search passes 1 ms somewhere between 64 and 256 spline points on battery**
+— run A crosses at 64 points (1.1915 ms), run B at about 150, and the editor run at about 256. A
+7 km circuit has 70 points at one every 100 m and 256 at one every 27 m, so the crossover and the
+target sit on top of each other and **which side they fall on depends on the power state the
+measurement was taken in.**
+
+That is the honest position and it is weaker than the one first written here. What can be said
+without the constant: the per-contact segment cache is needed at *some* track complexity between
+this harness and a real circuit, it is not needed for this harness, and a mains-power re-take is
+what turns that into a number.
 
 Two things make the cache cheap when it is needed: the contacts that matter most come from
 `ASplineFollowingCar`, which already uses the track-space overload and never searches at all; and a
@@ -692,11 +713,25 @@ phase R editor-target rebuild. Its 18-point, 80-contact figure was 0.1332 ms, 0.
 **optimistic by about four times against the worst headless run**, and it is what the first draft
 of this entry recorded.
 
-It is kept here because being wrong by 4x in the favourable direction is the useful part. The
-conclusion it supported ("the cache becomes mandatory somewhere around 256 spline points, so
-perhaps at real-circuit scale") was weaker and later than the headless runs justify. An editor
-number that looks harmless because the work is pure CPU and has no frame-rate smoothing to hide
-behind still misled the decision it fed.
+It is kept here for the comparison, and because the reason it differs turned out not to be the one
+first assumed. The initial reading of the discrepancy was that the editor number was optimistic and
+the headless ones were the truth. With the battery cause known, the more likely reading is that the
+editor run was simply taken at a higher clock, and **none of the three is a mains-power figure**.
+
+### Method note for every future measurement in this project
+
+**Record the power state.** No entry in this file before this one does, which means the paint-pass
+and decay figures recorded under phases B, C0 and the five-car scene are all of unknown power
+state too. They remain internally comparable where they were taken in the same run — the B4 sweep
+compares nine configurations against each other in one process, and C0's before/after were separate
+runs and are the weakest of those comparisons for exactly this reason — but cross-entry comparisons
+in this file carry an unquantified factor that nobody was tracking.
+
+This does not invalidate any conclusion drawn so far, because every one of them rests on a ratio or
+a shape measured within a single run: cost per contact being flat, cost being independent of
+resolution and format, RGBA8's accumulation dead zone, the batched-equals-sequential difference of
+exactly zero. It does mean the absolute millisecond figures quoted anywhere in this file should be
+read as indicative.
 
 ---
 
