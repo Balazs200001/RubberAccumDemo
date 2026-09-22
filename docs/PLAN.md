@@ -3,7 +3,9 @@
 Source of truth for scope. Supersedes the milestone dates in `project-proposal.md` section 6.
 The proposal's *content* still stands; only its calendar does not.
 
-Revised 2026-09-21 (start of week 4).
+Revised 2026-09-21 (start of week 4). Revised again 2026-09-22 to insert
+[phase R](#phase-r--track-space-ribbon-storage), a storage restructure from world-XY square
+region to track-space ribbon, which supersedes B4's region-size decision and absorbs most of D5.
 
 ## Where the project actually is
 
@@ -71,6 +73,11 @@ growing, and no contingency is needed on this evidence.
 If a later checkpoint does show the backlog stalling, the cut order is unchanged: D5
 (region-follows-track for the 1500 m circuit) and phase G's marbles first, as the parts least
 connected to the project's central claim about the emergent racing line.
+
+*Amended 2026-09-22: the first item on that cut list no longer exists as described.
+[Phase R](#phase-r--track-space-ribbon-storage) removed the need for a region that follows the
+track, so D5 is now streaming behaviour only and is a smaller thing to cut. The cut order itself
+is unchanged and the list is still not invoked.*
 
 ## Ordering principle
 
@@ -155,7 +162,7 @@ Decisions taken:
 
 | # | Decision |
 |---|---|
-| B4 | 2048 square RGBA16f over a 200 m region, 32 MiB, 9.77 cm per texel. 4096 square stays configurable at 128 MiB |
+| B4 | 2048 square RGBA16f over a 200 m region, 32 MiB, 9.77 cm per texel. 4096 square stays configurable at 128 MiB. **Superseded on shape and extent by phase R, 2026-09-22. RGBA16f and 9.77 cm per texel survive; the square world-XY window does not** |
 | B5 | Additive write of an unbounded exposure value, saturation applied at sample time. Rejects both hardware-blend saturation and the double buffer |
 | B6 | One RGBA16f target: R buildup, G skid, B marbles, A unused and not writable through the canvas path |
 
@@ -167,7 +174,9 @@ Two findings that change later phases:
   that C3 and E7 need. Added as C0 below.
 - **A 1500 m circuit does not fit in one region at any resolution measured.** 4096 square still
   gives 36.62 cm per texel over 1500 m. The single-region design is a 200 m instrument, and the
-  circuit case needs a following region or tiling. Folded into D5.
+  circuit case needs a following region or tiling. Folded into D5. *Resolved 2026-09-22 by
+  [phase R](#phase-r--track-space-ribbon-storage), which is neither of those two options: a
+  1500 m circuit is 15360 x 123 texels at 9.77 cm per texel, 15.1 MiB, in one unfolded ribbon.*
 
 ### B1 and B2 exit conditions, demonstrated 2026-09-22
 
@@ -254,6 +263,12 @@ buffer allocates at 2048 square RGBA16f, and no car logs the missing-circuit war
 away, come back to a marked track* — needs C4's time compression. Twelve seconds of simulation is
 not walking away.
 
+**C3, C4 and C5 are held behind [phase R](#phase-r--track-space-ribbon-storage), decided
+2026-09-22.** Both are written against the coordinate the surface is stored in — C3 varies speed
+and slip with position along the track, C4 lengthens the per-frame stroke — and that coordinate is
+being replaced. C4 in particular is the task that breaks phase R's straight-quad approximation, so
+it needs the new domain in place to be built against at all.
+
 ### C1: how track width and the racing-line corridor are expressed
 
 Decided 2026-09-22. `ARacetrackCircuit` exposes a single scalar `TrackWidth` (constant along the
@@ -286,6 +301,13 @@ no benefit before phase E. Default dimensions (60 m straights, 30 m corner radiu
 keep the whole circuit's footprint under the default 200 m single region from B4, since D5's
 region-follows-track work for larger circuits has not happened yet; a track that does not fit the
 active region would silently discard most contacts as outside-region.
+
+*Amended 2026-09-22 by [phase R](#phase-r--track-space-ribbon-storage): the footprint constraint
+is lifted. Storage is sized from the centreline, so track size is bounded by the 1600 m unfolded
+limit rather than by a region box, and the default dimensions are now a harness convenience
+rather than a requirement. The stadium shape itself stands; a non-self-intersecting track is
+still what the ribbon needs, and more so — a track that crosses itself has two distinct
+centreline distances at one world position, which the inverse mapping cannot resolve.*
 
 Spline points use `ESplinePointType::Curve` (Catmull-Rom auto-tangent) rather than hand-computed
 tangents for true circular arcs. Exactness was not needed by anything through C2's exit condition,
@@ -399,15 +421,184 @@ what gets painted. Both numbers go in `MEASUREMENTS.md` as the C0 before/after.
 **Superseded.** Kept for the record because the reasoning above it — the root cause, and the
 batch-key analysis — is what the shipped fix rests on. Only the mechanism changed.
 
+## Phase R — Track-space ribbon storage
+
+Added 2026-09-22, between phase C and phase D. This is a storage restructure, not a feature. It
+replaces the world-XY square region with a ribbon parameterised by distance along a centreline
+spline and lateral offset across the track.
+
+C3, C4 and C5 are deliberately held behind it. Time compression and per-position speed curves are
+both written against the coordinate the surface is stored in, and that coordinate is about to
+change, so building them first is work done twice.
+
+### Why, with the numbers that forced it
+
+The B4 sweep measured texel density against memory for a *square* region and concluded 2048 square
+RGBA16f at 9.77 cm per texel. Applied to a real circuit rather than a 200 m window, that shape
+fails on memory by a factor that no resolution setting can recover.
+
+Spa-Francorchamps is the worked case: about 7.0 km of centreline, roughly 15 m wide, inside a
+bounding box of about 2.5 by 1.5 km.
+
+| Storage shape | Texels | RGBA16f | Notes |
+|---|---|---|---|
+| World-XY rectangle over the bounding box, 9.77 cm/texel | 25589 x 15353 = 393 M | **3.14 GB** | Exceeds the 16384 maximum dimension as well |
+| Track-space ribbon, 7004 m x 15 m, 9.77 cm/texel | 71721 x 154 = 11.0 M | **88 MB** | Whole circuit |
+
+The track surface is about 84,000 m² of a 3,750,000 m² box. **97.8 % of the square region's memory
+stores grass.** The ribbon is roughly 36 times better and covers the entire real circuit rather
+than a 200 m window of it.
+
+Tiling does not fix this. Square tiles around a thin diagonal ribbon are still the wrong shape —
+a tile is either mostly empty or too coarse, and the tile set has to be indexed by world position,
+which is the thing the ribbon makes unnecessary.
+
+The same arithmetic on the current harness circuit, which does fit today: 30921 cm of lap at
+1200 cm wide is 3167 x 123 texels, **2.97 MiB against the 32 MiB** the 200 m square region
+allocates for it. About eleven times better on a track the old design could already hold.
+
+Every figure in this section is asserted or printed by
+`RacetrackSurface.Ribbon.TexelExtentsFollowTrackDimensions`, so none of it is arithmetic done
+once in a document and never checked again.
+
+### What this supersedes
+
+- **B4's region-size decision is superseded on shape and extent.** 2048 square over a 200 m window
+  is replaced by a ribbon sized from the centreline. What survives B4 unchanged: RGBA16f as the
+  format, 9.77 cm per texel as the density target, and the whole B4/B5/B6 measurement set. Those
+  are properties of the buffer, not of how it is parameterised.
+- **B4's recorded limit "a 1500 m circuit does not fit in one region at any resolution measured"
+  is resolved rather than carried.** A 1500 m circuit is 15360 x 123 texels, 15.1 MiB, and fits
+  unfolded.
+- **Most of D5 is absorbed.** D5 was carrying "region-follows-track for the 1500 m circuit" as
+  well as World Partition streaming; the cut list names it by that first description. The ribbon
+  removes the need for a following region entirely. D5 keeps only genuine streaming behaviour.
+- **C1's constraint that the circuit must fit inside the 200 m region is lifted.** The stadium's
+  default dimensions were chosen to stay under it. Track size is now bounded by the unfolded
+  limit below, not by a region box.
+- **D3's "region edge" changes meaning.** A ribbon has lateral edges at `|alpha| > 1` and, on a
+  closed loop, no longitudinal edge at all — the distance axis wraps. D3 is now a smaller question
+  than it was.
+- **The B2 material function's sampling method is superseded.** `MF_SampleRacetrackSurface`
+  samples by world position through `MPC_RacetrackSurface`. Track-space storage cannot be sampled
+  that way without inverting the spline in the shader. It samples by mesh UV instead. Recorded
+  against R5 below and in `EDITOR_SETUP.md`.
+
+Not superseded, explicitly: the per-contact paint cost and the C0 batching result, the RGBA8
+precision floor, the additive-versus-translucent decision, `k = 3.0`, and the C0 flush-deferral
+guard. All of those stand.
+
+### The API decision
+
+Taken before implementation, not discovered during it.
+
+The plugin takes a `USplineComponent*` centreline at setup. **The public write and query API keeps
+taking world positions**, and the plugin converts internally.
+
+- The brief's agnosticism requirement is about *vehicle systems*. `USplineComponent` is core
+  Engine, not Chaos Vehicles, so depending on it does not breach that boundary.
+- World-space signatures mean phases D, E and F do not churn when the storage shape changes again.
+- The conversion is centralised in one place where it can be cached, rather than duplicated in
+  every caller.
+
+A **track-space overload** is added alongside it, taking distance along the centreline and lateral
+offset directly, for callers that already hold the coordinate. `ASplineFollowingCar` is switched to
+it: the car already tracks exactly those two values, so the harness skips the spline search
+entirely, and having both paths in use keeps both tested.
+
+**The plugin does not depend on `ARacetrackCircuit`.** That is host code. The dependency is on a
+spline component and a track width, both passed in at configure time.
+
+### The unfolded limit, and designing for folding without building it
+
+Maximum 2D texture dimension is 16384. At 9.77 cm per texel that is 1600 m of centreline. So:
+
+| Track length | Along-track texels | Fits unfolded |
+|---|---|---|
+| 309 m, the current harness | 3166 | yes |
+| 1500 m | 15360 | yes, just |
+| 1600 m | 16384 | at the limit |
+| 7004 m, real Spa | 71689 | no — needs 5 folded rows, about 101 MB |
+
+**This phase implements the unfolded case only.** The ribbon type is designed so folding can be
+added later — the along-track axis is a separate quantity from the buffer's X extent, and stroke
+construction already emits a variable number of quads per contact — but folding is not built now.
+
+The reason for the split is that folding brings row-boundary seams, and a stroke crossing a
+boundary has to be drawn twice or it leaves a gap in the racing line. That is a defect that hides
+until phase E, when the line is supposed to be continuous, and it should not be introduced on
+speculation.
+
+### The lap seam is the folding problem, arriving one phase early
+
+A closed loop already has one seam: distance wraps at zero. A contact straddling it has its start
+near the far end of the buffer and its end near the near end, and a single quad between them
+paints a band across the entire ribbon. Five cars at 30 m/s on the 309 m harness circuit cross it
+about once every ten seconds each, so this is not a corner case.
+
+Stroke construction therefore splits a seam-crossing contact into two quads from the start. That
+is the same machinery folding needs later, built now because the unfolded closed-loop case is
+simply wrong without it.
+
+### The curved-stroke approximation, and where it breaks
+
+A straight world-space stroke is a *curved* stroke in unrolled track space, and it is drawn as a
+straight quad. The error is the sagitta of the arc, about `s² / (8R)` for a stroke of length `s`
+through a corner of radius `R`.
+
+| Case | Stroke length | Corner radius | Sagitta | In texels |
+|---|---|---|---|---|
+| 30 m/s at 60 Hz | 50 cm | 30 m | 0.10 cm | 0.01 |
+| 30 m/s at 30 Hz | 100 cm | 30 m | 0.42 cm | 0.04 |
+| C4 at 20x compression, 30 Hz | 2000 cm | 30 m | 167 cm | **17** |
+
+Real time is negligible. **C4's time compression is what breaks it**, and badly: a 17-texel bow on
+a mark about 2 texels wide is not an approximation, it is a different shape.
+
+The bound is `s <= sqrt(8 * R * CentimetresPerTexel)`. At 9.77 cm per texel that is 484 cm on a
+30 m radius corner and 342 cm on a 15 m hairpin. The remedy when C4 needs it is to subdivide a
+long stroke into segments under that bound, which is free on the write path because C0 made cost
+flat in stroke count. **Recorded here rather than discovered in C4. Not implemented now.**
+
+### Tasks
+
+| # | Task | Exit |
+|---|---|---|
+| R1 | `FSurfaceTrackRibbon` and the world to (distance, offset) mapping, with headless tests | Pure math, no rendering, no assets. A point on the centreline maps to offset 0; offset sign is consistent around both left and right hand corners; distance wraps on a closed loop; a point beyond the track edge is reported out-of-bounds rather than clamped |
+| R2 | Measure the conversion cost at 4 and at 80 contacts per frame | Number in `MEASUREMENTS.md`. **Bail-out gate, see below** |
+| R3 | Buffer domain and paint path moved to track space, including the lap-seam split | Contacts land on the ribbon, and no stroke is smeared across the buffer at the seam |
+| R4 | Read the painted stroke width back from the buffer | A texel profile, settling whether D1's "narrow" requirement is already violated |
+| R5 | Receiving material samples by mesh UV, and a spline-mesh road carrying track-space UVs | Rubber appears on the road where the cars drive |
+| R6 | Re-take the real-scene measurement and compare against the five-car baseline | Numbers in `MEASUREMENTS.md` against median 0.0460 ms, p99 0.4450 ms, 1346 samples |
+
+*Exit: the same five cars lap and paint as they do today, on a ribbon sized from the centreline
+rather than a square world region, with the memory figures above demonstrated rather than argued.*
+
+**R2 is a deliberate bail-out.** World to track-space conversion is a cost the old design did not
+have: `FindInputKeyClosestToWorldLocation` is a search, and eighty of them per frame may not be
+free. If it is expensive the fix is to cache the last known key per contact and search locally,
+but that is an optimisation and it is not taken before the measurement says it is needed. If R2
+looks bad the phase stops there and the result is reported rather than worked around.
+
+### R4 and R5 carry two known traps
+
+- **Deleting `FSurfaceRegion` while `BP_SurfaceRegionDisplay` holds one as an instance-editable
+  member will break that Blueprint.** The Blueprint must lose the variable and the
+  `ConfigureSurfaceRegion` call *before* the C++ type goes, not after.
+- **Live Coding cannot introduce a symbol newly exported by one module and consumed by another.**
+  This phase adds new plugin exports that the host module calls, so the new exports are batched
+  into one change and one editor restart is expected. Recorded against the same rule in
+  `EDITOR_SETUP.md`.
+
 ## Phase D — Skid marks at product quality
 
 | # | Task | Exit |
 |---|---|---|
 | D1 | Velocity-oriented rotated brush quad, narrow | Marks align with travel direction |
 | D2 | Immediate write: darken, drop roughness | Reads as a lockup mark |
-| D3 | Defined behaviour at the region edge | Defined, not accidental |
+| D3 | Defined behaviour at the ribbon edge | Defined, not accidental. Narrowed by phase R: a closed-loop ribbon has lateral edges only, and the distance axis wraps |
 | D4 | Save, reload, reset | State survives a round trip |
-| D5 | Behaviour under World Partition streaming | Correct across a streaming boundary |
+| D5 | Behaviour under World Partition streaming | Correct across a streaming boundary. Phase R absorbed the region-follows-track half of this task; only streaming is left |
 | D6 | First profiling pass | Numbers in `MEASUREMENTS.md` |
 
 *Exit: correct under streaming, saving and reset, not only in a clean single level.*
