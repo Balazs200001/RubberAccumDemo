@@ -482,3 +482,81 @@ stroke's worth was added so it cannot silently degrade back into that.
   on a direct count.
 - **Not measured in a real scene.** These are automation-test figures with nothing else drawing.
   The harness in C2 onward is what will show the cost with twenty cars actually running.
+  *Partly closed 2026-09-22 at five cars — see the real-scene entry below. Twenty is still open.*
+
+---
+
+## 2026-09-22 — First real-scene measurement, five cars in L_TrackHarness
+
+The first number in this project that did not come from an automation test. Everything above was
+measured with nothing else drawing; this is the paint pass inside a live frame, competing with the
+scene's own rendering.
+
+```
+Build:    Development, editor target, Simulate-In-Editor, driven over MCP
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, driver 592.82, D3D12, SM6
+Scene:    /Game/Maps/L_TrackHarness — Template_Default lighting and sky, a 200 m plane
+          rendering M_SurfaceAccumulationDebug, ARacetrackCircuit, 5 ASplineFollowingCar
+Region:   20000 cm square, 2048 texels, RGBA16f, 33554432 bytes (the production default,
+          NOT the RTF_RGBA8 the B3/C0 tests pin)
+Contacts: 5 per frame, one per car, RubberBuildup channel, all at distinct headings
+Method:   r.RacetrackSurface.TimePaint, an RHI timestamp bracket (RQT_AbsoluteTime) around the
+          whole of PaintStrokes including EndDrawCanvasToRenderTarget, logged per call
+Samples:  1346 consecutive paint calls
+```
+
+| Statistic | 5 contacts, real scene |
+|---|---|
+| Minimum | 0.0270 ms |
+| **Median** | **0.0460 ms** |
+| Mean | 0.0911 ms |
+| 90th percentile | 0.1980 ms |
+| 99th percentile | 0.4450 ms |
+| Maximum | 1.0070 ms |
+| Share under 0.12 ms | 79.3 % |
+
+### Reading: C0 survives contact with a real scene, and the tail is the new information
+
+Against the C0 headless figures — 4 contacts at 0.0910 to 0.1050 ms, 80 contacts at 0.0890 to
+0.1150 ms — the real-scene **median is lower, at 0.0460 ms**, and the median is the honest
+comparison because the headless figures are themselves medians of 64 samples.
+
+That the median did not get *worse* under real rendering load is the result that matters: the C0
+claim was taken with nothing else on the GPU, and the obvious way for it to have been misleading
+was for contention to eat the win. It did not.
+
+**The distribution is what the synthetic test could not show.** Mean 0.0911 ms sits at double the
+median, p99 is 0.4450 ms and the worst single frame is 1.0070 ms. A 64-sample synthetic benchmark
+reports a median and a minimum and cannot see a tail like this. The tail is contention, not paint
+work — the same five quads are being drawn every frame, so a twenty-fold spread cannot be the
+drawing. Budgeting off the median alone would be wrong; the number to carry forward for frame
+budgeting is **p99 at 0.45 ms**, not the 0.046 ms median.
+
+### Two reasons these figures are not directly interchangeable with the C0 table
+
+- **Different format.** This ran RGBA16f, the production default; B3 and C0 pin `RTF_RGBA8`
+  deliberately. The B4 sweep measured paint as independent of format to within 4 % across a
+  64-fold range of buffer sizes, so this should not matter, but it is a difference and it is not
+  re-verified here.
+- **Different sampling regime.** The C0 test times 64 iterations of a loop it controls. This times
+  one real frame's paint, 1346 times, inside a live game loop. The instrument synchronises the
+  game thread with the render thread on every paint, so it perturbs frame pacing; the *bracket*
+  still measures the GPU timestamp delta, but the surrounding frame is not a normal frame.
+
+Treat the two as agreeing to about a factor of two, not better.
+
+### What is not verified
+
+- **Twenty cars in a real scene is still unmeasured.** Five contacts is what the harness runs
+  today. Eighty contacts is the density C3 and E7 need, and the only 80-contact figures in this
+  file are synthetic. Taking that number is the first thing C3 should do, not the last.
+- **The stored stroke width was not read back.** `WidthInTexels` computes to 2.05 texels for a
+  20 cm contact patch at 9.77 cm per texel, and the paint code uses it directly as the quad's
+  height, so the geometry says the mark is ~20 cm wide. The captured frames show visibly wider
+  bands, which is most likely bloom on an unlit emissive material at coverage near 1.0, but no
+  texel was read back to confirm that, and no bloom-off capture was taken because setting
+  `r.BloomQuality` needs console access that MCP does not have. **If the bands are genuinely
+  wider than 2 texels, D1's "narrow" requirement is already violated and every later intensity
+  figure is affected** — worth settling with a readback before D1, not after.
+- **Frame rate was not recorded.** `stat unit` is unreachable over MCP, so the cost of the paint
+  pass *as a share of the frame* is not known, only its absolute time.

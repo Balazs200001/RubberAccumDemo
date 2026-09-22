@@ -234,6 +234,113 @@ So the rule is confirmed by both a failure and a success: Live Coding handles ne
 a symbol newly exported by one module and consumed by another, because it links the consumer
 against the producer's old import library. Only that case costs an editor restart.
 
+## 2026-09-22 — C1/C2 harness map, and the rig retired
+
+### `/Game/Maps/L_TrackHarness`
+
+Change: created
+Why: the phase C harness map. `ARacetrackCircuit` plus five `ASplineFollowingCar` on a 200 m
+surface, which is what C1 and C2's exit conditions are demonstrated in.
+Made via: `AssetTools.duplicate` of `/Engine/Maps/Templates/Template_Default`, then
+`SceneTools.add_to_scene_from_class` / `add_to_scene_from_asset` and `ObjectTools.set_properties`
+
+| Actor | Class | Placement | Properties set |
+|---|---|---|---|
+| `SurfaceRegionDisplay` | `BP_SurfaceRegionDisplay` | origin, scale 200 | — |
+| `RacetrackCircuit` | `ARacetrackCircuit` | (0, 0, 40) | defaults |
+| `Car1` | `ASplineFollowingCar` | (-3000, 3000, 40) | `StartingDistanceAlongTrack` 0, `LateralOffsetAlpha` -0.4 |
+| `Car2` | `ASplineFollowingCar` | (3000, 3000, 40) | 6184, -0.2 |
+| `Car3` | `ASplineFollowingCar` | (6000, 0, 40) | 12368, 0.0 |
+| `Car4` | `ASplineFollowingCar` | (3000, -3000, 40) | 18553, 0.2 |
+| `Car5` | `ASplineFollowingCar` | (-3000, -3000, 40) | 24737, 0.4 |
+
+The car placements are cosmetic only — `BeginPlay` puts each car at its
+`StartingDistanceAlongTrack`, so the editor-time transform never matters. Distances are the lap
+length (30921 cm, read back from the generated spline's reparam table) divided five ways. The
+five distinct `LateralOffsetAlpha` values were chosen so each car leaves a separately identifiable
+band, which is what makes "rubber appears where they drive" checkable rather than a single line
+that any one car could have produced.
+
+None of the cars have `Track` set. They find the circuit through the `TActorIterator` fallback in
+`BeginPlay`, and no car logged the "found no ARacetrackCircuit" warning, so that path is exercised
+rather than merely written.
+
+### `/Game/Blueprints/BP_SurfaceRegionDisplay`
+
+Change: created
+Why: replaces the display half of `ASurfaceVerificationRig` — a surface to see the buffer on, and
+the runtime binding of the accumulation render target into the debug material. It also closes the
+A7 debt, because these are the plugin's Blueprint wrappers doing a real job rather than a
+graph written only to prove they compile.
+Made via: `BlueprintTools.create` (parent `StaticMeshActor`), `add_struct_variable`,
+`set_variable_instance_editable`, `write_graph_dsl`, `compile_blueprint`, then
+`ObjectTools.set_properties` on the CDO's `StaticMeshComponent0`
+
+Parented to `StaticMeshActor` rather than `Actor` deliberately: `BlueprintTools` has no
+add-component tool and `PrimitiveTools` only operates on placed actors, so inheriting
+`StaticMeshComponent` from the parent class is the only way to give a Blueprint a mesh over MCP.
+
+Defaults on the inherited component: `/Engine/BasicShapes/Plane`,
+`M_SurfaceAccumulationDebug`, scale 200. The scale is **also** passed explicitly at placement,
+because the mesh component is the actor root and the spawn transform overwrites the CDO scale —
+the same trap recorded against the rig further up this file.
+
+`EventBeginPlay`, read back from the compiled graph:
+
+```
+(event EventBeginPlay
+  (RacetrackSurface|ConfigureSurfaceRegion (Variables|Default|GetRegion))
+  (RacetrackSurface|ResetSurface)
+  (bind _returnvalue (RacetrackSurface|GetAccumulationTarget))
+  (bind _returnvalue_1 (Rendering|Material|CreateDynamicMaterialInstance
+                         (Variables|StaticMeshActor|GetStaticMeshComponent)))
+  (Rendering|Material|SetTextureParameterValue _returnvalue_1
+                         "AccumulationTarget" _returnvalue))
+```
+
+`Region` is an instance-editable `FSurfaceRegion` member, so the region is configured from the map
+rather than from code. `ResetSurface` is there so every play session starts from a clean buffer.
+
+### `/Game/Maps/L_SurfaceVerification`
+
+Change: deleted
+Why: the rig owned the plane in it, so removing `ASurfaceVerificationRig` left the map with
+nothing in it. `L_TrackHarness` supersedes it on every axis. The B1/B2 evidence it produced stays
+in `MEASUREMENTS.md` and ILO 1, and the build recipe is recorded further up this file.
+Made via: `AssetTools.delete`, then `git rm` — see below
+
+**`AssetTools.delete` returns `true` without deleting a `.umap`.** Called twice on
+`/Game/Maps/L_SurfaceVerification`, both times returning `true`, and both times `AssetTools.exists`
+still returned `true` and the file was still on disk. `get_referencers` returned an empty array, so
+nothing was holding it. The file was removed with `git rm` instead. Worth knowing before trusting
+that return value for any future asset deletion: **verify deletes with `exists`, do not trust the
+boolean.**
+
+### The paint timing CVar cannot be set over MCP
+
+`r.RacetrackSurface.TimePaint` gates the new timing instrument, and there is no way to set it from
+any toolset. `EditorAppToolset.SearchCVars` is lookup-only, and `ConfigSettingsToolset` edits
+Project Settings sections backed by a `UObject`, not arbitrary console variables. This is the same
+gap recorded against `stat GPU` and `CsvProfile` on 2026-09-22.
+
+The measurement run was taken by temporarily changing `bEnabled` in `FScopedPaintTimer`'s
+constructor to ignore the CVar, triggering `LiveCodingToolset.CompileLiveCoding`, running the
+session, then reverting and recompiling. Deliberately a one-line change inside a function body
+rather than flipping the CVar's *default*: Live Coding patches code but does not re-run the static
+constructor that registers a `TAutoConsoleVariable`, so a changed default would likely not have
+taken effect and the run would have silently measured nothing.
+
+If this instrument gets used often, the gate should become a `UDeveloperSettings` property, which
+`ConfigSettingsToolset` *can* set. Not done now because D6 is where profiling becomes routine.
+
+### Live Coding confirmed again on the plugin module
+
+Three `CompileLiveCoding` calls succeeded in this session, all patching
+`UnrealEditor-RacetrackSurface` (`patch_0` through `patch_2`), for changes that added a CVar, a
+class and a log call inside the plugin's own module. Consistent with the rule established on
+2026-09-22: Live Coding handles anything short of a symbol newly exported by one module and
+consumed by another.
+
 ### Why the rig owns its plane rather than the level
 
 First placement of the rig produced a plane 1 m across instead of 200 m. `OnConstruction` sets the

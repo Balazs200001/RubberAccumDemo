@@ -41,28 +41,36 @@ two more days of work happen before that one is due.
 automation tests pass, three repos committed. B and C0 were both closed inside the single day
 since the 2026-09-21 re-plan, including the feasibility gate that had been owed since week 2.
 
-**Written and built, not yet demonstrated:** C1 and C2. The C++ compiles against all three build
-paths and three new headless tests pass, but neither task's actual exit condition — a closed
-circuit and cars lapping *in a level* — has been shown, because that needs the editor open and
-this session had it closed, then found `unreal-mcp` unreachable when the plan called for opening
-it. That is a real gap, not a formality: this project's own history already has one instance of a
-task sitting "written, tested by readback, and never seen" for a stretch, for the same reason
-(B1/B2). It is the second time an editor-dependent step has been the slow part while the C++ and
-measurement work moved fast.
+**Also completed, same day, after the editor came up:** C1 and C2 exit conditions demonstrated in
+`/Game/Maps/L_TrackHarness`, the A7 Blueprint debt closed, `ASurfaceVerificationRig` and its map
+deleted, and the first real-scene measurement taken. 27 of 27 automation tests pass.
 
 **Untouched:** C3, C4, C5, and everything in phases D through I.
 
-**Straight answer on the cut list: not invoked, but on narrower grounds than "velocity is fine."**
-The rate of closing tasks is not in question — B, C0, and C1/C2's code all closed inside about a
-day. What is still unproven is the part of phase C that is not C++: getting the editor and MCP
-into a state where the exit conditions can actually be shown, and after that, phase F's game/render
--thread split, which PLAN.md already named on 2026-09-21 as the least familiar part of the engine
-and which has not been started. Neither of those is a speed problem the last day of work is
-evidence against. If Wednesday's real checkpoint finds C1 and C2 still undemonstrated for the same
-tooling reason, that is the signal to treat editor/MCP availability itself as a project risk, not
-only a scope one — and the cut list's first candidates on a scope reason would be D5 (region-
-follows-track for the 1500 m circuit) and the marble phases G, which are the least connected to the
-project's central claim about the emergent racing line.
+**Straight answer on the cut list: not invoked.** Since the 2026-09-21 re-plan, the closed set is
+phases A and B in full, C0, C1, C2, the A7 debt owed from phase A, and the "not measured in a real
+scene" gap owed from C0. That is one full phase, four tasks and two pieces of recorded debt inside
+about a day and a half. On tasks-completed against time, the backlog is closing faster than it is
+growing, and no contingency is needed on this evidence.
+
+**What the day did not settle, and should not be read as settled.** Three things:
+
+1. **Phase C is not closed.** C4's time compression is what turns "twelve seconds of Simulate"
+   into the phase exit, and C3 is what makes traffic spread realistically rather than five cars at
+   fixed offsets. The visible result is convincing and it is not the exit condition.
+2. **Phase F remains the real risk and is entirely untouched.** PLAN.md named the
+   game-thread/render-thread split on 2026-09-21 as the least familiar part of the engine. Nothing
+   since has tested that judgement — every task closed so far has been either pure C++, a
+   measurement, or editor wiring. The readback ring in F2 and the latency work in F6 are the
+   tasks most likely to overrun, and the fallback (the CPU grid) exists precisely because of it.
+3. **The editor/MCP dependency cost real time today** and was flagged in the earlier draft of this
+   review as a pattern. It resolved by the editor being started and the session restarted, but
+   two of two editor-dependent milestones so far have stalled on tooling rather than design. That
+   remains a live risk for D5, E4, G and H5, which are all editor-heavy.
+
+If a later checkpoint does show the backlog stalling, the cut order is unchanged: D5
+(region-follows-track for the 1500 m circuit) and phase G's marbles first, as the parts least
+connected to the project's central claim about the emergent racing line.
 
 ## Ordering principle
 
@@ -92,9 +100,20 @@ of it is wasted whichever way the phase B gate resolves.
 *Exit: the write API exists, is callable from C++ and Blueprint, and stores nothing yet.*
 
 **Status 2026-09-22: complete.** Builds in isolation (`BuildPlugin`), as the unity game target, and
-as the editor target. Twelve automation tests pass headlessly. Not verified: A7 has not been
-exercised from an actual Blueprint graph, only compiled, because no map exists in `Content/` yet.
-Carried into phase C.
+as the editor target. Twelve automation tests pass headlessly.
+
+**A7 debt closed 2026-09-22.** The wrappers were previously only compiled, never called. They are
+now called from `BP_SurfaceRegionDisplay`'s `EventBeginPlay` in `/Game/Maps/L_TrackHarness`, doing
+a real job — configuring the region from a map-editable struct and binding the accumulation target
+into the debug material — rather than in a graph written only to prove they work.
+`ConfigureSurfaceRegion` and `GetAccumulationTarget` are confirmed executing by their log output
+during a live session; `ResetSurface` sits between them on the same exec chain, so it ran too,
+though it logs nothing of its own.
+
+**Still not exercised from Blueprint:** `GetSurfaceRegion` and `RegisterSurfaceContact`.
+`RegisterSurfaceContact` is the significant one — it is the wrapper a plugin user is most likely
+to call, and every current caller reaches it from C++ instead. Worth a deliberate Blueprint
+exercise before release.
 
 ## Phase B — Feasibility gate (owed from week 2)
 
@@ -210,22 +229,30 @@ buildup takes dozens of laps and marbles hundreds.
 | C1 | Spline-generated track | Closed circuit in the level |
 | C2 | Autonomous spline-following cars, no physics, driving the public API only | Cars lap unattended |
 
-**Status 2026-09-22: C1 and C2 code complete, exit conditions not yet demonstrated.** Both live in
+**Status 2026-09-22: C1 and C2 COMPLETE, exit conditions demonstrated.** Both live in
 `Source/RubberAccumDemo/`, the host module, not the plugin. `ARacetrackCircuit` and
 `ASplineFollowingCar` build against all three targets (`BuildPlugin`, the editor target, the game
-target) and three new headless automation tests pass alongside the existing 24:
+target) and three new automation tests pass alongside the existing 24:
 `RubberAccumDemo.Track.IsClosedLoopWithPositiveLength`,
 `.WrapsDistanceBeyondTrackLength`, `.LateralOffsetMovesAcrossTrackWidth`. Run with
 `-ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"` to cover both prefixes in one
-pass.
+pass; 27 of 27 pass.
 
-**Not verified — needs the editor.** C1's exit is "closed circuit in the level" and C2's is "cars
-lap unattended". Neither has been placed in a level; nothing has rendered or ticked in a live
-world. The headless tests prove the geometry and distance math are correct in isolation, not that
-the exit conditions are met. The editor was closed for this pass and the `unreal-mcp` server did
-not connect (`ConnectionRefused`), so step 3 — placing the track and cars in a map and confirming
-they lap and paint rubber — is blocked until the editor is open and the MCP port is reachable from
-this session's working directory.
+**C1 exit — "closed circuit in the level": met.** `ARacetrackCircuit` placed in
+`/Game/Maps/L_TrackHarness` generates a closed spline with `bClosedLoop` true, 18 points, and a
+reparam table ending at **30921 cm of lap length**. Footprint is ±6600 by ±3600 cm, inside the
+200 m region with margin.
+
+**C2 exit — "cars lap unattended": met.** Five `ASplineFollowingCar` at five lateral offsets
+complete closed laps in a Simulate session with no input, and leave five separately identifiable
+rubber trails following their five distinct paths. Captured in
+[`c1-c2-track-harness-five-cars-topdown.png`](../../2627-Y3A-PR-243663/assets/media/c1-c2-track-harness-five-cars-topdown.png).
+Confirmed in the log rather than only on screen: the region is reconfigured and published, the
+buffer allocates at 2048 square RGBA16f, and no car logs the missing-circuit warning.
+
+**Phase C is still open.** C3, C4 and C5 are untouched, and the phase exit — *press play, walk
+away, come back to a marked track* — needs C4's time compression. Twelve seconds of simulation is
+not walking away.
 
 ### C1: how track width and the racing-line corridor are expressed
 
@@ -278,8 +305,9 @@ plausibly doing to the surface, not about position-dependent behaviour.
 If `Track` is left unset on a car instance, `BeginPlay` finds the first `ARacetrackCircuit` in the
 world, so placing several car instances in a level does not need each one wired up individually.
 
-`ASurfaceVerificationRig` is not yet deleted. PLAN.md says to delete it once the cars work; that is
-an editor-verified fact, not a headless one, so it waits for step 3.
+`ASurfaceVerificationRig` is **deleted**, along with `/Game/Maps/L_SurfaceVerification`, which
+contained nothing else once the rig was gone. The cars replaced its driving half and
+`BP_SurfaceRegionDisplay` replaced its display half.
 | C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line |
 | C4 | Time compression with lap counter | 50 laps in about two minutes |
 | C5 | Fixed-camera observation mode | Repeatable identical load per run |
