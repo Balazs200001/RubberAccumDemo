@@ -83,8 +83,8 @@ the live editor via `AutomationTestToolset`.
 
 | # | Task | Exit |
 |---|---|---|
-| B1 | Persistent render target allocated and drawn into by the canvas path | A streak persists across frames |
-| B2 | Receiving material function sampling by world position (authored through `MaterialTools` over MCP, logged in `EDITOR_SETUP.md`) | Streak visible on a surface |
+| B1 | Persistent render target allocated and drawn into by the canvas path | A streak persists across frames — **met** |
+| B2 | Receiving material function sampling by world position (authored through `MaterialTools` over MCP, logged in `EDITOR_SETUP.md`) | Streak visible on a surface — **met** |
 | B3 | Measure: one paint call, N paint calls, full-buffer decay pass, via RHI timestamp queries in an automation test | Real numbers recorded in `docs/MEASUREMENTS.md` |
 | B4 | Area vs texel density decision: region size, memory, channel count, precision | Decision recorded with the numbers behind it |
 | B5 | Decide saturating accumulator: hardware blend vs double buffer | Decision recorded |
@@ -94,8 +94,7 @@ the live editor via `AutomationTestToolset`.
 the flush strategy is redesigned before anything else is built. If no usable region size fits
 memory at skid-mark density, the region strategy changes here.*
 
-**Status 2026-09-22: gate PASSED, B3 to B6 decided, B2 authored, B1 and B2 not yet seen on a
-surface.**
+**Status 2026-09-22: PHASE B COMPLETE.** Gate passed, B1 to B6 all demonstrated.
 
 Four contacts cost 0.3610 ms and 0.3040 ms across two runs, inside the 0.5 ms budget unbatched.
 The flush strategy is not redesigned. Numbers and reasoning in
@@ -119,21 +118,35 @@ Two findings that change later phases:
   gives 36.62 cm per texel over 1500 m. The single-region design is a 200 m instrument, and the
   circuit case needs a following region or tiling. Folded into D5.
 
-Still outstanding in this phase:
+### B1 and B2 exit conditions, demonstrated 2026-09-22
 
-- **B2 is authored but not demonstrated.** `MF_SampleRacetrackSurface`, `MPC_RacetrackSurface` and
-  the debug material exist and compile, and the material renders on a 200 m plane in
-  `/Game/Maps/L_SurfaceVerification`. It currently renders black, which is the designed
-  not-yet-published state rather than a working sample. See
-  [EDITOR_SETUP.md](EDITOR_SETUP.md).
-- **B1 is written and tested but not visually verified.** A streak is proven to persist by readback
-  in the automation tests, not yet seen on a surface.
+Both were outstanding at the start of the day and both are now met, in
+`/Game/Maps/L_SurfaceVerification` with `ASurfaceVerificationRig` sweeping one contact at
+5500 cm/s across a 200 m plane.
 
-Both are blocked on the same thing: `ASurfaceVerificationRig`, the actor that configures the
-region, binds the render target to the material and sweeps a contact, compiles and links on the
-game target but cannot be loaded into the running editor. Live Coding cannot introduce a newly
-exported cross-module symbol, so the editor target needs a full build with the editor closed.
-Reason and evidence in [EDITOR_SETUP.md](EDITOR_SETUP.md).
+- **B1, "a streak persists across frames": met.** A single frame paints roughly 92 cm of stroke.
+  The captured frame shows an unbroken mark spanning the full 160 m sweep, so every frame before it
+  is still in the buffer. That is the persistence proof, in one frame, without needing two.
+- **B2, "streak visible on a surface": met.** The mark renders green, which is the G channel, which
+  is `EAccumulationChannel::SkidMark`. The channel mask, the world-position-to-region-UV mapping
+  and the saturation mapping are therefore all doing what they were built to do, because any one of
+  them being wrong gives a black surface, a mark in the wrong place, or the wrong colour.
+
+The run also confirms two earlier decisions are actually live rather than merely recorded:
+
+```
+LogRacetrackSurface: Published region centre (0.0, 0.0), world size 20000.0
+                     and saturation constant 3.000 to MPC_RacetrackSurface
+LogRacetrackSurface: Accumulation buffer allocated at 2048 x 2048, 33554432 bytes
+```
+
+33554432 bytes over 2048 square is 8 bytes per texel, so the B4 and B6 choice of RGBA16f is in
+force, not just written down.
+
+**Not verified.** The saturation curve itself is unmeasured. The mark is visibly bright, which
+proves the mapping is being applied at all, but nothing distinguishes a coverage of 0.95 from one
+of 3.98 on screen. `ExposureToCoverage` has no automation test, and it is now the contract between
+the material and the phase F query path.
 
 ### Where the saturation constant lives, decided 2026-09-22
 

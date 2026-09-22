@@ -181,9 +181,10 @@ Contains one added actor, `SurfaceRegionPlane`: `/Engine/BasicShapes/Plane` at t
 matches the `FSurfaceRegion` defaults exactly, so region and surface align one to one. The
 template's own floor tops out at Z -0.5, so the plane sits at Z 0 without z-fighting.
 
-**Note for whoever reloads this level after the rig lands.** `ASurfaceVerificationRig` owns its own
-plane sized from its region, so `SurfaceRegionPlane` becomes redundant the moment the rig is
-placed. It is still here because the rig could not be loaded this session, see below.
+`SurfaceRegionPlane` was **removed later the same session** once `ASurfaceVerificationRig` could be
+loaded. The rig owns its own plane sized from its region, so the standalone one was redundant and
+would have z-fought with it. The level as committed contains one added actor,
+`SurfaceVerificationRig`, at the origin with its Z at 5.
 
 ### Live Coding cannot introduce a new cross-module export
 
@@ -211,3 +212,38 @@ Worth recording separately: **the game target builds fine while the editor is op
 editor target is locked by Live Coding. That makes the game target the fast way to check that
 host-module and plugin code compiles during an editor-open session, and unlike `BuildPlugin` it is
 a Development build, so it compiles the automation test bodies too.
+
+### The limitation is the new export, not the new class — confirmed
+
+After the editor was closed, the editor target rebuilt and the editor reopened, the rig class
+registered as `/Script/RubberAccumDemo.SurfaceVerificationRig` and placed normally.
+
+A second change was then needed, and it isolated the cause. `ASurfaceVerificationRig` gained a new
+`USceneComponent` root and a new `UPROPERTY` — a change to the layout of an existing reflected
+class, which is the thing Live Coding is usually said to refuse — but **no new cross-module
+export**. `CompileLiveCoding` returned:
+
+```
+Result: Success
+Live coding succeeded, data type changes may cause packaging to fail if
+assets reference the new or updated data types
+```
+
+So the rule is confirmed by both a failure and a success: Live Coding handles new source files,
+`Build.cs` changes and new `UPROPERTY` members on existing classes. What it cannot do is introduce
+a symbol newly exported by one module and consumed by another, because it links the consumer
+against the producer's old import library. Only that case costs an editor restart.
+
+### Why the rig owns its plane rather than the level
+
+First placement of the rig produced a plane 1 m across instead of 200 m. `OnConstruction` sets the
+plane's scale from `Region.WorldSize`, but the plane was the actor's **root** component, so its
+scale *is* the actor's scale, and the spawn applied its own transform afterwards and overwrote it.
+Setting the actor transform again did not fix it either: `OnConstruction` re-runs on an editor drag
+via `PostEditMove`, not on a programmatic `SetActorTransform`.
+
+Fixed structurally rather than by working around it. The rig now has a plain `USceneComponent` as
+its root and the plane is a child, so the actor's transform and the region-derived scale no longer
+compete for the same slot. Measured bounds after the fix are -10000 to +10000 on both axes, which
+is the region size derived rather than typed. That is the point of the rig owning the surface at
+all: the plane cannot silently disagree with the region it is displaying.
