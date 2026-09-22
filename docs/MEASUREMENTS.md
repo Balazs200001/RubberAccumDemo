@@ -560,3 +560,95 @@ Treat the two as agreeing to about a factor of two, not better.
   figure is affected** — worth settling with a readback before D1, not after.
 - **Frame rate was not recorded.** `stat unit` is unreachable over MCP, so the cost of the paint
   pass *as a share of the frame* is not known, only its absolute time.
+
+---
+
+## 2026-09-22 — R2, world to track-space conversion cost
+
+The gate on [phase R](PLAN.md). Track-space storage introduces a cost the square world-XY region
+did not have: every world-space contact has to be located on the centreline spline before it can
+be painted. `USplineComponent::FindInputKeyClosestToWorldLocation` is a search, and eighty of them
+per frame is the density C3 and E7 need.
+
+Test `RacetrackSurface.Performance.TrackSpaceConversion`. This is a **CPU game-thread**
+measurement, not a GPU one — no rendering is involved — so it uses wall-clock sampling
+(`FPlatformTime::Seconds`, 64 samples, median reported) rather than the RHI timestamp queries the
+GPU passes use.
+
+```
+Build:    Development, editor target, run IN THE EDITOR over MCP — see the caveat below
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, 20 physical cores, 32472 MB system memory
+Scene:    No scene. A closed circular USplineComponent built in the test, 150 m radius,
+          12 m track width, contacts spread evenly around the lap at five lateral offsets
+Method:   C++ automation test, wall-clock, 64 samples per figure, median reported
+```
+
+| Spline points | Contacts | Full search | per contact | Known segment | per contact | Speedup |
+|---|---|---|---|---|---|---|
+| 18 | 4 | 0.0070 ms | 0.0017 ms | 0.0006 ms | 0.0001 ms | 11.7x |
+| **18** | **80** | **0.1332 ms** | 0.0017 ms | 0.0092 ms | 0.0001 ms | 14.5x |
+| 64 | 4 | 0.0149 ms | 0.0037 ms | 0.0003 ms | 0.0001 ms | 49.4x |
+| 64 | 80 | 0.3025 ms | 0.0038 ms | 0.0072 ms | 0.0001 ms | 42.0x |
+| 256 | 4 | 0.0505 ms | 0.0126 ms | 0.0004 ms | 0.0001 ms | 126.7x |
+| 256 | 80 | 1.0773 ms | 0.0135 ms | 0.0081 ms | 0.0001 ms | 133.0x |
+| 1024 | 4 | 0.1973 ms | 0.0493 ms | 0.0005 ms | 0.0001 ms | 395.2x |
+| 1024 | 80 | 4.1797 ms | 0.0522 ms | 0.0092 ms | 0.0001 ms | 454.2x |
+
+18 spline points is the harness circuit's actual complexity, read from `ARacetrackCircuit`.
+
+### Gate: PASSED, no bail-out
+
+Eighty contacts at harness spline complexity cost **0.1332 ms**, which is **0.80 % of a 60 Hz
+frame**. The phase continues. For scale, the paint pass this sits alongside costs 0.0460 ms median
+in the same five-car scene, so conversion is about three times paint and both together are under
+1 % of a frame.
+
+### Reading: the cost is linear in spline points, and that is the number that matters
+
+Per-contact cost against spline point count: 0.0017, 0.0038, 0.0135, 0.0522 ms for 18, 64, 256 and
+1024 points. From 64 points upward that is very nearly proportional — 4x the points for 3.6x and
+3.9x the cost.
+
+This is the behaviour predicted by reading the engine source rather than discovered by surprise.
+`FindInputKeyClosestToWorldLocation` (`SplineComponent.cpp:2859`) delegates to
+`FInterpCurve<FVector>::FindNearest` (`InterpCurve.h:544`), which loops over **every segment** and
+solves an exact closest-point quintic per segment. There is no spatial index and no early out, so
+the cost is O(segments) by construction.
+
+**Contact count is free by comparison.** Per-contact cost is flat across 4 and 80 contacts at every
+spline complexity, so twenty cars cost twenty times one car and nothing worse.
+
+### The fix exists, is measured, and is deliberately not taken yet
+
+`USplineComponent::FindInputKeyOnSegmentClosestToWorldLocation(WorldLocation, Index)`
+(`SplineComponent.h:837`) searches one named segment and skips the scan entirely. Measured at
+**0.0001 ms per contact, flat at every spline complexity** — genuinely O(1), as the source says.
+
+That is a 14x saving at harness complexity and a **454x** saving at 1024 points. It is not taken
+now because the gate passes without it and the plan's standing rule is to measure before
+optimising. What the table does is convert that from a judgement into a threshold:
+
+**At 80 contacts, the full search passes 1 ms at about 256 spline points.** A 7 km circuit with a
+point every 27 m has 256 points. So a real circuit lands exactly on the threshold, and **the
+per-contact segment cache becomes mandatory somewhere between the harness and real Spa** — it is a
+known, sized, and already-located piece of work rather than an unknown.
+
+Two things make the cache cheap when it is needed: the contacts that matter most are the ones from
+`ASplineFollowingCar`, which already uses the track-space overload and never searches at all; and a
+car's segment index changes by at most one or two per frame, so the previous index plus its
+neighbours is almost always the answer.
+
+### Caveat: these are editor numbers
+
+Taken in the running editor over MCP rather than headless, because the editor was open for the
+phase R work and the editor target cannot be rebuilt while Live Coding holds it. They are labelled
+as editor numbers per the rule at the top of this file.
+
+For a pure CPU measurement with no rendering in the timed region this matters much less than it
+would for a GPU pass — there is no frame-rate smoothing to hide anything — but the editor's own
+game thread work is still in the machine.
+
+**OUTSTANDING: re-take headless once the editor is closed for the phase R editor-target rebuild.**
+The gate conclusion does not depend on it — the margin is 0.80 % of a frame against a threshold
+that would need to be wrong by two orders of magnitude — but the table is not yet a
+standing-method number.
