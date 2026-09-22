@@ -32,6 +32,38 @@ checkpoints below is to make the consequence visible early enough to act on.
 
 Review scope against completed tasks. No cut decision before then.
 
+#### Early review, taken 2026-09-22 (Wednesday's checkpoint is two days out)
+
+Requested ahead of the actual date, so this is a progress read, not the final Wednesday verdict —
+two more days of work happen before that one is due.
+
+**Completed and demonstrated:** phases A and B in full, C0. All three build paths pass, 24
+automation tests pass, three repos committed. B and C0 were both closed inside the single day
+since the 2026-09-21 re-plan, including the feasibility gate that had been owed since week 2.
+
+**Written and built, not yet demonstrated:** C1 and C2. The C++ compiles against all three build
+paths and three new headless tests pass, but neither task's actual exit condition — a closed
+circuit and cars lapping *in a level* — has been shown, because that needs the editor open and
+this session had it closed, then found `unreal-mcp` unreachable when the plan called for opening
+it. That is a real gap, not a formality: this project's own history already has one instance of a
+task sitting "written, tested by readback, and never seen" for a stretch, for the same reason
+(B1/B2). It is the second time an editor-dependent step has been the slow part while the C++ and
+measurement work moved fast.
+
+**Untouched:** C3, C4, C5, and everything in phases D through I.
+
+**Straight answer on the cut list: not invoked, but on narrower grounds than "velocity is fine."**
+The rate of closing tasks is not in question — B, C0, and C1/C2's code all closed inside about a
+day. What is still unproven is the part of phase C that is not C++: getting the editor and MCP
+into a state where the exit conditions can actually be shown, and after that, phase F's game/render
+-thread split, which PLAN.md already named on 2026-09-21 as the least familiar part of the engine
+and which has not been started. Neither of those is a speed problem the last day of work is
+evidence against. If Wednesday's real checkpoint finds C1 and C2 still undemonstrated for the same
+tooling reason, that is the signal to treat editor/MCP availability itself as a project risk, not
+only a scope one — and the cut list's first candidates on a scope reason would be D5 (region-
+follows-track for the 1500 m circuit) and the marble phases G, which are the least connected to the
+project's central claim about the emergent racing line.
+
 ## Ordering principle
 
 Each phase ends in something observable. A phase is done when its exit condition is demonstrated,
