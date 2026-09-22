@@ -396,6 +396,38 @@ intended.
 the RHI documents as leaving values unchanged. With the default `true` the read goes through
 `RCM_UNorm` and the accumulator's unbounded exposure values would be rescaled.
 
+### `MaterialTools.delete_expression` asserts and halts the editor on a MaterialFunction
+
+Hit 2026-09-23 while reworking `MF_SampleRacetrackSurface` for phase R. One call to
+`MaterialTools.delete_expression`, removing a now-dangling `MaterialExpressionAdd` from the
+function graph, stopped the editor in the debugger:
+
+```
+Script Stack (2 frames):
+  /Script/MaterialEditor.MaterialEditingLibrary.DeleteMaterialExpressionInFunction
+  /EditorToolset/Python/editor_toolset/toolsets/material_PY.MaterialTools.delete_expression
+Assertion failed: !IsRooted()  [UObjectBaseUtility.h] [Line: 209]
+A breakpoint instruction (__debugbreak()) was executed in UnrealEditor.exe.
+```
+
+The MCP call never returned; the client gave up after its 300 s idle timeout. The editor had to be
+closed from the debugger.
+
+**Nothing was lost.** The two edits made before the crash — adding a `TextureCoordinate` and wiring
+it to the texture sample's `UVs` — had not been recompiled or saved, so the asset on disk was still
+the last saved version and the edits were simply redone afterwards.
+
+**The rule taken from this: add and rewire, do not delete, on a MaterialFunction graph.** Replacing
+the world-position chain's *consumer* is enough to take it out of the compiled shader — an
+expression with no path to an output contributes nothing. The dead nodes are left in the graph
+deliberately rather than risking the editor again for tidiness. Anything that genuinely must be
+deleted from a MaterialFunction is a by-hand job in the material editor.
+
+This sits alongside the two capability gaps already recorded on 2026-09-22 (no console-command
+tool, no render-target asset tool) and the `AssetTools.delete` lesson above: **three of the four
+destructive or mutating MCP operations tried in this project have misbehaved.** Prefer additive
+operations, and verify rather than trust a return value.
+
 ### Why the rig owns its plane rather than the level
 
 First placement of the rig produced a plane 1 m across instead of 200 m. `OnConstruction` sets the
