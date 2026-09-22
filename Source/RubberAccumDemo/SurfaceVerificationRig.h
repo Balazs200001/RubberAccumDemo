@@ -8,6 +8,7 @@
 
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
+class USceneComponent;
 class UStaticMeshComponent;
 
 UCLASS()
@@ -43,6 +44,9 @@ protected:
 
 private:
 	void ResizeSurfaceToRegion();
+
+	UPROPERTY(VisibleAnywhere, Category = "Surface Verification")
+	TObjectPtr<USceneComponent> Origin;
 
 	UPROPERTY(VisibleAnywhere, Category = "Surface Verification")
 	TObjectPtr<UStaticMeshComponent> Surface;

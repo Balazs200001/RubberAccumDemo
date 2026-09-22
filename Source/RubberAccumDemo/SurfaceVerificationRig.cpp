@@ -1,5 +1,6 @@
 #include "SurfaceVerificationRig.h"
 
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -14,8 +15,11 @@ ASurfaceVerificationRig::ASurfaceVerificationRig()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
+	Origin = CreateDefaultSubobject<USceneComponent>(TEXT("Origin"));
+	SetRootComponent(Origin);
+
 	Surface = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Surface"));
-	SetRootComponent(Surface);
+	Surface->SetupAttachment(Origin);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneMesh(
 		TEXT("/Engine/BasicShapes/Plane.Plane"));
@@ -60,7 +64,7 @@ void ASurfaceVerificationRig::ResizeSurfaceToRegion()
 		return;
 	}
 
-	Surface->SetWorldScale3D(FVector(Region.WorldSize / MeshSize.X, Region.WorldSize / MeshSize.Y, 1.0));
+	Surface->SetRelativeScale3D(FVector(Region.WorldSize / MeshSize.X, Region.WorldSize / MeshSize.Y, 1.0));
 	Surface->SetWorldLocation(FVector(Region.WorldCentre.X, Region.WorldCentre.Y, GetActorLocation().Z));
 }
 
