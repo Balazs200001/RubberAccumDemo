@@ -183,6 +183,63 @@ buildup takes dozens of laps and marbles hundreds.
 
 *Exit: press play, walk away, come back to a marked track.*
 
+### C0 approach, proposed 2026-09-22, awaiting sign-off before implementation
+
+**Root cause of the B3 cost, found by reading the engine source rather than assumed.**
+`PaintStrokes` already issues every stroke inside a single `BeginDrawCanvasToRenderTarget` /
+`EndDrawCanvasToRenderTarget` pair, so the one-call-per-frame structure the plan wants is already
+there at the C++ call-site. The cost is coming from underneath it: `UKismetRenderingLibrary::
+BeginDrawCanvasToRenderTarget` (`KismetRenderingLibrary.cpp:788`) hardcodes
+`FCanvas::CDM_ImmediateDrawing` with the comment *"Draw immediately so that interleaved
+SetVectorParameter (etc) function calls work as expected"*, and `FCanvas::DrawItem`
+(`Canvas.cpp:2084`) calls `Flush_GameThread()` after every single item when the canvas is in that
+mode. So every `K2_DrawTexture` submits and flushes to the render thread on its own, independent of
+how many strokes share the call — which is exactly the flat ~0.075 ms-per-contact, resolution-
+independent cost B3 measured.
+
+**The batching this needs already exists in the engine; nothing bypasses it today.**
+`FCanvasTileItem::Draw` (`CanvasItem.cpp:419`) resolves its batch through
+`Canvas->GetBatchedElements(ET_Triangle, BatchedElementParameters, Texture, BlendMode)` — the batch
+key is texture and blend mode only. Rotation and per-tile colour are baked into the tile's vertex
+positions and vertex colour before the batch add (`PushRelativeTransform`), not carried as per-draw
+state, so many differently-rotated, differently-coloured tiles sharing one texture and blend mode
+already merge into one `FBatchedElements` batch and one draw call at flush. Every production call to
+`PaintStrokes` (`FlushPendingContacts` never passes a `PaintMode`, so it is always `Additive`) uses
+the single shared brush texture and a single blend mode for every stroke in the array, regardless of
+which of the three channels each stroke targets — channel is just a vertex-colour mask. So the
+batch key is already uniform across a frame's strokes; only the forced per-item flush is stopping
+them from landing in one draw.
+
+**Proposed fix.** Replace the two `UKismetRenderingLibrary` calls in `PaintStrokes` with a small
+internal helper that builds its own `FCanvas` around the same render target resource, using
+`FCanvas::CDM_DeferDrawing` (the class's own default) instead of the Kismet helper's hardcoded
+immediate mode. The helper reproduces the handful of things the Kismet functions otherwise do around
+the canvas — `FlushDeferredParameterCollectionInstanceUpdates` and the deferred-resource-update
+render command on begin, the resolve-to-texture render command on end — because
+`UKismetRenderingLibrary` does not expose a draw-mode argument to opt out of immediate mode any other
+way; that duplication is the actual cost of this approach, not new rendering logic. The per-stroke
+loop building `FCanvasTileItem`s is untouched. One explicit `Flush_GameThread()` after the loop
+replaces the implicit per-item ones. `ApplyDecay` and `Clear` are unaffected; they already draw a
+single item per call, so immediate mode costs them nothing.
+
+**Rejected alternative.** A hand-rolled RHI path — build a vertex/index buffer of stroke quads once
+per frame and issue one `RHICmdList.DrawIndexedPrimitive` from a render command with a small custom
+shader. This also collapses to one draw call, and removes the `Canvas` dependency entirely, but it
+reimplements textured-quad batching, blend-state selection and rotation math that
+`FCanvasTileItem`/`FBatchedElements` already does correctly, for the same measured outcome. Per the
+project's stated preference for existing engine systems over reimplementing them, this is only the
+fallback if the deferred-canvas approach does not actually collapse to a small number of draw calls
+once measured — the batch-key reasoning above says it should, but it has not been measured yet.
+
+**Verification plan.** Re-run `RacetrackSurface.Performance.PaintAndDecay` unchanged and compare the
+eighty-contact figure against the 5.99 ms (later 4.22 ms after the test-debt commits) baseline
+already in `MEASUREMENTS.md`. Add a correctness check alongside it — same final buffer contents from
+a batch of strokes as from issuing them one at a time — since changing the draw path must not change
+what gets painted. Both numbers go in `MEASUREMENTS.md` as the C0 before/after.
+
+**Not decided without sign-off.** This changes a path B1/B2 already demonstrated working end to end
+on a real surface. Confirm the approach before it is implemented.
+
 ## Phase D — Skid marks at product quality
 
 | # | Task | Exit |
