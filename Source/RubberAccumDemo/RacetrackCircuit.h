@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "RacetrackCircuit.generated.h"
 
+class UProceduralMeshComponent;
 class USplineComponent;
 
 UCLASS()
@@ -17,6 +18,8 @@ public:
 	virtual void OnConstruction(const FTransform& Transform) override;
 
 	virtual void PostInitializeComponents() override;
+
+	virtual void BeginPlay() override;
 
 	const USplineComponent* GetCentreline() const
 	{
@@ -50,9 +53,25 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "0.5"))
 	double SurfaceCentimetresPerTexel = 9.765625;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "50.0"))
+	double RoadSegmentLength = 200.0;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
+	double RoadHeightAboveSpline = 1.0;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
+	TObjectPtr<UMaterialInterface> RoadMaterial;
+
 private:
 	void GenerateTrackSpline();
 
+	void GenerateRoadMesh();
+
+	void BindAccumulationTargetToRoad();
+
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<USplineComponent> Spline;
+
+	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
+	TObjectPtr<UProceduralMeshComponent> Road;
 };
