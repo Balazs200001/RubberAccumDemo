@@ -1220,9 +1220,18 @@ the field would creep.
 is paused, so the camera, input and everything else are untouched by construction rather than by
 repair. `P` toggles it, `bStartPaused` defaults true.
 
-The deposit stops with the cars and nothing else has to know: `FlushPendingContacts` only ever
-receives contacts from `ASplineFollowingCar::Tick`, so once the cars stop the next subsystem tick
-drains the queue and `PaintStrokes` is never reached again. The buffer holds whatever it had.
+The deposit stops with the cars, but as a fact about this scene rather than a guarantee. The
+subsystem keeps ticking; `FlushPendingContacts` simply finds nothing queued, so `StrokesResolvedThisFrame`
+stays empty and `PaintStrokes` is never reached. The buffer holds whatever it had.
+
+**There are two ways into `PendingContacts`, not one.** `RegisterSurfaceContactInTrackSpace` is the
+one `ASplineFollowingCar::Tick` uses, and freezing the cars closes it. The other is
+`RegisterSurfaceContact`, the world-space overload, which is public on the subsystem and exposed to
+Blueprint through `URacetrackSurfaceBlueprintLibrary::RegisterSurfaceContact` — that is the
+engine-agnostic API the whole plugin exists to offer. Nothing in this scene calls it today, which
+is the only reason the buffer is stable while frozen. **Anything wired to that boundary later — the
+Chaos vehicle the brief anticipates, a player-driven pawn — will keep depositing straight through
+the freeze**, and the freeze would then have to move behind the API rather than in front of it.
 
 Time dilation and deposition keys are deliberately not gated on the frozen state. A disabled tick
 function is off the tick list entirely, so a dilation change has no effect until the field is
