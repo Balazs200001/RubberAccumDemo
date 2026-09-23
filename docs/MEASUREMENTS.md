@@ -563,6 +563,8 @@ Treat the two as agreeing to about a factor of two, not better.
 - **Twenty cars in a real scene is still unmeasured.** Five contacts is what the harness runs
   today. Eighty contacts is the density C3 and E7 need, and the only 80-contact figures in this
   file are synthetic. Taking that number is the first thing C3 should do, not the last.
+  *Closed 2026-09-23 by [R6](#2026-09-23--r6-the-real-scene-re-taken-on-the-ribbon-and-twenty-cars-at-last).
+  Twenty cars cost 0.0220 ms median against 0.0210 ms for five — flat, as C0 predicted.*
 - **The stored stroke width was not read back.** `WidthInTexels` computes to 2.05 texels for a
   20 cm contact patch at 9.77 cm per texel, and the paint code uses it directly as the quad's
   height, so the geometry says the mark is ~20 cm wide. The captured frames show visibly wider
@@ -1030,3 +1032,138 @@ addition to an existing test and is not done here.
 **The B5 table above is stale against the current code and should be read as the pre-R3 figures it
 is.** It is left in place rather than edited, because the reasoning built on it is sound and the
 entry is the record of what was measured on the day.
+
+---
+
+## 2026-09-23 — R6, the real scene re-taken on the ribbon, and twenty cars at last
+
+Closes two things at once: R6's re-take against the five-car baseline, and the "twenty cars in a
+real scene is unmeasured" gap carried since C2.
+
+```
+Build:    Development, editor target binary run as a STANDALONE GAME, not Simulate-In-Editor
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, driver 592.82, D3D12, SM6
+Power:    MAINS, BatteryStatus = 2 verified before and after
+Scene:    /Game/Maps/L_TrackHarness, Template_Default lighting and sky, ARacetrackCircuit with its
+          procedural road, BP_SurfaceRegionDisplay's 200 m plane, and the car field
+Buffer:   Track-space ribbon, 3167 x 123 texels, RGBA16f, 3116328 bytes (2.97 MiB)
+Cars:     Post-C3 ASplineFollowingCar, so speed, slip and line all vary with position
+Method:   r.RacetrackSurface.TimePaint 1, an RHI timestamp bracket around PaintStrokes
+Command:  UnrealEditor.exe RubberAccumDemo.uproject /Game/Maps/L_TrackHarness -game
+          -ExecCmds="r.RacetrackSurface.TimePaint 1" -windowed -resx=1280 -resy=720
+          -nosplash -nosound -abslog=...
+```
+
+| Configuration | Samples | Min | **Median** | Mean | p90 | p95 | **p99** | p99.9 | Max |
+|---|---|---|---|---|---|---|---|---|---|
+| 5 cars, run A | 6811 | 0.0190 | **0.0210** | 0.0237 | 0.0240 | 0.0260 | **0.0460** | 0.4320 | 0.8280 |
+| 5 cars, run B | 7139 | 0.0190 | **0.0220** | 0.0257 | 0.0250 | 0.0270 | **0.1660** | 0.4360 | 0.8300 |
+| 20 cars, run A | 6634 | 0.0200 | **0.0220** | 0.0246 | 0.0250 | 0.0260 | **0.0480** | 0.4390 | 0.8580 |
+| 20 cars, run B | 6597 | 0.0190 | **0.0220** | 0.0247 | 0.0250 | 0.0260 | **0.0470** | 0.3810 | 0.9050 |
+
+### Twenty cars cost the same as five, in a real scene
+
+**0.0220 ms median at twenty cars against 0.0210 ms at five.** Every percentile up to p95 is
+identical between the two configurations to within a single 0.001 ms quantisation step. This is the
+headline result and it is the one the project needed: C0's batching was demonstrated headlessly on
+a synthetic bench, and every 80-contact figure in this file before today was synthetic. The claim
+that paint cost is flat in stroke count now holds with twenty cars actually driving.
+
+It also retires the B3 finding that drove C0 into being a phase C prerequisite. B3 measured about
+0.075 ms *per contact*; twenty cars would have been 1.5 ms on that curve. They cost 0.022 ms total.
+
+### Against the five-car baseline, and how much of the gain is which change
+
+| | Baseline, 2026-09-22 | **This entry, 5 cars** | Change |
+|---|---|---|---|
+| Samples | 1346 | 6811 / 7139 | 5x more |
+| Median | 0.0460 ms | **0.0210 / 0.0220 ms** | 2.1x better |
+| Mean | 0.0911 ms | **0.0237 / 0.0257 ms** | 3.7x better |
+| p90 | 0.1980 ms | **0.0240 / 0.0250 ms** | 8x better |
+| p99 | 0.4450 ms | **0.0460 / 0.1660 ms** | 2.7x to 9.7x better |
+| Max | 1.0070 ms | 0.8280 / 0.8300 ms | 1.2x better |
+| Share under 0.12 ms | 79.3 % | **98.8 to 99.4 %** | — |
+
+**Three things changed at once and the gain must not be attributed to one of them.** In decreasing
+order of how confident the attribution is:
+
+1. **The run is standalone `-game`, not Simulate-In-Editor.** This is the biggest factor in the
+   tail and the least interesting one. The baseline's mean sat at double its median and only 79.3 %
+   of frames came in under 0.12 ms, which that entry already identified as contention rather than
+   paint work. Take the editor out and the contention goes with it: 99.4 % of frames now land under
+   0.12 ms. **This also makes the measurement compliant with this file's own standing rule**, which
+   says Development or Shipping and never editor, because editor frame-rate smoothing hides spikes.
+   The baseline broke that rule out of necessity, since the CVar could not be set over MCP. It can
+   be set on a command line.
+2. **The buffer is 11x smaller.** 3167 x 123 is 389 k texels against the square region's 4.19 M.
+   B3 and B4 both measured paint as independent of buffer size, so this should account for none of
+   the gain, and the flat 5-versus-20 result here agrees. Listed because it changed, not because it
+   is believed to matter.
+3. **The cars are post-C3**, so speed and slip vary with position. Slip sets `Stroke.Intensity`,
+   not stroke count or size, so this should not move cost either.
+
+**The honest summary is that the paint pass did not get faster; the frame around it got quieter.**
+The median improvement of 2.1x is real but modest, and the p90 and p99 improvements are mostly the
+editor leaving.
+
+### The tail did not disappear, it got rarer
+
+p99.9 is still 0.38 to 0.44 ms and the maximum is still 0.83 to 0.91 ms, which is the same order as
+the baseline's 1.0070 ms. Between 34 and 66 samples out of roughly 6800 exceed 0.2 ms in every run.
+So the spike is still there and still has to be budgeted for; there are simply far fewer of them.
+**The number to carry for frame budgeting is p99.9 at 0.44 ms**, not the 0.022 ms median, and that
+is the same conclusion the baseline reached about its own p99.
+
+Run B of the five-car pair is the one anomaly: p99 0.1660 ms against 0.0460 ms for the other three
+runs, with 66 samples over 0.2 ms against 34 to 37. Its median and p95 match the others exactly, so
+this is a heavier tail in one run and not a different central cost. Not explained.
+
+### The lap-seam split, seen outside a test for the first time
+
+The stroke counts logged per frame are not constant:
+
+| Configuration | 5 strokes | 6 strokes | 20 strokes | 21 strokes | 22 strokes |
+|---|---|---|---|---|---|
+| 5 cars | 6793 | 18 | — | — | — |
+| 20 cars | — | — | 6579 | 37 | 18 |
+
+One car crossing the lap seam turns one contact into two strokes, which is exactly what R3 built
+and what until now was only asserted by `SurfaceStrokeTests`. The 22-stroke frames at twenty cars
+are two cars crossing in the same frame. At five cars the field is spread evenly around the lap so
+crossings never coincide, and only the 6-stroke case appears.
+
+**This also exposed a mislabelled diagnostic.** `FScopedPaintTimer` counts `Strokes.Num()` and the
+log line said "contacts". Fixed in commit `845fac0`. The baseline entry's "Contacts: 5 per frame"
+was therefore reporting strokes; at five cars with no seam crossing in the sampled window the two
+happen to be equal, so **no baseline number is affected**, only the word.
+
+### Method change: this measurement no longer needs the editor or Live Coding
+
+`EDITOR_SETUP.md` records the baseline as having been taken by temporarily editing `bEnabled` in
+`FScopedPaintTimer`'s constructor to ignore the CVar, triggering a Live Coding compile, running the
+session, then reverting and recompiling. That was necessary because MCP cannot set a console
+variable in a running editor.
+
+It is not necessary from a command line. `r.RacetrackSurface.TimePaint` is declared `ECVF_Default`
+and read with `GetValueOnGameThread`, so `-ExecCmds` sets it at startup. The whole measurement is
+now one command with no source edit to remember to revert, which also removes the risk that the
+edit is left in. Recorded in `EDITOR_SETUP.md` against the old recipe.
+
+### What is not verified
+
+- **Frame rate is still not recorded.** `stat unit` needs console output this method does not
+  capture, so the paint pass as a *share* of the frame is still unknown, only its absolute time.
+  Roughly 6600 to 7100 paint calls landed in a 70 second window in every configuration, which
+  implies about 95 to 100 frames per second, but the instrument synchronises the game thread with
+  the render thread on every paint, so that is a perturbed frame rate and not a clean reading.
+- **Nothing was seen on screen.** The material function still samples by world position against a
+  track-space ribbon, so the surface renders nothing meaningful. This measures the write path only.
+  R5 is what changes that.
+- **The twenty-car field was 15 spawned plus the 5 still placed in the map**, reached by a
+  temporary `CarCount` default that was reverted after the runs. The five map-placed cars lost
+  their hand-set offsets when `LateralOffsetAlpha` was renamed to `BaselineLateralOffsetAlpha`, so
+  they all drove the centreline. That affects where rubber lands, not how much work the paint pass
+  does, so it does not affect these figures. It does mean **the twenty cars were not twenty
+  distinct lines**, and the run should be repeated once the map is cleaned up if the spatial
+  distribution ever matters to a measurement.
+- **Draw-call count still has never been read from a counter.**
