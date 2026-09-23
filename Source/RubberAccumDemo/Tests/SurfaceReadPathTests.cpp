@@ -3,14 +3,12 @@
 #include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 #include "Kismet/KismetMaterialLibrary.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialParameterCollection.h"
-#include "RenderingThread.h"
-#include "UObject/StrongObjectPtr.h"
-#include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
@@ -27,6 +25,10 @@ namespace
 	constexpr double PaintedAlongTrackStart = 0.70;
 	constexpr double PaintedAlongTrackEnd = 0.80;
 	constexpr double PaintedAcrossTrack = 0.5;
+
+	constexpr double ReadPathLapCentimetres = 62500.0;
+	constexpr float ReadPathSeconds = 1.0f;
+	constexpr float ReadPathDepositionScale = 200.0f;
 
 	UWorld* FindReadPathWorld()
 	{
@@ -53,7 +55,7 @@ namespace
 	FSurfaceTrackRibbon MakeTwoRowReadRibbon()
 	{
 		FSurfaceTrackRibbon Ribbon;
-		Ribbon.TrackLength = 62500.0;
+		Ribbon.TrackLength = ReadPathLapCentimetres;
 		Ribbon.TrackWidth = 200.0;
 		Ribbon.CentimetresPerTexel = 3.125;
 		Ribbon.bClosedLoop = true;
@@ -82,6 +84,20 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		return false;
 	}
 
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("Could not resolve USurfaceAccumulationSubsystem from the world."));
+		return false;
+	}
+
+	if (!Subsystem->IsInitialized())
+	{
+		AddWarning(TEXT("Skipped: the world's accumulation subsystem is not initialised, so it cannot be ticked."));
+		return true;
+	}
+
 	UMaterial* DebugMaterial = LoadObject<UMaterial>(nullptr, DebugMaterialPath);
 
 	if (DebugMaterial == nullptr)
@@ -106,53 +122,68 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 
 	TestEqual(TEXT("The read path is exercised against a folded ribbon"), Ribbon.RowCount(), 2);
 
-	UKismetMaterialLibrary::SetScalarParameterValue(
-		World,
-		Collection,
-		RacetrackSurfaceMapping::SaturationConstantParameterName,
-		RacetrackSurfaceMapping::SaturationConstant);
+	Subsystem->ConfigureTrackRibbon(nullptr, Ribbon);
+	Subsystem->ResetSurface();
 
-	UKismetMaterialLibrary::SetScalarParameterValue(
-		World,
-		Collection,
-		RacetrackSurfaceMapping::AccumulationRowCountParameterName,
-		static_cast<float>(Ribbon.RowCount()));
+	UTextureRenderTarget2D* Accumulation = Subsystem->GetOrCreateAccumulationTarget();
 
-	TStrongObjectPtr<USurfaceAccumulationBuffer> Buffer(NewObject<USurfaceAccumulationBuffer>());
-
-	if (!Buffer->Allocate(World, Ribbon, RTF_RGBA16f))
+	if (Accumulation == nullptr)
 	{
-		AddError(TEXT("Failed to allocate the folded accumulation buffer."));
+		AddError(TEXT("The subsystem produced no accumulation target for a folded ribbon."));
 		return false;
 	}
 
-	const int32 PaintedRow = Ribbon.RowIndexAt((PaintedAlongTrackStart + PaintedAlongTrackEnd) * 0.5);
+	TestEqual(TEXT("The target is as wide as one row"), Accumulation->SizeX, Ribbon.AtlasWidth());
+	TestEqual(TEXT("The target stacks every row"), Accumulation->SizeY, Ribbon.AtlasHeight());
 
-	FSurfaceBrushStroke Stroke;
-	Stroke.RegionStart = Ribbon.RibbonToAtlasInRow(PaintedRow, PaintedAlongTrackStart, PaintedAcrossTrack);
-	Stroke.RegionEnd = Ribbon.RibbonToAtlasInRow(PaintedRow, PaintedAlongTrackEnd, PaintedAcrossTrack);
-	Stroke.WidthInTexels = 16.0f;
-	Stroke.Intensity = 0.5f;
-	Stroke.RowIndex = PaintedRow;
-	Stroke.Channel = EAccumulationChannel::SkidMark;
+	IConsoleVariable* DepositionScale = IConsoleManager::Get().FindConsoleVariable(
+		RacetrackSurfaceMapping::DepositionScaleVariableName);
 
-	TestEqual(TEXT("The painted span belongs to the second row"), PaintedRow, 1);
+	const float RestoreDepositionScale = DepositionScale != nullptr ? DepositionScale->GetFloat() : 1.0f;
 
-	Buffer->PaintStrokes(World, TArray<FSurfaceBrushStroke>({ Stroke }));
-	FlushRenderingCommands();
+	if (DepositionScale != nullptr)
+	{
+		DepositionScale->Set(ReadPathDepositionScale);
+	}
+
+	const double PaintedCentre = (PaintedAlongTrackStart + PaintedAlongTrackEnd) * 0.5;
+	const double TravelCentimetres = (PaintedAlongTrackEnd - PaintedAlongTrackStart) * Ribbon.TrackLength;
+
+	Subsystem->RegisterSurfaceContactInTrackSpace(
+		PaintedAlongTrackEnd * Ribbon.TrackLength,
+		0.0,
+		TravelCentimetres / ReadPathSeconds,
+		1.0f,
+		60.0f,
+		EAccumulationChannel::SkidMark);
+
+	Subsystem->Tick(ReadPathSeconds);
+
+	if (DepositionScale != nullptr)
+	{
+		DepositionScale->Set(RestoreDepositionScale);
+	}
+
+	const TArray<FSurfaceBrushStroke>& Painted = Subsystem->GetStrokesResolvedThisFrame();
+
+	TestEqual(TEXT("The painted span stays inside one row and is not split"), Painted.Num(), 1);
+
+	if (Painted.Num() == 1)
+	{
+		TestEqual(TEXT("The painted span belongs to the second row"), Painted[0].RowIndex, 1);
+	}
 
 	UMaterialInstanceDynamic* Sampler = UMaterialInstanceDynamic::Create(DebugMaterial, World);
 
 	if (Sampler == nullptr)
 	{
 		AddError(TEXT("Could not create a dynamic instance of the debug material."));
-		Buffer->Release();
 		return false;
 	}
 
 	Sampler->SetTextureParameterValue(
 		RacetrackSurfaceMapping::AccumulationTargetParameterName,
-		Buffer->GetTarget());
+		Accumulation);
 
 	UTextureRenderTarget2D* Sampled = UKismetRenderingLibrary::CreateRenderTarget2D(
 		World, SampledWidth, SampledHeight, RTF_RGBA16f, FLinearColor::Black, false, false);
@@ -160,12 +191,10 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 	if (Sampled == nullptr)
 	{
 		AddError(TEXT("Could not create the render target the material is sampled into."));
-		Buffer->Release();
 		return false;
 	}
 
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, Sampled, Sampler);
-	FlushRenderingCommands();
 
 	const TArray<FLinearColor> Coverage = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
 		World, Sampled, 0, 0, SampledWidth, SampledHeight, false);
@@ -175,7 +204,6 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		AddError(FString::Printf(
 			TEXT("Readback returned %d texels, expected %d"), Coverage.Num(), SampledWidth * SampledHeight));
 		UKismetRenderingLibrary::ReleaseRenderTarget2D(Sampled);
-		Buffer->Release();
 		return false;
 	}
 
@@ -205,10 +233,9 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 
 			Brightest = FMath::Max(Brightest, Value);
 
-			const bool bSameColumnInTheFirstRow =
-				AlongTrack >= PaintedAlongTrackStart - 0.5 && AlongTrack <= PaintedAlongTrackEnd - 0.5;
+			const double SameColumnOfTheFirstRow = AlongTrack + 1.0 / Ribbon.RowCount();
 
-			if (bSameColumnInTheFirstRow)
+			if (SameColumnOfTheFirstRow >= PaintedAlongTrackStart && SameColumnOfTheFirstRow <= PaintedAlongTrackEnd)
 			{
 				BrightestInTheWrongRow = FMath::Max(BrightestInTheWrongRow, Value);
 			}
@@ -219,22 +246,21 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 	{
 		AddError(TEXT("The material sampled nothing at all, so the read path could not be checked."));
 		UKismetRenderingLibrary::ReleaseRenderTarget2D(Sampled);
-		Buffer->Release();
 		return false;
 	}
 
 	const double CentreAlongTrack = WeightedAlongTrack / TotalCoverage;
 	const double CentreAcrossTrack = WeightedAcrossTrack / TotalCoverage;
-	const double PaintedCentre = (PaintedAlongTrackStart + PaintedAlongTrackEnd) * 0.5;
 
 	AddInfo(FString::Printf(
-		TEXT("Painted at ribbon %.3f..%.3f across %.3f in row %d of %d; sampled back centred on %.3f, %.3f, "
-			"peaking at %.4f, with %.4f at the same column of the first row"),
+		TEXT("Painted ribbon %.3f..%.3f across %.3f into row 1 of %d on a %d x %d atlas; sampled back centred "
+			"on %.3f, %.3f, peaking at %.4f, with %.4f at the same column of the first row"),
 		PaintedAlongTrackStart,
 		PaintedAlongTrackEnd,
 		PaintedAcrossTrack,
-		PaintedRow,
 		Ribbon.RowCount(),
+		Ribbon.AtlasWidth(),
+		Ribbon.AtlasHeight(),
 		CentreAlongTrack,
 		CentreAcrossTrack,
 		Brightest,
@@ -263,7 +289,6 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		BrightestInTheWrongRow <= Brightest * 0.05f);
 
 	UKismetRenderingLibrary::ReleaseRenderTarget2D(Sampled);
-	Buffer->Release();
 
 	return true;
 }
