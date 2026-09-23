@@ -123,6 +123,8 @@ public:
 
 	void SetFieldPaused(bool bPaused);
 
+	bool StartsPausedAfterCommandLine() const;
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;

@@ -2,6 +2,8 @@
 
 #include "Components/InputComponent.h"
 #include "HAL/IConsoleManager.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Components/SplineComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -16,15 +18,11 @@
 #include "SurfaceTrackRibbon.h"
 #include "UObject/ConstructorHelpers.h"
 
-namespace
+namespace RacetrackFieldSwitches
 {
-	TAutoConsoleVariable<int32> CVarReleaseFieldOnStart(
-		TEXT("RubberAccumDemo.ReleaseFieldOnStart"),
-		0,
-		TEXT("When 1, the field starts running rather than frozen on the grid, overriding bStartPaused. ")
-		TEXT("Exists so a frame-rate capture is reproducible from one command line, because releasing ")
-		TEXT("the field otherwise needs a human to press P."),
-		ECVF_Default);
+	static constexpr const TCHAR* ReleaseField = TEXT("ReleaseField");
+
+	static constexpr const TCHAR* FreezeField = TEXT("FreezeField");
 }
 
 namespace RacetrackLayouts
@@ -90,9 +88,26 @@ void ARacetrackCircuit::BeginPlay()
 
 	BindAccumulationTargetToRoad();
 	SpawnField();
-	SetFieldPaused(bStartPaused && CVarReleaseFieldOnStart.GetValueOnGameThread() == 0);
+	SetFieldPaused(StartsPausedAfterCommandLine());
 	BindTimeControls();
 	PlaceObserverAboveTrack();
+}
+
+bool ARacetrackCircuit::StartsPausedAfterCommandLine() const
+{
+	const TCHAR* CommandLine = FCommandLine::Get();
+
+	if (FParse::Param(CommandLine, RacetrackFieldSwitches::ReleaseField))
+	{
+		return false;
+	}
+
+	if (FParse::Param(CommandLine, RacetrackFieldSwitches::FreezeField))
+	{
+		return true;
+	}
+
+	return bStartPaused;
 }
 
 void ARacetrackCircuit::SetFieldPaused(bool bPaused)
