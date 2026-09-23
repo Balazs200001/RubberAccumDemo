@@ -966,8 +966,26 @@ arcs rather than as a smear.
 
 Three changes, none of them large.
 
-1. **Collapse the baseline spread.** `DriverLateralSpread` shrinks so the field runs close to a
-   single line on the straights. It is not removed — see the emergence note below.
+1. **Collapse the baseline spread, to a number rather than a judgement.** `DriverLateralSpread`
+   shrinks so the field runs close to a single line on the straights. It is not removed — see the
+   emergence note below. "Close to a single line" is checkable, because on a straight
+   `LateralOffsetAlpha` settles exactly to each car's own baseline, so the field paints static
+   evenly spaced stripes whose spacing is
+
+   ```
+   AdjacentSpacing = (2 * DriverLateralSpread / (CarCount - 1)) * TrackWidth * 0.5
+   ```
+
+   At today's 0.4 spread, twenty cars and a 1200 cm track that is **25.26 cm**, which is wider than
+   the 20 cm `ContactWidth` — so the stripes do not touch, and that gap is the whole reason a
+   straight texel is crossed by one car per lap today rather than twenty.
+
+   **The target is `AdjacentSpacing <= ContactWidth / 4`**, i.e. four-fold overlap rather than
+   bare contact, which at the current field size and track width means
+   **`DriverLateralSpread` of about 0.08** (5.05 cm spacing, a merged band roughly 116 cm wide on
+   a 12 m track). Bare contact at exactly `ContactWidth` would leave visible scalloping where
+   neighbouring stripes meet; a quarter of it is comfortably inside that. Expressed as the formula
+   rather than as the constant so it survives a change to `CarCount` or `TrackWidth`.
 2. **Seeded per-car randomness.** Each `ASplineFollowingCar` owns an `FRandomStream` seeded from
    a circuit-level seed plus its own grid index. This is not optional: automation tests and every
    figure in `MEASUREMENTS.md` depend on a run being reproducible, and an unseeded `FMath::Rand`
@@ -983,7 +1001,17 @@ Three changes, none of them large.
    than a uniform one. That is the whole trick for the requested look: a triangular distribution
    has a mode at the apex value, so most laps land on or near the same line and the outliers are
    genuinely outliers. A uniform draw would give an evenly smeared band with no dominant line in
-   it. The result is clamped so the deviated line stays inside the ribbon with margin.
+   it.
+
+   **A starting magnitude, to be tuned by eye rather than defended as derived:**
+   `MaxCornerDeviationAlpha` of **0.20** against the existing `ApexLateralOffsetAlpha` of 0.7, so
+   the apex target ranges over 0.5 to 0.9 and the corner band spans about 240 cm against the
+   straight's 116 cm — roughly twice as wide, which is the visible difference the change is for.
+   0.20 is chosen so that `0.7 + 0.20` lands exactly on a **±0.90 clamp**: the outer bound is
+   reached rather than clipped, so no probability mass piles up against the limit and turns the
+   tail of the distribution into a hard edge. Marks are 20 cm, which is 0.033 in alpha, so arcs
+   need to differ by more than that to be separable at all — 0.20 gives roughly six resolvable
+   lanes either side of the mode.
 
 Per-frame noise is explicitly not the design. A value re-drawn every tick is jitter: the car
 wobbles and the deposit averages back to the mean, leaving one blurred band. Holding `D` for the
@@ -1015,11 +1043,52 @@ and drifting cars close up on each other with nowhere to go, so the defect reads
 intersecting rather than as an uneven grid. This may promote the drift fix from *known defect* to
 *prerequisite*.
 
-**The saturation timescale changes shape.** `ReportLapsToSaturation` assumes twenty cars cross one
-apex texel per lap, which stays roughly true. But the straights, currently fanned across many
-texels, now concentrate on a few — so the straights will saturate far faster than they do today and
-the 17-and-50-lap figures will describe the whole track rather than just the apex. Re-read the
-log line after the change rather than assuming it carries over.
+**The saturation timescale changes shape, and by a derived amount.** Worked out from the constants
+on 2026-09-23 rather than asserted. A pass deposits `slip * 0.002`, so an apex pass leaves 0.0010
+and a straight pass 0.0002 — a fixed **5:1** that depends only on the two slip constants and can
+never be changed by traffic. But today's contrast is **100:1**, because the other 20x is geometry:
+at 25.26 cm stripe spacing against a 20 cm mark, a straight texel is crossed by *one* car per lap
+while the apex texel takes all twenty.
+
+| | exposure per texel per lap | laps to 63 % | laps to 95 % |
+|---|---|---|---|
+| Apex, today and after C6 | 0.0200 | 17 | 50 |
+| Straight, today | 0.0002 | ~1667 | ~5000 |
+| Straight, after C6 | 0.0040 | ~83 | ~250 |
+
+C6 cancels the geometric term and leaves the slip term, so **contrast falls from about 100:1 to
+about 5:1** and the straights speed up about twentyfold. That is the change working, not a side
+effect of it: the total rubber laid on a straight per lap is unchanged at `20 * 0.0002`, and C6
+only concentrates it into a twentieth of the area. Twenty separate thin stripes is the wrong shape;
+one line is the point.
+
+**What this exposes is a limit of having no decay.** The 5:1 is a ratio of *rates*, and coverage
+runs through `1 - exp(-3E)`, which compresses everything near the top. When the apex reaches 95 %
+at about 50 laps the straight is at about 45 % — clearly separable. By the time the straight
+reaches 95 % at about 250 laps the apex is at 99.99 % and the two are indistinguishable. So
+**without the phase E decay the racing line is a transient**, most legible somewhere between laps
+20 and 100 and flattening towards a uniformly saturated track after that. This is an argument for
+phase E being load-bearing rather than cosmetic, and it is the honest answer to "what does this
+look like after a 24 hour race".
+
+**Not derived, only asserted:** that `ReportLapsToSaturation`'s one-apex-texel assumption survives
+C6. It is already approximate today, because `DriverLineCommitmentAtCentre` and `AtEdge` are 0.2
+and 0.8 rather than 1.0, so no car's target ever fully reaches `ApexLateralOffsetAlpha`; and C6's
+deviation deliberately spreads corner arcs across more texels, which pushes the same way. The apex
+row above should be read as an upper bound on concentration rather than a prediction. Nothing has
+counted actual passes over a texel against any of these figures, which is the same gap
+`MEASUREMENTS.md` already records against the original 17-and-50 numbers.
+
+**The slip model is symmetric about the apex, and that is a realism gap C6 does not fix.**
+`GetCorneringAmountAtDistance` is the absolute value of signed curvature sampled from the authored
+spline, with no braking, traction or direction-of-travel term, so for a constant-radius corner the
+deposited slip profile is symmetric about the apex by construction. Real circuits rubber up most at
+corner *exit* under traction and in braking zones. The one asymmetry the model does have —
+`CorneringAmount` taking the max of current and lookahead curvature — extends the high-slip zone
+earlier on *entry* only, so it biases the opposite way from reality. This affects the intensity
+texture of a mark, not the position of the line, so it leaves the emergent-line claim intact. It is
+recorded here as a known gap rather than scheduled, because fixing it means deriving slip from
+longitudinal acceleration as well as curvature, which is a larger change than C6.
 
 ### Tests
 
@@ -1028,6 +1097,10 @@ log line after the change rather than assuming it carries over.
 - **Distribution**: over many corner entries, the deviations have a mode near zero and a spread
   inside the clamp. Asserting the *shape*, not a specific sequence.
 - **Held through the corner**: the deviation does not change between corner entry and exit.
+- **Stripes merge on the straight**: `AdjacentSpacing <= ContactWidth / 4` for the spawned field,
+  asserted from the spawn parameters rather than judged from a screenshot. This is the test that
+  makes "nose-to-tail" falsifiable, and it is the same arithmetic that produced the 100:1 figure
+  above, so if it fails the saturation table is wrong too.
 - The existing `DriversTakeDifferentLinesThroughACorner` will need revisiting — it asserts a
   committed driver crosses to the inside from a wide baseline, and the baselines are about to stop
   being wide.
