@@ -16,6 +16,7 @@ namespace RacetrackLayouts
 {
 	constexpr double CorneringSampleSpacing = 150.0;
 	constexpr int32 MaximumCorneringSamples = 4096;
+	constexpr double CorneringNormalisationPercentile = 0.75;
 
 	const FVector2D SpaCentreline[] = {
 		{258, 622}, {215, 660}, {160, 715}, {110, 765}, {75, 795},
@@ -37,6 +38,7 @@ namespace RacetrackLayouts
 	};
 }
 
+using RacetrackLayouts::CorneringNormalisationPercentile;
 using RacetrackLayouts::CorneringSampleSpacing;
 using RacetrackLayouts::MaximumCorneringSamples;
 
@@ -413,7 +415,8 @@ void ARacetrackCircuit::BuildCorneringProfile()
 
 	CorneringProfile.Reserve(SampleCount);
 
-	double TightestCurvature = 0.0;
+	TightestCurvature = 0.0;
+	TotalTurningRadians = 0.0;
 
 	for (int32 Sample = 0; Sample < SampleCount; ++Sample)
 	{
@@ -425,10 +428,14 @@ void ARacetrackCircuit::BuildCorneringProfile()
 		const FVector Ahead = Spline->GetDirectionAtDistanceAlongSpline(
 			static_cast<float>(WrapDistance(Distance + Spacing)), ESplineCoordinateSpace::Local);
 
-		const double Curvature = (Ahead - Behind).Size() / (2.0 * Spacing);
+		const double TurnAngle = FMath::Atan2(
+			FVector::CrossProduct(Behind, Ahead).Z, FVector::DotProduct(Behind, Ahead));
+
+		const double Curvature = FMath::Abs(TurnAngle) / (2.0 * Spacing);
 
 		CorneringProfile.Add(Curvature);
 		TightestCurvature = FMath::Max(TightestCurvature, Curvature);
+		TotalTurningRadians += TurnAngle * 0.5;
 	}
 
 	if (TightestCurvature <= UE_DOUBLE_SMALL_NUMBER)
@@ -436,9 +443,19 @@ void ARacetrackCircuit::BuildCorneringProfile()
 		return;
 	}
 
+	TArray<double> Ranked = CorneringProfile;
+	Ranked.Sort();
+
+	const int32 PercentileIndex = FMath::Clamp(
+		FMath::FloorToInt32(CorneringNormalisationPercentile * Ranked.Num()), 0, Ranked.Num() - 1);
+
+	const double SustainedCurvature = Ranked[PercentileIndex] > UE_DOUBLE_SMALL_NUMBER
+		? Ranked[PercentileIndex]
+		: TightestCurvature;
+
 	for (double& Entry : CorneringProfile)
 	{
-		Entry = FMath::Clamp(Entry / TightestCurvature, 0.0, 1.0);
+		Entry = FMath::Clamp(Entry / SustainedCurvature, 0.0, 1.0);
 	}
 }
 

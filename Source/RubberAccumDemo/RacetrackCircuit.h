@@ -49,6 +49,16 @@ public:
 
 	void SetLayout(ETrackLayout NewLayout, double NewLapLength);
 
+	double GetTightestCurvature() const
+	{
+		return TightestCurvature;
+	}
+
+	double GetTotalTurningRadians() const
+	{
+		return TotalTurningRadians;
+	}
+
 	double GetCornerRadius() const
 	{
 		return CornerRadius;
@@ -131,4 +141,8 @@ private:
 	TObjectPtr<UProceduralMeshComponent> Road;
 
 	TArray<double> CorneringProfile;
+
+	double TightestCurvature = 0.0;
+
+	double TotalTurningRadians = 0.0;
 };
