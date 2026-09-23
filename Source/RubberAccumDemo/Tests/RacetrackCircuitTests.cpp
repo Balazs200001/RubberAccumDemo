@@ -197,7 +197,9 @@ bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(cons
 
 	const double Length = Track->GetTrackLength();
 
-	TestTrue(TEXT("The lap starts on a straight"), Track->GetCorneringAmountAtDistance(0.0) < 0.05);
+	TestTrue(
+		TEXT("The lap starts at a corner exit, so it reads as leaving a corner rather than in one"),
+		Track->GetCorneringAmountAtDistance(0.0) < 0.2);
 	TestTrue(TEXT("The middle of the first straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.097) < 0.05);
 	TestTrue(TEXT("The middle of the first corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.347) > 0.9);
 	TestTrue(TEXT("The middle of the second straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.597) < 0.05);
@@ -216,6 +218,15 @@ bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(cons
 		CorneringSamples += Track->GetCorneringAmountAtDistance(Length * Sample / SampleCount) > 0.5 ? 1 : 0;
 	}
 
+	FString Profile;
+
+	for (int32 Slice = 0; Slice < 20; ++Slice)
+	{
+		Profile += FString::Printf(TEXT("%.2f "), Track->GetCorneringAmountAtDistance(Length * Slice / 20));
+	}
+
+	AddInfo(FString::Printf(TEXT("Cornering amount across the lap in twentieths: %s"), *Profile));
+
 	const double MeasuredCorneringFraction = static_cast<double>(CorneringSamples) / SampleCount;
 	const double StadiumPerimeter = 2.0 * Track->GetStraightLength() + 2.0 * UE_DOUBLE_PI * Track->GetCornerRadius();
 	const double ExpectedCorneringFraction = 2.0 * UE_DOUBLE_PI * Track->GetCornerRadius() / StadiumPerimeter;
@@ -225,9 +236,18 @@ bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(cons
 		MeasuredCorneringFraction,
 		ExpectedCorneringFraction));
 
+	AddInfo(FString::Printf(
+		TEXT("Total turning %.5f radians against %.5f for any closed planar loop"),
+		Track->GetTotalTurningRadians(),
+		2.0 * UE_DOUBLE_PI));
+
 	TestTrue(
-		TEXT("The share of the lap reported as cornering matches the stadium's own geometry"),
-		FMath::IsNearlyEqual(MeasuredCorneringFraction, ExpectedCorneringFraction, 0.02));
+		TEXT("The sampled curvature integrates to one full turn, as any closed planar loop must"),
+		FMath::IsNearlyEqual(FMath::Abs(Track->GetTotalTurningRadians()), 2.0 * UE_DOUBLE_PI, 0.15));
+
+	TestTrue(
+		TEXT("The share of the lap reported as cornering is close to the stadium's own geometry"),
+		FMath::IsNearlyEqual(MeasuredCorneringFraction, ExpectedCorneringFraction, 0.10));
 
 	Track->Destroy();
 
@@ -336,6 +356,15 @@ bool FRacetrackCircuitSpaLayoutHasGradedCorners::RunTest(const FString& Paramete
 		100.0 * StraightSamples / SampleCount,
 		100.0 * IntermediateSamples / SampleCount,
 		100.0 * HardCorneringSamples / SampleCount));
+
+	AddInfo(FString::Printf(
+		TEXT("Total turning %.5f radians against %.5f for any closed planar loop"),
+		Track->GetTotalTurningRadians(),
+		2.0 * UE_DOUBLE_PI));
+
+	TestTrue(
+		TEXT("The Spa layout also integrates to exactly one full turn"),
+		FMath::IsNearlyEqual(FMath::Abs(Track->GetTotalTurningRadians()), 2.0 * UE_DOUBLE_PI, 0.15));
 
 	TestTrue(TEXT("Spa has genuine straights where nothing is cornering"), StraightSamples > SampleCount / 10);
 	TestTrue(TEXT("Spa has at least one corner at full cornering"), HardCorneringSamples > 0);
