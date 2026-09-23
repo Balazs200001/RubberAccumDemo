@@ -1472,3 +1472,226 @@ target would not show up in it. The 12.67 laps are enough for the straight figur
 deterministic, and thin for the apex figure, which depends on a fresh triangular draw per car per
 corner. No screenshot has been taken of the resulting buffer, so the claim that the fan is visible
 as separable arcs is still arithmetic and not an observation.
+
+---
+
+## 2026-09-23 — C8: four tyre contacts per car, and the circuit rescaled to resolve them
+
+Closes two things at once, because they turn out to be one thing. Every figure below is from a
+single headless run with the editor closed.
+
+```
+Build:    Development editor target, run headless through UnrealEditor-Cmd.exe
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, D3D12, SM6; Intel Core i7-14700HX
+Power:    MAINS, BatteryStatus = 2 at 100 %, read from Win32_Battery in the same session
+Scene:    Editor world, actors spawned by the tests. Stadium 30921 cm and Spa 48000 cm layouts
+Method:   RubberAccumDemo.* and RacetrackSurface.* automation tests
+Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+          -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+          -abslog=C:/RSBuild/tests-c8-04.log
+Result:   55 of 55 pass
+```
+
+### The ribbon, both layouts, against the budget
+
+`RubberAccumDemo.Track.BothLayoutsFitTheCapAndTheMemoryBudget`. Byte counts are arithmetic over
+the texel extents the ribbon reports, not a real allocation; the 1500 m predecessor's figure was
+confirmed against a real allocation in the R6 entry and the format has not changed.
+
+| Layout | Lap | Along | Across | Bytes | MiB | 20 cm patch |
+|---|---|---|---|---|---|---|
+| Stadium | 30921 cm | 9895 | 256 | 20264960 | 19.33 | 6.40 texels |
+| **Spa** | **48000 cm** | **15360** | **256** | **31457280** | **30.00** | **6.40 texels** |
+| *Spa as it was* | *150000 cm* | *15360* | *123* | *15114240* | *14.41* | *2.05 texels* |
+
+Both axes divide exactly: `48000 / 3.125 = 15360` and `800 / 3.125 = 256`, so neither carries
+`ceil` slack. The along-track axis keeps **1024 texels of margin** under the 16384 cap, which is
+the same margin the 1500 m layout had and is the reason 400 m at 2.44140625 was rejected — that
+pairing lands on 16384.0 exactly, and this project has already seen the same rescale log 15360 in
+one run and 15361 in another.
+
+### The stored mark is three times finer, read back rather than derived
+
+`RacetrackSurface.Accumulator.PaintedStrokeWidth`, now sweeping three densities.
+
+| cm/texel | quad texels | peak | inked texels | inked cm |
+|---|---|---|---|---|
+| 9.765625 | 2.048 | 0.9800 | 2 | 19.53 |
+| **3.125** | **6.400** | **0.9409** | **6** | **18.75** |
+| 2.441406 | 8.192 | 0.9258 | 8 | 19.53 |
+
+A 20 cm contact patch stores as 6 texels spanning 18.75 cm. The stored width tracks the asked-for
+patch to within one texel at all three densities, so the rescale buys resolution without changing
+what a mark measures.
+
+### The bicycle model, validated against a formula the code does not contain
+
+`RubberAccumDemo.Car.LaysFourTracksInACornerAndTwoOnAStraight`. The car's tracked point is the rear
+axle and the front axle sits one wheelbase along the body heading, so offtracking is a consequence
+of the pose rather than a term anywhere in the source. Measured on the Stadium's constant 3000 cm
+radius with a driver at zero line commitment, so nothing but the wheelbase separates the axles:
+
+| | measured | `Wheelbase² / (2R)` |
+|---|---|---|
+| Rear inside front, steady 3000 cm corner | **3.156 cm** | 3.267 cm |
+| Same car on a straight | **0.063 cm** | 0 |
+| Left to right separation | 79.92 cm | 80 cm wheel track |
+
+**3.4 % off the closed form.** On a straight the axles agree to 0.6 mm, so a car running straight
+lays two tracks and not four — which is what a car running straight does.
+
+### Four tracks are resolvable only at the rescaled size
+
+Same test, one driver over a settled lap of the 48000 cm Spa, 4587 sampled ticks:
+
+| | value |
+|---|---|
+| Widest front-to-rear separation | **56.76 cm** |
+| As mark widths | **2.84** |
+| Share of the lap exceeding one mark width | **5.1 %** |
+| Widest separation where the track reads as straight | 16.81 cm |
+
+At the old 1500 m scale the same geometry gives about 7.8 cm of steady-state offtracking, which is
+**0.8 texels** at 9.7656 cm and below the resolution of the buffer. The rescale is what makes four
+wheels four marks; without it two of the four would be redundant.
+
+**Two effects separate the axles and they oppose each other, which the plan missed.** Steady-state
+offtracking puts the rear inside the front. During turn-in the body is yawed into the corner, so
+the front axle is displaced toward the inside instead, and at the lateral rates this model reaches
+that term is the larger. The first version of this test asserted "rear inside front" at the
+tightest point on the lap and measured the front 19.43 cm inside the rear. Both are correct
+vehicle behaviour. The test now checks the sign where there is a genuine steady state to check it
+in, and checks only resolvability on Spa.
+
+### The lockup
+
+`RubberAccumDemo.Car.LocksOneFrontWheelUnderBraking`, 30000 ticks on seed 77003, two cars.
+
+| | value |
+|---|---|
+| Braking events drawn | 127 |
+| Ticks holding a locked wheel | 662 |
+| Of those, ticks while braking | **662 of 662** |
+| Front left / front right | 359 / 303 |
+| Rear wheels locked | **0** |
+| SkidMark contacts while locked | 662 of 662 |
+| RubberBuildup contacts while locked | 1986, exactly three per tick |
+| Ticks where the two seeded cars disagreed | **0** |
+
+Exactly one of the four wheels deposits on `SkidMark` while a wheel is locked and the other three
+keep laying rubber, which is the behaviour the change exists for. The lockup draws from a second
+`FRandomStream` offset from `DriverSeed`, so the C6 corner-deviation sequence is untouched and its
+measured distribution stays reproducible.
+
+### Nothing falls off the ribbon
+
+`RubberAccumDemo.Track.NoWheelFallsOffTheRibbon`, twenty cars for 6000 ticks on the 800 cm track.
+The widest wheel reached alpha **0.7864**, leaving 0.2136 of margin, and **zero** contacts were
+discarded outside the ribbon. This is the check that made 800 cm the choice over 600: a contact at
+`|alpha| > 1` is dropped into a counter nothing reads, so it is silent, and the wheels now sit
+50 cm off the car's own line.
+
+### Saturation, re-counted per wheel
+
+`RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction`, the same 12.67 laps of a
+twenty-car field, now counting each wheel through `WorldToTrack` rather than each car's own alpha.
+
+| | texels inked | span | passes per texel per lap | exposure per lap | laps to 63 % |
+|---|---|---|---|---|---|
+| Busiest straight texel | 57 | 178 cm | **21.39** | 0.004278 | ~78 |
+| Busiest apex texel | 90 | 281 cm | **12.08** | 0.012077 | ~28 |
+| Straight, predicted from stripe spacing x 2 coincident wheels | — | — | 12.67 | — | — |
+
+**Measured contrast 2.8 to 1, against 1.5 before C8.** Both rates roughly doubled because halving
+the track halves `AdjacentSpacing` and packs the field into half the width. The contrast improved
+on top of that because a car's four wheels straddle the corner band while on a straight the front
+and rear coincide, so the apex gains a pair the straight already had. The straight count is again
+about 1.7x the static prediction, the same residual convergence the C6 entry found at 1.96x, and
+that ratio is now an assertion rather than a note.
+
+**The apex band is 90 texels against 29 and 281 cm against 283.** The feature is the same size on
+the track and resolved three times more finely, which is the rescale doing its job.
+
+### The price of going through the world-space API
+
+`RacetrackSurface.Performance.TrackSpaceConversion`, with 77 added to the spline-point candidates
+because that is what `RacetrackLayouts::SpaCentreline` holds.
+
+| Spline points | Contacts | Full search | per contact | Known segment | Speedup |
+|---|---|---|---|---|---|
+| 18 | 80 | 0.1378 ms | 0.0017 | 0.0086 ms | 16x |
+| 64 | 80 | 0.3036 ms | 0.0038 | 0.0071 ms | 43x |
+| **77** | **80** | **0.3658 ms** | **0.0046** | **0.0087 ms** | **42x** |
+| 128 | 80 | 0.5566 ms | 0.0070 | 0.0097 ms | 57x |
+| 256 | 80 | 1.0574 ms | 0.0132 | 0.0082 ms | 129x |
+
+**0.3658 ms for the twenty-car field's eighty wheel contacts**, 2.2 % of a 60 Hz frame and about
+8 % of the 4.484 ms frame this scene actually runs at. The 1 ms crossover moved to 236 spline
+points, consistent with the 234 measured on the mains re-take.
+
+**This trips R2's own written trigger**, which said to implement the per-contact segment cache
+"when a circuit exceeds about 230 centreline spline points, **or when any world-space caller
+reaches 80 contacts per frame in a real scene**". Twenty cars times four wheels is exactly 80. The
+cache is measured at **0.0087 ms, 42 times cheaper and flat in spline points**, and is
+deliberately still not implemented: it is plugin optimisation that was not asked for, and the
+point of writing the trigger down was to make the decision visible rather than automatic. The cost
+of not taking it is now a number.
+
+### A defect this found, which predates it
+
+`ARacetrackCircuit::PostInitializeComponents` was the only caller of `ConfigureTrackRibbon`, and
+`AActor::PostActorConstruction` only runs `PostInitializeComponents` when
+`World->AreActorsInitialized()` (`Actor.cpp:4436`), which is false in the editor world the
+automation tests spawn into. **No host test had ever configured the surface ribbon.** It cost
+nothing while the car used the track-space overload, which needs no centreline. The moment the
+wheels went through the world-space API, every contact was discarded for want of one, and the
+counting test was silently measuring against the ribbon struct's own defaults — 1200 cm wide at
+9.7656 cm per texel — rather than against the circuit in front of it. The first run of this suite
+reported `82 lateral texels at 9.7656 cm` on an 800 cm track and looked plausible.
+
+The fix calls `PublishTrackRibbon` from `OnConstruction` and `SetLayout` as well, which also means
+editing `TrackWidth` or the layout in the editor now resizes the ribbon instead of waiting for the
+next play session.
+
+### The road mesh folds, it always has, and this makes it about twice as deep
+
+Measured as the tightest three-point radius over one `RoadSegmentLength` ring spacing, which is the
+scale at which an offset curve folds — adjacent rings' inside vertices cross when the radius falls
+below half the track width.
+
+| | tightest radius | half width | ratio |
+|---|---|---|---|
+| Spa at 1500 m, 1200 wide, 400 cm rings | 277 cm | 600 | 0.46 |
+| **Spa at 480 m, 800 wide, 128 cm rings** | **89 cm** | **400** | **0.22** |
+| Stadium, 128 cm rings | 352 cm | 400 | 0.88 |
+
+Ratios below 1 mean the inside edge of the generated road passes through its own centre of
+curvature. **All three are below 1, including the layout as it shipped.** The cause is that the 77
+centreline points were read off a plan view by eye, which `EDITOR_SETUP.md` already records as not
+survey-accurate, so the data carries local kinks far tighter than the corners they describe.
+
+Holding the measuring chord at a fixed fraction of the lap makes the ratio proportional to
+`LapLength / TrackWidth`, which was 125 and is now 60. **The 2.08x worsening is arithmetic, not a
+bad choice**: the cars are a fixed physical size, so a shorter lap must carry a proportionally
+wider track. Holding the old ratio at 480 m would need a 384 cm track, which fails the wheel-alpha
+margin above.
+
+The Stadium's 0.88 is a different and smaller thing — a curvature spike at the straight-to-corner
+knot, where a Catmull-Rom through generated points has no curvature continuity.
+
+### Not verified
+
+**Nothing here was seen on screen.** Every figure is from a headless automation run. The demo map
+still carries `AuthoredLayoutLapLength` 150000 and `RoadSegmentLength` 400 as per-instance
+overrides on `RacetrackCircuit_0`, so `L_SpaHarness` continues to run the old 1500 m circuit until
+those are changed; the recipe is in `EDITOR_SETUP.md`. That means **no real-scene paint timing,
+frame time or buffer capture exists at the new scale**, and the 0.3658 ms conversion figure has not
+been confirmed against a running game — it is a bench measurement on a synthetic 77-point circle,
+not on the Spa spline itself.
+
+Whether the road-mesh fold is visible is a judgement for a capture and has not been made. Whether
+six texels per mark actually reads as a tyre mark rather than a block, which is the whole purpose
+of the rescale, is the same kind of judgement and is also unmade. The decay pass remains unmeasured
+at any buffer size above the oval's. The `LockupProbability` of 0.15 is a by-eye demo value and
+nothing has judged whether 127 braking events producing 662 locked ticks per 30000 looks right.
