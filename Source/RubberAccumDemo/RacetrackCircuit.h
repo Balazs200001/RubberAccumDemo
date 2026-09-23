@@ -191,7 +191,7 @@ protected:
 	double GridSpacingCentimetres = 1400.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	double DriverLateralSpread = 0.11;
+	double DriverLateralSpread = 0.1125;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
 	int32 FieldRandomSeed = 20260923;
