@@ -1913,3 +1913,220 @@ the pre-C8 1500 m layout that looked right. That measure is a discrete curvature
 spikes at spline knots rather than a true local radius — C8 reached the same conclusion about the
 Stadium's 0.88 — so whether a slow corner still passes through itself is a judgement for a capture
 and that capture has not been taken.
+
+---
+
+## 2026-09-23 — C9 follow-on: the racing line was diluted by a unit, not by a design decision
+
+Not part of the fold, but found while looking at the folded surface on screen and fixed in the same
+phase. The complaint that started it: *"the cars still put way too much rubber down on straights"*,
+and separately *"the deposition was perfect before the track shrank"*.
+
+The second remark turned out to be the diagnosis.
+
+### `DriverLateralSpread` is in alpha, and C8 moved the track out from under it
+
+`ARacetrackCircuit::DriverLateralSpread` is a fraction of the **track width**, not a distance.
+C8 (`527fa2b`) narrowed `TrackWidth` from 1200 cm to 800 cm and left the spread at 0.075, so the
+field's physical spacing changed without anyone editing it:
+
+| | Half width | Field span | Adjacent baselines |
+|---|---|---|---|
+| Pre-C8, 1200 cm track | 600 cm | 90 cm | **4.74 cm** |
+| Post-C8, 800 cm track | 400 cm | 60 cm | **3.16 cm** |
+
+**The field packed 1.5 times tighter than it had, silently.** More cars crossing each straight
+texel is more rubber on straights, which is exactly what was reported and exactly when it started.
+
+`0.075 x 1200 / 800 = 0.1125` restores the pre-C8 physical spread, and the measurement confirms it
+lands where it should: **4.737 cm against the pre-C8 4.7368 cm.**
+
+### Three changes, and what each was for
+
+| Property | Was | Now | For |
+|---|---|---|---|
+| `StraightSlipAmount` | 0.10 | **0.05** | The authored slip ratio against cornering becomes exactly 10:1 |
+| `MaxCornerDeviationAlpha` | 0.20 | **0.30** | More visible variation between drivers through a corner |
+| `ApexLateralOffsetAlpha` | 0.70 | **0.60** | Keeps the widened deviation clamping at the same 0.90 outer limit |
+| `DriverLateralSpread` | 0.075 | **0.1125** | Restores the pre-C8 physical spread |
+
+`CorneringSlipAmount` was deliberately **not** raised. `LockedWheelSlipAmount` is 1.0, and moving
+cornering slip toward it would erase the margin that makes a locked wheel read as one dark mark
+among four, which is C8's exit condition. Halving the straight buys the contrast without spending
+that margin; the locked-to-cornering ratio stays at 2:1.
+
+The apex widening is symmetric on purpose. `ApexTarget = clamp(ApexLateralOffsetAlpha + deviation,
++/-0.90)`, and at 0.70 with a +/-0.20 deviation the clamp already bit exactly at 0.90. Widening the
+deviation alone would have piled draws against that edge and pushed wheels toward the ribbon
+boundary, where C8 measured the widest wheel at alpha 0.7864 with zero contacts discarded. Moving
+the nominal apex in to 0.60 as the range widened to +/-0.30 keeps the outer limit at 0.90 and the
+range symmetric about the nominal line.
+
+### Measured, three configurations
+
+Counted by `RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction`, twenty cars over
+12.67 laps, sampled at the middle of the longest straight and the longest apex.
+
+| | Post-C8 baseline | **Chosen** | Rejected |
+|---|---|---|---|
+| `DriverLateralSpread` | 0.075 | **0.1125** | 0.25 |
+| Adjacent baselines | 3.16 cm | **4.737 cm** | 10.53 cm |
+| Busiest straight texel | 21.39 passes | **15.16** | 9.47 |
+| Busiest apex texel | 12.08 passes | **12.47** | 12.79 |
+| Straight exposure a lap | 0.004278 | **0.001516** | 0.000947 |
+| Apex exposure a lap | 0.012077 | **0.012471** | 0.012787 |
+| **Contrast** | **2.8 to 1** | **8.2 to 1** | 13.5 to 1 |
+| Straight to 63 % | 78 laps | **220 laps** | 352 laps |
+| Apex to 63 % | 28 laps | **27 laps** | 26 laps |
+| Stripes merge | yes | **yes** | **no** |
+
+**The apex is essentially untouched across all three.** Every bit of the contrast comes from
+diluting the straight, which is the right place for it to come from — the racing line should be
+where the field converges, not where it is drawn brighter.
+
+**0.25 was tried and rejected on a test, not on taste.**
+`RubberAccumDemo.Track.SpawnedStripesMergeOnTheStraight` requires adjacent baselines within a
+quarter of the 20 cm contact patch, so each wheel band is crossed at least fourfold and the field
+reads as one merged band rather than separate stripes. At 0.25 the baselines are 10.53 cm apart and
+that test fails. **The 13.5:1 contrast at 0.25 is therefore partly a return to the pre-C6 world**,
+where separate stripes gave 100:1 and the racing line was drawn rather than emergent. The merge
+limit is `800 * spread / 19 <= 5`, so **spread <= 0.11875**, and 0.1125 sits under it with margin
+while also being the figure the C8 track narrowing implies.
+
+That constraint is the reason the sweep stops where it does. An offline model produced during this
+work recommended 0.15 on contrast grounds alone; at 0.15 the baselines are 6.32 cm apart and the
+merge test fails. The model had not been told about the constraint, and the measurement was right.
+
+### What this does not fix
+
+**The 2.8:1 was never only a slip problem and the remaining 8.2:1 is not either.** The circuit's own
+startup log still predicts 15.8:1 from the stripe arithmetic, and it is still wrong for the reason
+it states about itself: it assumes the whole field crosses one apex texel. Measured, the field fans
+across **294 cm at the apex** against **203 cm on the straight**, so the apex is still the more
+diluted of the two. Converging the field in corners rather than spreading it would raise the
+contrast further, and that is a C6 decision about per-corner variation, not a storage one.
+
+**Nothing here was judged on screen.** All of it is counted texels.
+
+---
+
+## 2026-09-23 — C9: what the folded read path costs, measured
+
+The read path went from **9 texture fetches per road pixel to 18**, because every tap of the 3x3
+tent now resolves two neighbouring texels and blends them by hand rather than letting the sampler
+do it across a row boundary. That was the largest unmeasured claim in the phase.
+
+### The field has to be released from the command line, and a console variable cannot do it
+
+The first capture attempt measured a **frozen grid**. C7 made the field start paused and bound its
+release to the `P` key, so a `-game` run with nobody at the keyboard sits on the start line: the road
+still renders, so the read path is exercised, but no car moves and nothing paints.
+
+**A console variable was tried first and does not work.** `-ExecCmds` executes at frame 1, after
+`BeginPlay` has already read the variable and paused the field, so the log still said
+`starting frozen`. The capture that produced the table below ran only because a human pressed `P`
+ten seconds in — which is precisely the kind of procedure this file exists to eliminate, and it went
+unnoticed until the field was observed never starting on a later run.
+
+**Two command-line switches replace it**, read through `FParse::Param` and therefore independent of
+any execution order:
+
+| Switch | Effect |
+|---|---|
+| `-ReleaseField` | The field starts running, whatever `bStartPaused` says |
+| `-FreezeField` | The field starts frozen, whatever `bStartPaused` says |
+
+Neither is needed for ordinary play, where `bStartPaused` and the `P` key still decide. They exist
+so a capture is **reproducible from one command line**, which is the standard this file holds itself
+to, and the log line now reads `starting running` when the switch has taken.
+
+```
+Command:  UnrealEditor.exe RubberAccumDemo.uproject /Game/Maps/L_SpaHarness -game
+          -windowed -resx=1280 -resy=720 -nosplash -nosound -ReleaseField
+          -csvCaptureFrames=12000
+```
+
+12000 frames captured, the first 2500 discarded as load and warm-up.
+
+### Frame time, twenty cars, 1800 m folded into four rows
+
+11000 frames after warm-up:
+
+| Counter | Median | Mean | p90 | p99 | Max |
+|---|---|---|---|---|---|
+| **FrameTime** | **4.725 ms** | 4.935 | 5.955 | 7.342 | 35.907 |
+| RenderThreadTime | 4.675 | 4.922 | 5.958 | 7.293 | 39.367 |
+| GameThreadTime | 3.533 | 3.761 | 4.708 | 5.733 | 16.148 |
+| **GPUTime** | **2.365** | 2.418 | 2.750 | 2.912 | 3.093 |
+
+The earlier keypress-released capture of the same build gave FrameTime 4.697 and GPUTime 2.393, so
+the two agree to within 1 % and the figure is not a fluke of one run.
+
+Against the R6 baseline, which is the last comparable capture this project holds:
+
+| Counter | R6, 1500 m, 9.7656 cm/texel, 9 fetches | **C9, 1800 m, 3.125, folded, 18 fetches** | Change |
+|---|---|---|---|
+| FrameTime | 4.484 | **4.725** | +5.4 % |
+| RenderThreadTime | 4.470 | **4.675** | +4.6 % |
+| GameThreadTime | 2.369 | **3.533** | +49.1 % |
+| GPUTime | 2.351 | **2.365** | **+0.6 %** |
+
+**Doubling the texture fetches per road pixel cost 0.6 % of GPU time, inside the run to run
+spread.** The reason is in the same table: RenderThreadTime tracks FrameTime almost exactly, 4.675
+against 4.725, while the GPU sits at about half of it. **The scene is render-thread bound and was
+render-thread bound before**, so the road's pixel cost is not what limits it, and there was room to
+spend. The manual bilinear was affordable because this scene had headroom, not because it is cheap.
+
+### The paint pass got seven times slower at the median and no slower in the tail
+
+Measured separately, because `r.RacetrackSurface.TimePaint` synchronises the game and render
+threads on every paint and destroys the frame rate it would be compared against. 5821 samples after
+warm-up, 80 strokes per paint, which is twenty cars laying four wheels each.
+
+```
+Command:  UnrealEditor.exe RubberAccumDemo.uproject /Game/Maps/L_SpaHarness -game
+          -windowed -resx=1280 -resy=720 -nosplash -nosound -ReleaseField
+          -ExecCmds="r.RacetrackSurface.TimePaint 1"
+```
+
+| | R6, 20 cars, unfolded | **C9, folded into four rows** |
+|---|---|---|
+| Min | 0.0200 | 0.0250 |
+| **Median** | **0.0300 ms** | **0.2100 ms** |
+| Mean | 0.0969 | 0.2251 |
+| p90 | 0.3190 | 0.5190 |
+| p99 | 0.5480 | 0.6610 |
+| **p99.9** | **0.9990** | **0.9780** |
+| Max | 7.3920 | 11.1200 |
+
+**The median is seven times worse and the p99.9 is unchanged**, which is the opposite shape to what
+a per-stroke cost would produce. R6's own advice was that *"the number to carry for frame budgeting
+is p99.9 at about 1.0 ms"*, and by that measure nothing has changed: 0.978 ms against 0.999 ms,
+still about a fifth of a frame. Against the 4.725 ms frame above, the median paint is **4.4 %**.
+
+**Two candidate causes and this capture cannot separate them.** The scissor forces a canvas flush
+whenever consecutive strokes belong to different rows, where `FScopedCanvasFlushDeferral`
+deliberately batches the whole frame into one; and the render target is now 14400 x 1024 against
+R6's 15361 x 123, which is **7.5 times the bytes** and close enough to the 7x median change to be
+suspicious. Isolating them needs a capture at four rows with the scissor disabled, which does not
+exist. **The 7x should not be attributed to the scissor without that run.**
+
+**The +50.6 % on the game thread is not C9's**, and this capture cannot prove whose it is. C8 added
+four wheel contacts per car in place of one and moved them through the world-space API, which it
+measured at **0.3658 ms for 80 contacts**, and C8 never took a frame capture. So the game-thread
+rise spans both phases and cannot be attributed from the two captures that exist. What can be said
+is that four contacts per car against one, plus a world-to-track conversion per contact that R2's
+segment cache would make 42 times cheaper, is more than enough to account for it, and that the
+cache is still not implemented.
+
+### What this does not measure
+
+**No before-and-after exists for the fetch count alone.** Isolating it would need the pre-C9
+material, and the material is an asset whose previous version is only recoverable from git. The
+1.8 % figure is therefore the combined effect of the fold, the manual bilinear, the finer texel and
+the longer lap, not the fetch count on its own.
+
+**The capture is render-thread bound, so it is the wrong instrument for the question it was asked.**
+A scene that was GPU bound would show the doubled fetch cost plainly. This one cannot, and a reader
+should not take 1.8 % as evidence that manual bilinear is cheap in general — only that it is free
+in this scene.
