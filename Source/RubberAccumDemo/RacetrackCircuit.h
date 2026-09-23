@@ -143,6 +143,8 @@ private:
 
 	void SpawnField();
 
+	void ReportLapsToSaturation();
+
 	void BindTimeControls();
 
 	void PlaceObserverAboveTrack();

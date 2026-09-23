@@ -41,6 +41,11 @@ public:
 		return DistanceAlongTrack;
 	}
 
+	float GetCorneringSlipAmount() const
+	{
+		return CorneringSlipAmount;
+	}
+
 protected:
 	UPROPERTY(EditInstanceOnly, Category = "Spline Following Car")
 	TObjectPtr<ARacetrackCircuit> Track;
@@ -73,7 +78,7 @@ protected:
 	double BrakingLookaheadCentimetres = 2500.0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float StraightSlipAmount = 0.04f;
+	float StraightSlipAmount = 0.10f;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float CorneringSlipAmount = 0.50f;

@@ -245,6 +245,37 @@ void ARacetrackCircuit::SpawnField()
 		*GetName(),
 		CarCount,
 		DriverLateralSpread * 2.0);
+
+	ReportLapsToSaturation();
+}
+
+void ARacetrackCircuit::ReportLapsToSaturation()
+{
+	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();
+
+	if (Reference == nullptr || CarCount <= 0)
+	{
+		return;
+	}
+
+	const float PerContact = RacetrackSurfaceMapping::SlipToExposure(
+		Reference->GetCorneringSlipAmount(), USurfaceAccumulationSubsystem::GetDepositionScale());
+
+	if (PerContact <= UE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const double LapsToSaturation = 1.0 / (CarCount * PerContact);
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("One cornering contact deposits %.6f exposure. With %d cars over one apex texel that is "
+			"%.4f per lap, so the apex reaches 63 %% coverage in about %.0f laps and 95 %% in about %.0f"),
+		PerContact,
+		CarCount,
+		CarCount * PerContact,
+		LapsToSaturation / 3.0,
+		LapsToSaturation);
 }
 
 void ARacetrackCircuit::BindAccumulationTargetToRoad()
