@@ -218,12 +218,12 @@ void ARacetrackCircuit::GenerateRoadMesh()
 		const int32 Base = Segment * 2;
 
 		Triangles.Add(Base);
-		Triangles.Add(Base + 2);
 		Triangles.Add(Base + 1);
+		Triangles.Add(Base + 2);
 
 		Triangles.Add(Base + 1);
-		Triangles.Add(Base + 2);
 		Triangles.Add(Base + 3);
+		Triangles.Add(Base + 2);
 	}
 
 	Road->ClearAllMeshSections();
