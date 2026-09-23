@@ -54,6 +54,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double CorneringLineCommitment = 0.5;
 
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double ApexLateralOffsetAlpha = 0.7;
+
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
 	double StraightLineSpeedCentimetresPerSecond = 3000.0;
 
@@ -64,16 +67,16 @@ protected:
 	double SpeedChangeCentimetresPerSecondSquared = 2500.0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
-	double LineChangeAlphaPerSecond = 0.9;
+	double LineChangeResponsiveness = 2.0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
 	double BrakingLookaheadCentimetres = 2500.0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float StraightSlipAmount = 0.08f;
+	float StraightSlipAmount = 0.04f;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float CorneringSlipAmount = 0.45f;
+	float CorneringSlipAmount = 0.50f;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
 	float ContactWidth = 20.0f;

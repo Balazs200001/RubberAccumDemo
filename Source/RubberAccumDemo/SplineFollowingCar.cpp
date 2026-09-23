@@ -115,8 +115,9 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		return;
 	}
 
+	const double SignedCornering = Track->GetSignedCorneringAtDistance(DistanceAlongTrack);
 	const double CorneringAmount = FMath::Max(
-		Track->GetCorneringAmountAtDistance(DistanceAlongTrack),
+		FMath::Abs(SignedCornering),
 		Track->GetCorneringAmountAtDistance(DistanceAlongTrack + BrakingLookaheadCentimetres));
 
 	const double TargetSpeed = StraightLineSpeedCentimetresPerSecond
@@ -128,16 +129,19 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		DeltaSeconds,
 		SpeedChangeCentimetresPerSecondSquared);
 
-	const double TargetLateralOffsetAlpha =
-		BaselineLateralOffsetAlpha * (1.0 - CorneringLineCommitment * CorneringAmount);
+	const double ApexTarget = ApexLateralOffsetAlpha * FMath::Sign(SignedCornering);
+
+	const double TargetLateralOffsetAlpha = FMath::Lerp(
+		BaselineLateralOffsetAlpha,
+		ApexTarget,
+		CorneringLineCommitment * FMath::Abs(SignedCornering));
 
 	const double PreviousLateralOffsetAlpha = LateralOffsetAlpha;
 
-	LateralOffsetAlpha = FMath::FInterpConstantTo(
-		LateralOffsetAlpha,
-		TargetLateralOffsetAlpha,
-		DeltaSeconds,
-		LineChangeAlphaPerSecond);
+	LateralOffsetAlpha = FMath::Clamp(
+		FMath::FInterpTo(LateralOffsetAlpha, TargetLateralOffsetAlpha, DeltaSeconds, LineChangeResponsiveness),
+		-1.0,
+		1.0);
 
 	DistanceAlongTrack += SpeedCentimetresPerSecond * DeltaSeconds;
 
