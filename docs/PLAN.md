@@ -1187,6 +1187,66 @@ its own measurement.
 
 ---
 
+## C7 — Freezing the field without pausing the game
+
+Added 2026-09-23, outside the original scope. Requested directly: a key that stops and starts the
+field at runtime, the level starting stopped, and **the camera still flyable while it is stopped**.
+
+### Why this is not `SetGamePaused`
+
+The obvious implementation is `UGameplayStatics::SetGamePaused`, and it does not work here. The
+camera is the possessed pawn, and this project has no custom GameMode, PlayerController or Pawn —
+`Game class is 'GameModeBase'` in the runtime log, so the pawn is Epic's stock `ADefaultPawn` with
+a `UFloatingPawnMovement`, and all of its movement is legacy `BindAxis` bindings
+(`DefaultPawn.cpp:138-144`) that do not fire while paused.
+
+Making that pawn fly under a real pause needs four things true at once: the pawn ticking when
+paused, its movement component ticking when paused (registered separately from the actor's tick),
+`bExecuteWhenPaused` on each of its six axis bindings, and
+`APlayerController::bShouldPerformFullTickWhenPaused`. The fourth is **protected**
+(`PlayerController.h:1730`), so it needs a `APlayerController` subclass and a GameMode change to
+install it. Without it mouse-look is discarded every frame and the render camera never re-syncs to
+the pawn, so even working WASD would be invisible. That is four classes and a scattered
+re-derivation of flags Epic only ever wires together inside `ADebugCameraController`, to pause a
+demo whose only moving parts are twenty cars.
+
+`SetGlobalTimeDilation(0)` is not an alternative either: `AWorldSettings::SetTimeDilation` clamps
+to `MinGlobalTimeDilation`, which `BaseGame.ini` sets to 0.0001, so exactly zero is unreachable and
+the field would creep.
+
+### What it does instead
+
+`ARacetrackCircuit` keeps the field it spawned and calls `SetActorTickEnabled` on each car. Nothing
+is paused, so the camera, input and everything else are untouched by construction rather than by
+repair. `P` toggles it, `bStartPaused` defaults true.
+
+The deposit stops with the cars and nothing else has to know: `FlushPendingContacts` only ever
+receives contacts from `ASplineFollowingCar::Tick`, so once the cars stop the next subsystem tick
+drains the queue and `PaintStrokes` is never reached again. The buffer holds whatever it had.
+
+Time dilation and deposition keys are deliberately not gated on the frozen state. A disabled tick
+function is off the tick list entirely, so a dilation change has no effect until the field is
+released, at which point it applies — which is the behaviour you want from a control you are
+setting up *while* the field is stopped.
+
+### What it is not
+
+**This is not a game pause and must not be described as one.** `UGameplayStatics::IsGamePaused`
+reports false the whole time, because nothing goes through `APlayerController::SetPause`. Real time
+and audio time keep advancing. The naming says `field`, not `game`, for that reason.
+
+One consequence to know about: it freezes **the cars the circuit spawned**, tracked in
+`SpawnedField`. A hand-placed `ASplineFollowingCar` would keep ticking and depositing straight
+through the freeze, which would read as a bug. `EDITOR_SETUP.md` records the five hand-placed cars
+being removed when the circuit started spawning its own field, so there are none today. Freezing by
+`TActorIterator` instead would catch them, and was rejected because a circuit freezing cars it does
+not own is the wrong ownership for a harness that could hold two circuits.
+
+*Exit: the demo starts with the field on the grid and nothing moving, `P` starts and stops it, and
+the camera flies freely in both states.*
+
+---
+
 ## Standing rules for this backlog
 
 - A phase is not complete until its exit condition has been demonstrated, and what was *not*
