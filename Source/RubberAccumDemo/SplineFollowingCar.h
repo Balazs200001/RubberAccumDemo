@@ -175,7 +175,7 @@ protected:
 	double BrakingLookaheadCentimetres = 2500.0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float StraightSlipAmount = 0.10f;
+	float StraightSlipAmount = 0.05f;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float CorneringSlipAmount = 0.50f;
