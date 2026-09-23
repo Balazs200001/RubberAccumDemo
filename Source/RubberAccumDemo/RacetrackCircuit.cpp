@@ -1,6 +1,7 @@
 #include "RacetrackCircuit.h"
 
 #include "Components/InputComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "Components/SplineComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -165,11 +166,45 @@ void ARacetrackCircuit::BindTimeControls()
 
 	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARacetrackCircuit::SpeedUpTime);
 	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARacetrackCircuit::SlowDownTime);
+	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &ARacetrackCircuit::DepositFaster);
+	InputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &ARacetrackCircuit::DepositSlower);
 
 	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("Press . to speed time up and , to slow it down, between %.2fx and %.0fx"),
+		TEXT("Press . and , for time, between %.2fx and %.0fx. Press ] and [ for how much rubber a "
+			"contact leaves, between %.2fx and %.0fx of the derived rate"),
 		SlowestTimeDilation,
-		FastestTimeDilation);
+		FastestTimeDilation,
+		SlowestDepositionScale,
+		FastestDepositionScale);
+}
+
+void ARacetrackCircuit::DepositFaster()
+{
+	ApplyDepositionScale(USurfaceAccumulationSubsystem::GetDepositionScale() * DepositionScaleStep);
+}
+
+void ARacetrackCircuit::DepositSlower()
+{
+	ApplyDepositionScale(USurfaceAccumulationSubsystem::GetDepositionScale() / DepositionScaleStep);
+}
+
+void ARacetrackCircuit::ApplyDepositionScale(float Scale)
+{
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(
+		RacetrackSurfaceMapping::DepositionScaleVariableName);
+
+	if (Variable == nullptr)
+	{
+		return;
+	}
+
+	const float Clamped = FMath::Clamp(Scale, SlowestDepositionScale, FastestDepositionScale);
+
+	Variable->Set(Clamped, ECVF_SetByCode);
+
+	UE_LOG(LogRacetrackSurface, Log, TEXT("Deposition now %.2fx the derived rate"), Clamped);
+
+	ReportLapsToSaturation();
 }
 
 void ARacetrackCircuit::SpeedUpTime()

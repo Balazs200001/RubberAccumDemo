@@ -90,6 +90,15 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Time", meta = (ClampMin = "1.0"))
 	float FastestTimeDilation = 20.0f;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Deposition", meta = (ClampMin = "1.01"))
+	float DepositionScaleStep = 2.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Deposition", meta = (ClampMin = "0.01"))
+	float SlowestDepositionScale = 0.25f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Deposition", meta = (ClampMin = "1.0"))
+	float FastestDepositionScale = 64.0f;
+
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Observer", meta = (ClampMin = "10.0", ClampMax = "89.0"))
 	double ObserverPitchDegrees = 62.0;
 
@@ -154,6 +163,12 @@ private:
 	void SlowDownTime();
 
 	void ApplyTimeDilation(float Dilation);
+
+	void DepositFaster();
+
+	void DepositSlower();
+
+	void ApplyDepositionScale(float Scale);
 
 	void GenerateTrackSpline();
 
