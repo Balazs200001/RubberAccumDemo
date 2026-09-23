@@ -100,9 +100,31 @@ void ARacetrackCircuit::PlaceObserverAboveTrack()
 
 	const FVector Centre = Bounds.GetCenter();
 	const FVector Extent = Bounds.GetExtent();
-	const double Framing = FMath::Max(Extent.X, Extent.Y) * ObserverFramingScale;
+
+	int32 ViewportWidth = 0;
+	int32 ViewportHeight = 0;
+	Controller->GetViewportSize(ViewportWidth, ViewportHeight);
+
+	const double Aspect = ViewportHeight > 0
+		? static_cast<double>(ViewportWidth) / ViewportHeight
+		: 16.0 / 9.0;
+
+	const double FieldOfView = Controller->PlayerCameraManager != nullptr
+		? Controller->PlayerCameraManager->GetFOVAngle()
+		: 90.0f;
+
+	const double HalfHorizontal = FMath::DegreesToRadians(FieldOfView * 0.5);
+	const double HalfVertical = FMath::Atan(FMath::Tan(HalfHorizontal) / Aspect);
 
 	const double Pitch = FMath::DegreesToRadians(ObserverPitchDegrees);
+
+	const double AcrossScreen = Extent.Y;
+	const double UpScreen = Extent.X * FMath::Sin(Pitch) + Extent.Z * FMath::Cos(Pitch);
+
+	const double Framing = ObserverFramingScale * FMath::Max(
+		AcrossScreen / FMath::Tan(HalfHorizontal),
+		UpScreen / FMath::Tan(HalfVertical));
+
 	const FVector Eye(
 		Centre.X - Framing * FMath::Cos(Pitch),
 		Centre.Y,
@@ -114,12 +136,15 @@ void ARacetrackCircuit::PlaceObserverAboveTrack()
 	Controller->SetControlRotation(Look);
 
 	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("%s placed the observer at %s looking down %.0f degrees over a %.0f by %.0f cm circuit"),
+		TEXT("%s placed the observer %.0f cm out at %.0f degrees over a %.0f by %.0f cm circuit, "
+			"framed for a %.0f degree view at %.2f aspect"),
 		*GetName(),
-		*Eye.ToCompactString(),
+		Framing,
 		ObserverPitchDegrees,
 		Extent.X * 2.0,
-		Extent.Y * 2.0);
+		Extent.Y * 2.0,
+		FieldOfView,
+		Aspect);
 }
 
 void ARacetrackCircuit::BindTimeControls()
@@ -193,7 +218,8 @@ void ARacetrackCircuit::SpawnField()
 			DriverLineCommitmentAtEdge,
 			DistanceFromCentre);
 
-		const double StartingDistance = Length * Index / CarCount;
+		const double PackedSpacing = FMath::Min(GridSpacingCentimetres, Length / CarCount);
+		const double StartingDistance = Length - PackedSpacing * Index;
 		const FTransform SpawnTransform(
 			GetWorldDirectionAtDistance(StartingDistance).Rotation(),
 			GetWorldPositionAtDistance(StartingDistance, BaselineAlpha));

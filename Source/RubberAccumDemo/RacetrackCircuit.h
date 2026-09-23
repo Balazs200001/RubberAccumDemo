@@ -94,7 +94,7 @@ protected:
 	double ObserverPitchDegrees = 62.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Observer", meta = (ClampMin = "1.0"))
-	double ObserverFramingScale = 2.4;
+	double ObserverFramingScale = 1.08;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "500.0"))
 	double StraightLength = 6000.0;
@@ -125,6 +125,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
 	TSubclassOf<ASplineFollowingCar> CarClass;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "300.0"))
+	double GridSpacingCentimetres = 1400.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double DriverLateralSpread = 0.4;
