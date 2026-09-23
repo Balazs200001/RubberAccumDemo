@@ -79,8 +79,34 @@ void ARacetrackCircuit::BeginPlay()
 
 	BindAccumulationTargetToRoad();
 	SpawnField();
+	SetFieldPaused(bStartPaused);
 	BindTimeControls();
 	PlaceObserverAboveTrack();
+}
+
+void ARacetrackCircuit::SetFieldPaused(bool bPaused)
+{
+	bFieldPaused = bPaused;
+
+	for (ASplineFollowingCar* Car : SpawnedField)
+	{
+		if (Car != nullptr)
+		{
+			Car->SetActorTickEnabled(!bPaused);
+		}
+	}
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s %s %d cars. The camera is unaffected either way. Press P to %s"),
+		*GetName(),
+		bPaused ? TEXT("froze") : TEXT("released"),
+		SpawnedField.Num(),
+		bPaused ? TEXT("release them") : TEXT("freeze them"));
+}
+
+void ARacetrackCircuit::ToggleFieldPaused()
+{
+	SetFieldPaused(!bFieldPaused);
 }
 
 void ARacetrackCircuit::PlaceObserverAboveTrack()
@@ -168,10 +194,13 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARacetrackCircuit::SlowDownTime);
 	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &ARacetrackCircuit::DepositFaster);
 	InputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &ARacetrackCircuit::DepositSlower);
+	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARacetrackCircuit::ToggleFieldPaused);
 
 	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("Press . and , for time, between %.2fx and %.0fx. Press ] and [ for how much rubber a "
-			"contact leaves, between %.2fx and %.0fx of the derived rate"),
+		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
+			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
+			"%.0fx of the derived rate. W A S D, Q E and the mouse fly the camera at all times"),
+		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
 		SlowestDepositionScale,
@@ -242,6 +271,8 @@ void ARacetrackCircuit::SpawnField()
 		return;
 	}
 
+	SpawnedField.Reset(CarCount);
+
 	for (int32 Index = 0; Index < CarCount; ++Index)
 	{
 		const double BaselineAlpha = GetDriverBaselineLateralOffsetAlpha(Index);
@@ -268,6 +299,8 @@ void ARacetrackCircuit::SpawnField()
 		Car->ConfigureDriver(
 			this, StartingDistance, BaselineAlpha, LineCommitment, GetDriverSeedForGridIndex(Index));
 		Car->FinishSpawning(SpawnTransform);
+
+		SpawnedField.Add(Car);
 	}
 
 	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();

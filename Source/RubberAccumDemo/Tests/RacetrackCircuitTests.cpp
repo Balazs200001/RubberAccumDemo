@@ -4,6 +4,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
@@ -1228,6 +1229,105 @@ bool FRacetrackCircuitSpawnedStripesMergeOnTheStraight::RunTest(const FString& P
 		BandWidth < Track->GetTrackWidth() * 0.5);
 
 	Reference->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitStartsPausedAndReleasesTheFieldOnDemand,
+	"RubberAccumDemo.Track.StartsPausedAndReleasesTheFieldOnDemand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitStartsPausedAndReleasesTheFieldOnDemand::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	Track->DispatchBeginPlay();
+
+	const int32 FieldSize = Track->GetSpawnedCarCount();
+
+	if (FieldSize <= 0)
+	{
+		AddError(TEXT("The circuit began play without spawning a field."));
+		Track->Destroy();
+		return false;
+	}
+
+	int32 TickingWhilePaused = 0;
+	int32 TickingAfterRelease = 0;
+	int32 TickingAfterRefreeze = 0;
+
+	const bool bPausedOnBeginPlay = Track->IsFieldPaused();
+
+	for (TActorIterator<ASplineFollowingCar> It(World); It; ++It)
+	{
+		TickingWhilePaused += It->IsActorTickEnabled() ? 1 : 0;
+	}
+
+	Track->SetFieldPaused(false);
+
+	for (TActorIterator<ASplineFollowingCar> It(World); It; ++It)
+	{
+		TickingAfterRelease += It->IsActorTickEnabled() ? 1 : 0;
+	}
+
+	Track->SetFieldPaused(true);
+
+	for (TActorIterator<ASplineFollowingCar> It(World); It; ++It)
+	{
+		TickingAfterRefreeze += It->IsActorTickEnabled() ? 1 : 0;
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("A circuit beginning play spawned %d cars and reported %s. Cars with tick enabled: %d while "
+			"frozen, %d after release, %d after freezing again"),
+		FieldSize,
+		bPausedOnBeginPlay ? TEXT("paused") : TEXT("running"),
+		TickingWhilePaused,
+		TickingAfterRelease,
+		TickingAfterRefreeze));
+
+	TestTrue(TEXT("The circuit begins play with the field frozen"), bPausedOnBeginPlay);
+
+	TestEqual(
+		TEXT("No car ticks while the field is frozen, so nothing moves and nothing is deposited"),
+		TickingWhilePaused,
+		0);
+
+	TestEqual(
+		TEXT("Every car ticks again once the field is released"),
+		TickingAfterRelease,
+		FieldSize);
+
+	TestEqual(
+		TEXT("Freezing again stops every car, so the control toggles rather than firing once"),
+		TickingAfterRefreeze,
+		0);
+
+	Track->SetFieldPaused(false);
+
+	TestFalse(TEXT("Releasing the field clears the paused flag it reports"), Track->IsFieldPaused());
+
+	for (TActorIterator<ASplineFollowingCar> It(World); It; ++It)
+	{
+		It->Destroy();
+	}
+
 	Track->Destroy();
 
 	return true;

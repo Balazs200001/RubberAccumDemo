@@ -92,6 +92,18 @@ public:
 		return FieldRandomSeed + GridIndex;
 	}
 
+	bool IsFieldPaused() const
+	{
+		return bFieldPaused;
+	}
+
+	int32 GetSpawnedCarCount() const
+	{
+		return SpawnedField.Num();
+	}
+
+	void SetFieldPaused(bool bPaused);
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;
@@ -165,6 +177,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
 	int32 FieldRandomSeed = 20260923;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
+	bool bStartPaused = true;
+
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double DriverLineCommitmentAtCentre = 0.2;
 
@@ -175,6 +190,8 @@ private:
 	double WrapDistance(double DistanceAlongTrack) const;
 
 	void SpawnField();
+
+	void ToggleFieldPaused();
 
 	void ReportLapsToSaturation();
 
@@ -213,6 +230,11 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UProceduralMeshComponent> Road;
+
+	UPROPERTY()
+	TArray<TObjectPtr<ASplineFollowingCar>> SpawnedField;
+
+	bool bFieldPaused = false;
 
 	TArray<double> CorneringProfile;
 
