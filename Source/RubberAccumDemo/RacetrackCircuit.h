@@ -71,6 +71,27 @@ public:
 		return StraightLength;
 	}
 
+	int32 GetCarCount() const
+	{
+		return CarCount;
+	}
+
+	double GetDriverLateralSpread() const
+	{
+		return DriverLateralSpread;
+	}
+
+	double GetAdjacentDriverSpacingCentimetres() const;
+
+	double GetDriverBaselineLateralOffsetAlpha(int32 GridIndex) const;
+
+	double GetDriverLineCommitment(int32 GridIndex) const;
+
+	int32 GetDriverSeedForGridIndex(int32 GridIndex) const
+	{
+		return FieldRandomSeed + GridIndex;
+	}
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;
@@ -130,7 +151,7 @@ protected:
 	TObjectPtr<UMaterialInterface> RoadMaterial;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0", ClampMax = "64"))
-	int32 CarCount = 5;
+	int32 CarCount = 20;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
 	TSubclassOf<ASplineFollowingCar> CarClass;
@@ -139,7 +160,10 @@ protected:
 	double GridSpacingCentimetres = 1400.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	double DriverLateralSpread = 0.4;
+	double DriverLateralSpread = 0.075;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
+	int32 FieldRandomSeed = 20260923;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double DriverLineCommitmentAtCentre = 0.2;

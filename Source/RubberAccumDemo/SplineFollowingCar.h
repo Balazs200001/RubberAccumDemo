@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Math/RandomStream.h"
 #include "RacetrackSurfaceTypes.h"
 #include "SplineFollowingCar.generated.h"
 
@@ -24,7 +25,8 @@ public:
 		ARacetrackCircuit* InTrack,
 		double InStartingDistanceAlongTrack,
 		double InBaselineLateralOffsetAlpha,
-		double InCorneringLineCommitment);
+		double InCorneringLineCommitment,
+		int32 InDriverSeed);
 
 	double GetLateralOffsetAlpha() const
 	{
@@ -46,6 +48,36 @@ public:
 		return CorneringSlipAmount;
 	}
 
+	float GetStraightSlipAmount() const
+	{
+		return StraightSlipAmount;
+	}
+
+	float GetContactWidth() const
+	{
+		return ContactWidth;
+	}
+
+	double GetCornerDeviationAlpha() const
+	{
+		return CornerDeviationAlpha;
+	}
+
+	bool IsCommittedToACorner() const
+	{
+		return bCommittedToACorner;
+	}
+
+	int32 GetCornerDrawCount() const
+	{
+		return CornerDrawCount;
+	}
+
+	double GetMaxCornerDeviationAlpha() const
+	{
+		return MaxCornerDeviationAlpha;
+	}
+
 protected:
 	UPROPERTY(EditInstanceOnly, Category = "Spline Following Car")
 	TObjectPtr<ARacetrackCircuit> Track;
@@ -61,6 +93,24 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double ApexLateralOffsetAlpha = 0.7;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double MaxCornerDeviationAlpha = 0.20;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double MaxApexLateralOffsetAlpha = 0.90;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double CornerEntryCorneringAmount = 0.15;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double CornerExitCorneringAmount = 0.05;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
+	double SameCornerSeparationCentimetres = 600.0;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car")
+	int32 DriverSeed = 0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
 	double StraightLineSpeedCentimetresPerSecond = 3000.0;
@@ -94,6 +144,10 @@ private:
 
 	void PlaceOnTrack();
 
+	void UpdateCornerCommitment(double CorneringAmount);
+
+	double DrawTriangularCornerDeviationAlpha();
+
 	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
 	TObjectPtr<UStaticMeshComponent> CarMesh;
 
@@ -102,4 +156,14 @@ private:
 	double LateralOffsetAlpha = 0.0;
 
 	double SpeedCentimetresPerSecond = 0.0;
+
+	double CornerDeviationAlpha = 0.0;
+
+	bool bCommittedToACorner = false;
+
+	int32 CornerDrawCount = 0;
+
+	TOptional<double> DistanceLastCornering;
+
+	FRandomStream DriverRandomStream;
 };

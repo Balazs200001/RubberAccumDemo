@@ -61,12 +61,14 @@ void ASplineFollowingCar::ConfigureDriver(
 	ARacetrackCircuit* InTrack,
 	double InStartingDistanceAlongTrack,
 	double InBaselineLateralOffsetAlpha,
-	double InCorneringLineCommitment)
+	double InCorneringLineCommitment,
+	int32 InDriverSeed)
 {
 	Track = InTrack;
 	StartingDistanceAlongTrack = InStartingDistanceAlongTrack;
 	BaselineLateralOffsetAlpha = InBaselineLateralOffsetAlpha;
 	CorneringLineCommitment = InCorneringLineCommitment;
+	DriverSeed = InDriverSeed;
 
 	PlaceOnTrack();
 }
@@ -76,6 +78,47 @@ void ASplineFollowingCar::PlaceOnTrack()
 	DistanceAlongTrack = StartingDistanceAlongTrack;
 	LateralOffsetAlpha = BaselineLateralOffsetAlpha;
 	SpeedCentimetresPerSecond = StraightLineSpeedCentimetresPerSecond;
+
+	DriverRandomStream.Initialize(DriverSeed);
+	CornerDeviationAlpha = 0.0;
+	bCommittedToACorner = false;
+	CornerDrawCount = 0;
+	DistanceLastCornering.Reset();
+}
+
+double ASplineFollowingCar::DrawTriangularCornerDeviationAlpha()
+{
+	const double FirstUniformDraw = DriverRandomStream.FRand();
+	const double SecondUniformDraw = DriverRandomStream.FRand();
+
+	return (FirstUniformDraw + SecondUniformDraw - 1.0) * MaxCornerDeviationAlpha;
+}
+
+void ASplineFollowingCar::UpdateCornerCommitment(double CorneringAmount)
+{
+	if (CorneringAmount > CornerExitCorneringAmount)
+	{
+		DistanceLastCornering = DistanceAlongTrack;
+	}
+
+	if (bCommittedToACorner)
+	{
+		const double StraightDistance = DistanceLastCornering.IsSet()
+			? DistanceAlongTrack - DistanceLastCornering.GetValue()
+			: 0.0;
+
+		bCommittedToACorner = StraightDistance < SameCornerSeparationCentimetres;
+		return;
+	}
+
+	if (CorneringAmount < CornerEntryCorneringAmount)
+	{
+		return;
+	}
+
+	bCommittedToACorner = true;
+	CornerDeviationAlpha = DrawTriangularCornerDeviationAlpha();
+	++CornerDrawCount;
 }
 
 void ASplineFollowingCar::BeginPlay()
@@ -129,7 +172,12 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		DeltaSeconds,
 		SpeedChangeCentimetresPerSecondSquared);
 
-	const double ApexTarget = ApexLateralOffsetAlpha * FMath::Sign(SignedCornering);
+	UpdateCornerCommitment(CorneringAmount);
+
+	const double ApexTarget = FMath::Clamp(
+		(ApexLateralOffsetAlpha + CornerDeviationAlpha) * FMath::Sign(SignedCornering),
+		-MaxApexLateralOffsetAlpha,
+		MaxApexLateralOffsetAlpha);
 
 	const double TargetLateralOffsetAlpha = FMath::Lerp(
 		BaselineLateralOffsetAlpha,

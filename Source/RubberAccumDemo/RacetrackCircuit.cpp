@@ -244,14 +244,8 @@ void ARacetrackCircuit::SpawnField()
 
 	for (int32 Index = 0; Index < CarCount; ++Index)
 	{
-		const double GridFraction = CarCount > 1 ? static_cast<double>(Index) / (CarCount - 1) : 0.5;
-		const double BaselineAlpha = FMath::Lerp(-DriverLateralSpread, DriverLateralSpread, GridFraction);
-		const double DistanceFromCentre = FMath::Abs(GridFraction * 2.0 - 1.0);
-
-		const double LineCommitment = FMath::Lerp(
-			DriverLineCommitmentAtCentre,
-			DriverLineCommitmentAtEdge,
-			DistanceFromCentre);
+		const double BaselineAlpha = GetDriverBaselineLateralOffsetAlpha(Index);
+		const double LineCommitment = GetDriverLineCommitment(Index);
 
 		const double PackedSpacing = FMath::Min(GridSpacingCentimetres, Length / CarCount);
 		const double StartingDistance = Length - PackedSpacing * Index;
@@ -271,17 +265,52 @@ void ARacetrackCircuit::SpawnField()
 			continue;
 		}
 
-		Car->ConfigureDriver(this, StartingDistance, BaselineAlpha, LineCommitment);
+		Car->ConfigureDriver(
+			this, StartingDistance, BaselineAlpha, LineCommitment, GetDriverSeedForGridIndex(Index));
 		Car->FinishSpawning(SpawnTransform);
 	}
 
+	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();
+	const double Spacing = GetAdjacentDriverSpacingCentimetres();
+
 	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("%s spawned a field of %d cars spread across %.2f of the track width"),
+		TEXT("%s spawned a field of %d cars from seed %d, spread across %.2f of the track width, which puts "
+			"adjacent baselines %.2f cm apart against a %.1f cm contact patch"),
 		*GetName(),
 		CarCount,
-		DriverLateralSpread * 2.0);
+		FieldRandomSeed,
+		DriverLateralSpread * 2.0,
+		Spacing,
+		Reference != nullptr ? Reference->GetContactWidth() : 0.0f);
 
 	ReportLapsToSaturation();
+}
+
+double ARacetrackCircuit::GetDriverBaselineLateralOffsetAlpha(int32 GridIndex) const
+{
+	const double GridFraction = CarCount > 1 ? static_cast<double>(GridIndex) / (CarCount - 1) : 0.5;
+
+	return FMath::Lerp(-DriverLateralSpread, DriverLateralSpread, GridFraction);
+}
+
+double ARacetrackCircuit::GetDriverLineCommitment(int32 GridIndex) const
+{
+	const double GridFraction = CarCount > 1 ? static_cast<double>(GridIndex) / (CarCount - 1) : 0.5;
+
+	return FMath::Lerp(
+		DriverLineCommitmentAtCentre,
+		DriverLineCommitmentAtEdge,
+		FMath::Abs(GridFraction * 2.0 - 1.0));
+}
+
+double ARacetrackCircuit::GetAdjacentDriverSpacingCentimetres() const
+{
+	if (CarCount <= 1)
+	{
+		return 0.0;
+	}
+
+	return (2.0 * DriverLateralSpread / (CarCount - 1)) * TrackWidth * 0.5;
 }
 
 void ARacetrackCircuit::ReportLapsToSaturation()
@@ -293,24 +322,50 @@ void ARacetrackCircuit::ReportLapsToSaturation()
 		return;
 	}
 
-	const float PerContact = RacetrackSurfaceMapping::SlipToExposure(
-		Reference->GetCorneringSlipAmount(), USurfaceAccumulationSubsystem::GetDepositionScale());
+	const float DepositionScale = USurfaceAccumulationSubsystem::GetDepositionScale();
 
-	if (PerContact <= UE_SMALL_NUMBER)
+	const float ApexPerContact = RacetrackSurfaceMapping::SlipToExposure(
+		Reference->GetCorneringSlipAmount(), DepositionScale);
+
+	const float StraightPerContact = RacetrackSurfaceMapping::SlipToExposure(
+		Reference->GetStraightSlipAmount(), DepositionScale);
+
+	if (ApexPerContact <= UE_SMALL_NUMBER || StraightPerContact <= UE_SMALL_NUMBER)
 	{
 		return;
 	}
 
-	const double LapsToSaturation = 1.0 / (CarCount * PerContact);
+	const double Spacing = GetAdjacentDriverSpacingCentimetres();
+	const double MarkWidth = Reference->GetContactWidth();
+
+	const double CarsOverAStraightTexel = Spacing > UE_DOUBLE_SMALL_NUMBER
+		? FMath::Clamp(MarkWidth / Spacing, 1.0, static_cast<double>(CarCount))
+		: CarCount;
+
+	const double ApexPerLap = CarCount * ApexPerContact;
+	const double StraightPerLap = CarsOverAStraightTexel * StraightPerContact;
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("One cornering contact deposits %.6f exposure. With %d cars over one apex texel that is "
 			"%.4f per lap, so the apex reaches 63 %% coverage in about %.0f laps and 95 %% in about %.0f"),
-		PerContact,
+		ApexPerContact,
 		CarCount,
-		CarCount * PerContact,
-		LapsToSaturation / 3.0,
-		LapsToSaturation);
+		ApexPerLap,
+		1.0 / (3.0 * ApexPerLap),
+		1.0 / ApexPerLap);
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("One straight-line contact deposits %.6f. Baselines %.2f cm apart against a %.1f cm mark put "
+			"%.2f cars over one straight texel, that is %.6f per lap, so a straight reaches 63 %% in about "
+			"%.0f laps and 95 %% in about %.0f, a contrast of %.1f to 1 against the apex"),
+		StraightPerContact,
+		Spacing,
+		MarkWidth,
+		CarsOverAStraightTexel,
+		StraightPerLap,
+		1.0 / (3.0 * StraightPerLap),
+		1.0 / StraightPerLap,
+		ApexPerLap / StraightPerLap);
 }
 
 void ARacetrackCircuit::BindAccumulationTargetToRoad()
