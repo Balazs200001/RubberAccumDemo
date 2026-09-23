@@ -1274,3 +1274,116 @@ time compression's job, which is what the `.` and `,` controls are for.
 lap. That is close to true at a corner apex where the field converges and false on a straight where
 it is fanned out, so the straight-line figure is not predicted at all, only asserted to be far
 slower. Nothing has counted actual passes over a texel against the prediction.
+
+---
+
+## 2026-09-23 — Twenty cars on Spa, and the first frame rate this project has recorded
+
+Closes the gap carried since R6: every real-scene figure before this was the oval harness, and the
+Spa configuration — the one the demo actually uses and the one the presentation will show — had
+never been profiled. Also closes, partly, the "frame rate is still not recorded" item that has been
+open in this file since the C2 entry.
+
+```
+Build:    Development, editor target binary run as a STANDALONE GAME, not Simulate-In-Editor
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, D3D12, SM6; Intel Core i7-14700HX
+Power:    MAINS, BatteryStatus = 2 at 100 %, verified in the same session
+Scene:    /Game/Maps/L_SpaHarness, Spa-shaped 1500 m circuit, 20 ASplineFollowingCar
+Buffer:   Track-space ribbon, 15360 x 123 texels, RGBA16f, 15114240 bytes, logged at allocation
+Method:   r.RacetrackSurface.TimePaint 1, an RHI timestamp bracket around PaintStrokes
+Command:  UnrealEditor.exe RubberAccumDemo.uproject /Game/Maps/L_SpaHarness -game
+          -ExecCmds="r.RacetrackSurface.TimePaint 1" -windowed -resx=1280 -resy=720
+          -nosplash -nosound -abslog=C:/RSBuild/spa20-A.log
+```
+
+### Paint pass, twenty cars, two runs
+
+| Configuration | Samples | Min | **Median** | Mean | p90 | p95 | **p99** | p99.9 | Max |
+|---|---|---|---|---|---|---|---|---|---|
+| Spa, 20 cars, run A | 19713 | 0.0200 | **0.0300** | 0.0969 | 0.3190 | 0.3810 | **0.5480** | 0.9990 | 7.3920 |
+| Spa, 20 cars, run B | 18530 | 0.0210 | **0.0360** | 0.1140 | 0.3390 | 0.4020 | **0.4970** | 0.8650 | 6.9650 |
+
+Each run is a 201 second window, which at one paint per frame implies 98.1 and 92.2 frames per
+second *with the instrument on*. That is not the scene's frame rate; see below.
+
+### Frame time, measured separately and without the instrument
+
+`r.RacetrackSurface.TimePaint` synchronises the game and render threads on every paint, so it
+cannot be on while frame rate is being read. A second run captured 12000 frames through the CSV
+profiler with the CVar left at its default of 0, and the first 1000 frames were discarded as
+load and warm-up.
+
+```
+Command:  UnrealEditor.exe RubberAccumDemo.uproject /Game/Maps/L_SpaHarness -game
+          -windowed -resx=1280 -resy=720 -nosplash -nosound -csvCaptureFrames=12000
+```
+
+| Counter | Median | Mean | p90 | p99 | Max |
+|---|---|---|---|---|---|
+| **FrameTime** | **4.484 ms** | 4.615 | 5.408 | 5.996 | 13.821 |
+| RenderThreadTime | 4.470 | 4.607 | 5.408 | 5.988 | 7.674 |
+| GameThreadTime | 2.369 | 2.468 | 2.955 | 3.447 | 5.308 |
+| GPUTime | 2.351 | 2.398 | 2.728 | 2.885 | 3.083 |
+
+**223 frames per second at the median, and the scene is render-thread bound.** RenderThreadTime
+tracks FrameTime almost exactly (4.470 against 4.484) while the GPU sits at about half that. The
+paint pass is not what limits this scene, and neither is the GPU.
+
+### The paint pass as a share of a frame, and why that number is a cross-run comparison
+
+0.030 ms of paint against a 2.351 ms GPU frame is **1.3 % of GPU time**, and against a 4.484 ms
+frame it is **0.7 % of the frame**. Both figures combine two different runs in two different
+instrument states, because no single run can produce both: the paint number requires the timestamp
+bracket, and the bracket destroys the frame rate it would be compared against. The paint work
+itself does not change between the two — same twenty cars, same twenty strokes per frame, same
+buffer — so the comparison is fair, but it is a comparison and not a measurement.
+
+**The number to carry for frame budgeting is p99.9 at about 1.0 ms**, which is roughly 22 % of a
+4.5 ms frame. The median is not the interesting figure.
+
+### The tail is bimodal, and that is new
+
+| Threshold | Samples over it, run A | Share |
+|---|---|---|
+| 0.1 ms | 4896 of 19713 | 24.8 % |
+| 0.2 ms | 2979 | 15.1 % |
+| 0.3 ms | 2609 | 13.2 % |
+| 0.5 ms | 277 | 1.4 % |
+| 1.0 ms | 20 | 0.1 % |
+| 2.0 ms | 2 | 0.0 % |
+
+13.2 % of frames exceed 0.3 ms but only 1.4 % exceed 0.5 ms. That is not a long thin tail, it is a
+**second cluster around 0.3 to 0.4 ms affecting roughly one frame in seven**. On the oval, 0.5 to
+1 % of frames exceeded 0.2 ms; here it is 15 %.
+
+**The cause is not established and three things changed at once.** The buffer is about five times
+larger in texels (1.89 M against 389 k); the scene is far bigger (1500 m of road mesh against
+309 m); and unlike the R6 run, the road is now actually rendering the debug material, so the GPU is
+doing real work alongside the paint. B3 and B4 both measured the paint work itself as independent
+of buffer size, which argues against the first explanation for the *work* — but neither measured
+render-pass setup on a target 15360 texels wide, which is a different cost and is not covered by
+that evidence. Attributing this to any one of the three would be a guess.
+
+### The lap seam, again
+
+| Configuration | 20 strokes | 21 strokes |
+|---|---|---|
+| Spa, 20 cars, run A | 19653 frames | 60 frames |
+
+One car crossing the lap seam turns one contact into two strokes, exactly as on the oval. No
+22-stroke frames appeared in this window, so no two cars crossed in the same frame.
+
+### A correction to the recorded buffer size
+
+`EDITOR_SETUP.md` records the 1500 m ribbon as 15361 x 123 texels at 15115224 bytes. This run
+logged **15360 x 123 at 15114240 bytes**, one texel shorter along the track. Both are real logged
+values from real runs; the rescaled spline length is only reported to one decimal place, so a lap
+length a fraction under 150000.0 cm in one run and a fraction over in the other is enough to move
+the `ceil`. The figure to quote is the one from the run being discussed.
+
+**Not verified.** The decay pass is still unmeasured at this buffer size, or at any size above the
+oval's — it is the pass that scales with texel count rather than contact count, and it is still
+never called from the running game, so there is nothing to instrument in a real scene. The bimodal
+tail is unexplained. The 223 fps figure is one scene on one machine at 1280 x 720 windowed with
+the template's lighting, and nothing has been varied to see what moves it. No draw-call count has
+been read from a counter, which remains true since C0.
