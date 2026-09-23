@@ -1699,6 +1699,57 @@ than interpolated: the timing test now carries 77 as a candidate because that is
 point, 42 times cheaper** and flat in spline points. **The cache is still not implemented**, and
 the cost of not implementing it is now a number rather than an estimate.
 
+### Corrected 2026-09-23 on looking at it: 480 m is below the geometric floor, and the lap length is wrong
+
+Seen on screen, the road **passes through itself at every tight corner**. This section already
+carried the fold as "a pre-existing defect made about twice as deep", which treated it as a
+degradation. It is not. It is a **hard constraint, and 480 m violates it.**
+
+A generated road offsets `TrackWidth/2` either side of the centreline, so the inside edge crosses
+its own centre of curvature wherever the local radius falls below the half width. That is not an
+artefact, it is the offset curve being undefined there, and it produces the crumpled overlapping
+geometry visible in a close-up of any slow corner.
+
+| `TrackWidth` | never folds above | comfortable above | authored kinks clean above |
+|---|---|---|---|
+| 800 cm | 477 m | 954 m | 1726 m |
+| 1000 cm | 596 m | 1192 m | 2158 m |
+| 1200 cm | 715 m | **1430 m** | 2589 m |
+
+**480 m at 800 cm wide clears the bare threshold by three centimetres** — the fastest corner
+measures 403 cm of radius against a 400 cm half width — and fails on every corner tighter than
+that. The pre-C8 configuration of 1500 m at 1200 cm sat just above the *comfortable* line at
+1430 m, which is why it looked right. That was not judgement, it was a threshold nobody had
+written down.
+
+**The consequence for C8: the texel decision is sound and the lap decision is not.** Everything
+measured above about density, offtracking, the lockup and the budget stands. The lap length does
+not, and it cannot be fixed by any setting that keeps the along-track axis under 16384 at
+3.125 cm per texel — 954 m of lap at that density needs 30528 texels.
+
+**This is the argument for folding, and it is a stronger one than resolution.** Row folding is not
+polish on how the surface looks; it is what allows a lap long enough for the road geometry to be
+valid *and* a texel fine enough to resolve a tyre mark. The two requirements are otherwise
+mutually exclusive.
+
+| Target lap | Along-track at 3.125 | Rows | Texture | Bytes |
+|---|---|---|---|---|
+| 1500 m | 48000 | 3 | 16384 x 768 | 100.7 MB |
+| **1726 m, kinks clean at 800 cm** | 55296 | 4 | 16384 x 1024 | **134.2 MB** |
+| 2600 m | 83200 | 6 | 16384 x 1536 | 201.3 MB |
+| 7004 m, full Spa | 224128 | 14 | 16384 x 3584 | 469.8 MB |
+
+**An interim that works today without folding**, if the demo has to run before that lands: 1000 m
+of lap at 800 cm wide and 6.5104 cm per texel is 15360 x 123, 15.1 MB, a 3.07 texel mark, and
+clears the comfortable fold threshold. Worse than C8 on density, better than pre-C8, and valid.
+
+**`ElevationExaggeration` must not be raised to compensate for the smaller layout.** Doing so was
+tried and reverted. The authored Z values are integers and 35 of the 76 points step by exactly one
+unit, so the profile has a quantisation floor: at 7.8125 on a 480 m lap one integer step becomes a
+77 cm rise over about 620 cm of track, a 12.4 % gradient step, and the circuit visibly terraces.
+At the default 2.5 the same step is 4 %. Restoring Spa's drama needs a longer lap, not a larger
+multiplier — the same conclusion the fold reaches by a different route.
+
 **A defect this change exposed, which predates it.** `ARacetrackCircuit::PostInitializeComponents`
 was the only caller of `ConfigureTrackRibbon`, and `AActor::PostActorConstruction` only runs
 `PostInitializeComponents` when `World->AreActorsInitialized()` (`Actor.cpp:4436`), which is false

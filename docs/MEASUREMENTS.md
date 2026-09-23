@@ -1680,6 +1680,46 @@ margin above.
 The Stadium's 0.88 is a different and smaller thing — a curvature spike at the straight-to-corner
 knot, where a Catmull-Rom through generated points has no curvature continuity.
 
+#### Corrected the same day, on looking at it: this is a hard constraint, not a degradation
+
+The entry above treats the fold as a pre-existing defect made worse. Seen in a close-up of a slow
+corner, the road visibly **passes through itself**, and the ratio is not a quality metric — below
+1.0 the offset curve is undefined and the mesh self-intersects.
+
+The lap length required for a valid road, derived from the authored shape's own radii:
+
+| `TrackWidth` | never folds above | comfortable above | authored kinks clean above |
+|---|---|---|---|
+| 800 cm | 477 m | 954 m | 1726 m |
+| 1000 cm | 596 m | 1192 m | 2158 m |
+| 1200 cm | 715 m | **1430 m** | 2589 m |
+
+**480 m at 800 cm clears the bare threshold by 3 cm** — 403 cm of radius on the fastest corner
+against a 400 cm half width — and fails everywhere tighter. **The pre-C8 1500 m at 1200 cm sat
+just above the comfortable line at 1430 m.** That configuration was not chosen against this
+constraint and nobody had written it down; it happened to land on the right side of it.
+
+So C8's texel decision holds and **C8's lap decision does not**. No setting keeps the along-track
+axis under 16384 at 3.125 cm per texel and reaches even the 954 m minimum, which needs 30528
+texels. This is now the primary argument for folded rows: not resolution, but that a valid road
+geometry and a resolvable tyre mark are otherwise mutually exclusive.
+
+#### And the elevation cannot be raised to compensate
+
+Tried at `ElevationExaggeration` 7.8125, which restores the pre-C8 absolute rise, and reverted.
+The authored Z values are integers and **35 of the 76 points step by exactly one unit**, so the
+profile has a quantisation floor:
+
+| Lap | `ElevationExaggeration` | One integer Z step | Gradient step |
+|---|---|---|---|
+| 480 m | 2.5 | 25 cm | 4.0 % |
+| 480 m | 7.8125 | 77 cm | **12.4 %** |
+| 7004 m | 2.5 | 362 cm | 4.0 % |
+
+At 12.4 % the circuit visibly terraces. The gradient step depends only on the exaggeration, not on
+the lap, so a longer lap restores the absolute drama at the same 4 % step. Another route to the
+same conclusion as the fold.
+
 ### Not verified
 
 **Nothing here was seen on screen.** Every figure is from a headless automation run. The demo map

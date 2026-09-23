@@ -749,10 +749,54 @@ into a throwaway world and cannot touch a saved map. If the tests must be run in
 
 ---
 
-## 2026-09-23 — OUTSTANDING: `L_SpaHarness` must be repointed at the rescaled circuit
+## 2026-09-23 — `L_SpaHarness` repointed at the rescaled circuit, and what it revealed
 
 Asset: `/Game/Maps/L_SpaHarness`
-Change: **not yet made.** The C++ defaults changed; the map still overrides them.
+Change: **modified and saved.** 740131 bytes against the 737340 baseline, so no leaked test actors
+— see the hazard entry above, whose signature is 993171.
+Made via: the user set `AuthoredLayoutLapLength` by hand; `ObjectTools.set_properties` for
+`RoadSegmentLength`; `ObjectTools.reset_properties` for `ElevationExaggeration`; `AssetTools.save_assets`
+
+| Property | Value | Note |
+|---|---|---|
+| `AuthoredLayoutLapLength` | 48000 | Set by the user. **Known wrong, see below** |
+| `RoadSegmentLength` | 128 | 400 / 3.125, holds rings-per-corner constant |
+| `ElevationExaggeration` | *override cleared* | Raised to 7.8125 and reverted, see below |
+| `Layout`, `CarCount` | `Spa`, 20 | Unchanged |
+
+### Two things this only showed once it was on screen
+
+**Setting `RoadSegmentLength` was not optional and had been missed.** The lap was changed without
+it, leaving the road mesh at 120 rings where the 1500 m layout had 3750. On corners of 200 to
+400 cm radius each corner was drawn as a three-to-five sided polygon. That is what "no detail at
+all" turned out to mean, and it is not related to texel density — there is no rubber at all in an
+editor viewport, so nothing seen there can be judging the buffer.
+
+**`ElevationExaggeration` cannot be raised to compensate for a shorter layout.** Raised to 7.8125,
+which restores the pre-C8 absolute rise, the circuit visibly terraces: the authored Z values are
+integers, 35 of the 76 points step by exactly one unit, and at that multiplier one step is a 77 cm
+rise over about 620 cm of track — a 12.4 % gradient step against 4.0 % at the default 2.5. The
+override is cleared. Figures in [MEASUREMENTS.md](MEASUREMENTS.md).
+
+### The lap length is wrong and the map should not be trusted for captures yet
+
+Seen in a close-up of a slow corner, the road **passes through itself**. That is the offset curve
+being undefined where the local radius falls below the half width, and at 480 m on an 800 cm track
+the fastest corner has 403 cm of radius against a 400 cm half width. Full derivation in
+[PLAN.md](PLAN.md) and [MEASUREMENTS.md](MEASUREMENTS.md); the short version is that a valid road
+needs **954 m minimum at this track width, and 1726 m for the authored kinks to be clean**, and
+neither fits under the 16384 along-track cap at 3.125 cm per texel.
+
+`TrackWidth` and `SurfaceCentimetresPerTexel` are still **not** overridden and follow the C++
+defaults of 800 and 3.125. Whatever the next configuration is, it is set in C++ and only
+`AuthoredLayoutLapLength` and `RoadSegmentLength` need touching here.
+
+---
+
+## Superseded: the original repointing instruction
+
+Asset: `/Game/Maps/L_SpaHarness`
+Change: **superseded by the entry above, which carried it out.**
 Why: [C8](PLAN.md) rescales the circuit to 480 m at 3.125 cm per texel on an 800 cm track. Two of
 the four properties in the override table above are per-instance overrides on `RacetrackCircuit_0`,
 so **changing the C++ default does not change the demo.** The editor was closed and the MCP server
