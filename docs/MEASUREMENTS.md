@@ -1735,3 +1735,181 @@ six texels per mark actually reads as a tyre mark rather than a block, which is 
 of the rescale, is the same kind of judgement and is also unmade. The decay pass remains unmeasured
 at any buffer size above the oval's. The `LockupProbability` of 0.15 is a by-eye demo value and
 nothing has judged whether 127 braking events producing 662 locked ticks per 30000 looks right.
+
+---
+
+## 2026-09-23 — C9: folded ribbon rows, and what the fold actually does
+
+Build: `RubberAccumDemoEditor Win64 Development`. All 63 automation tests pass headlessly with the
+editor closed, and both build paths are clean — `BuildPlugin` adaptive non-unity and the host unity
+target, which C8 established are not interchangeable checks.
+
+Test command:
+
+```
+UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+  -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+  -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+  -abslog="C:/RSBuild/tests-c9-04.log"
+```
+
+### The ribbon, both layouts, folded
+
+| Layout | Lap cm | Along | Across | Rows | Atlas | Bytes | MiB | Mark texels | Tightest radius vs half width |
+|---|---|---|---|---|---|---|---|---|---|
+| Stadium | 30921 | 9895 | 256 | **1** | 9895 x 256 | 20264960 | 19.33 | 6.40 | 352 vs 400, ratio 0.88 |
+| **Spa** | 180000 | 57601 | 256 | **4** | **14401 x 1024** | **117972992** | **112.51** | **6.40** | 191 vs 400, ratio 0.48 |
+
+```
+Spa layout: 180000.0 cm of lap at 800.0 cm wide, 3.125000 cm per texel,
+            57601 x 256 texels in 4 rows of 14401, allocating 14401 x 1024
+            for 117972992 bytes at RGBA16f, and a 20.0 cm contact patch stores as 6.40 texels
+```
+
+**The Stadium stays unfolded at one row, and that matters more than it looks.** It means the
+`RowCount == 1` identity path is exercised by a real layout on every test run rather than only by a
+synthetic case, so the unfolded path cannot rot while the folded one is developed.
+
+**The plan said 14400 x 1024 and 117964800 bytes. The measurement says 14401 and 117972992.** The
+Spa spline is rescaled about its centroid to hit `AuthoredLayoutLapLength` and then measured, and
+it lands a hair over 180000 cm, so `ceil` gives **57601** along-track texels rather than 57600 and
+each of the four rows carries one spare texel. The cost is 8192 bytes, 0.007 %. This is exactly the
+effect C8 rejected the 400 m / 2.44140625 pairing for — a design that is correct only when a
+floating-point rescale rounds the right way — and it is the reason the byte assertion in
+`SpaLayoutFoldsIntoFourRows` is a one-percent tolerance rather than an equality. The exact figure
+is still asserted, against an exactly-constructed ribbon, in
+`RacetrackSurface.Ribbon.FoldsIntoRowsBeyondTheUnfoldedLimit`.
+
+Real Spa at full size, which nothing runs but which the model now admits:
+
+```
+700400 cm by 1500 cm at 3.1250 cm/texel: 224128 x 480 texels in 14 rows of 16010,
+allocating 16010 x 6720, 860697600 bytes (860.7 MB) at RGBA16f
+```
+
+Both atlas dimensions stay under the 16384 cap at fourteen rows, so the full circuit is now a
+memory decision rather than an impossibility. 860.7 MB against this laptop's 7948 MB of dedicated
+VRAM is 10.8 %.
+
+### The fold is correct, measured three independent ways
+
+**The write side puts ink in the row the mapping predicts.** A contact three quarters of the way
+around a two-row ribbon, read back as a single column of the atlas:
+
+```
+Column 4999 of a 10000 x 64 atlas: first row peaks at 0.000000,
+second row peaks at 0.001802, the ink centres on texel 48.00
+```
+
+Predicted centre was texel 48. The peak value is the deposit predicted too: one contact at slip 1.0
+is `0.002` of exposure, and the swept share over a 61.3 px travel with a 6.4 px brush is 0.9055, so
+`0.002 x 0.9055 = 0.001811` against 0.001802 measured, the difference being float16 storage.
+
+**The track edge does not bleed into the next row.** A 60 cm brush centred exactly on `alpha = 1` of
+row 0, which overhangs the row band by half its width:
+
+```
+row 0 peaks at 0.094299, row 1 peaks at 0.000000
+```
+
+Without the per-stroke scissor that overhang lands in row 1's first across-texels, which is rubber
+from one part of the lap appearing at the far edge of a different part. **This is a defect folding
+introduces and which nothing else in the design catches**, because the stroke content is otherwise
+entirely correct.
+
+**The read side returns the mark where the write side put it.** This is the end-to-end guard: a
+stroke painted through the public C++ API, the real `M_SurfaceAccumulationDebug` drawn into a small
+render target through `DrawMaterialToRenderTarget`, and that target read back.
+
+```
+Painted ribbon 0.700..0.800 across 0.500 into row 1 of 2 on a 10000 x 128 atlas;
+sampled back centred on 0.750, 0.500, peaking at 0.6948,
+with 0.0000 at the same column of the first row
+```
+
+**0.750 and 0.500 against 0.750 and 0.500.** The C++ fold and the HLSL fold agree through a real
+compiled shader, and the 0.0000 is the discriminator: it is the place a read that ignored the row
+count would have put the mark. This also confirms the collection parameter resolves, which could
+not be verified directly — `ParameterId` is not readable through the MCP tool — because an
+unresolved row count reads 0, the shader falls back to one row, and the mark lands elsewhere.
+
+### Four tracks at 1800 m, and a test that had stopped measuring
+
+`RubberAccumDemo.Car.LaysFourTracksInACornerAndTwoOnAStraight` failed twice on the way here, for two
+unrelated reasons, and both are worth recording.
+
+**First, it had stopped sampling a lap.** `TicksAcrossTwoLaps = 6000` was sized against a 480 m lap.
+At 1800 m the first lap alone takes about 5227 ticks, so the test sampled **773 ticks** of the
+second lap and drew conclusions from them. The loop now runs until the car has actually completed
+two laps, which is what its name always claimed, and samples **5240**.
+
+The numbers changed substantially once it measured a whole lap:
+
+| | C8, 480 m lap | **C9, 1800 m lap** |
+|---|---|---|
+| Widest front-to-rear separation | 56.76 cm | **58.73 cm** |
+| As mark widths | 2.84 | **2.94** |
+| Share of lap over one mark width | 5.1 % | **7.7 %** |
+
+**The longer lap made four-track resolvability better, not worse.** C8 predicted the opposite —
+"a longer lap makes this worse, not better, and that trade has not been faced" — on the reasoning
+that offtracking is `Wheelbase^2 / (2R)` and a longer lap has gentler corners. That reasoning is
+sound for the steady-state term and wrong about which term dominates. C8 itself found the transient
+is larger: during turn-in the body is yawed into the corner and the front axle is displaced toward
+the inside. That term scales with lateral rate, not with radius, and the longer lap does not reduce
+it.
+
+**Second, and more interesting: the separation no longer falls away on straights.** Measured across
+three bands of the cornering profile, on the settled lap:
+
+| Below this share of sustained cornering | Share of lap | Widest separation | Share of the corner maximum |
+|---|---|---|---|
+| 0.05 | 8.3 % | 30.09 cm | 51 % |
+| 0.02 | 3.0 % | 28.93 cm | 49 % |
+| **0.01** | **1.5 %** | **28.93 cm** | **49 %** |
+
+Tightening the band from 8.3 % of the lap to 1.5 % moves the separation by 1.16 cm. **Even on the
+straightest track the layout has, the axles are 28.93 cm apart, which is 1.45 mark widths.** At 480 m
+the same test asserted the straight separation was under half the corner maximum and it held; here
+it lands at 49 %, and a test that passes at 49 % against a 50 % bar is passing by luck rather than
+by property.
+
+The mechanism is that `GetCorneringAmountAtDistance` is normalised against a percentile of the
+**layout's own** curvature distribution, so "below 0.05" is a relative measure that moves with the
+lap, and more importantly it describes the *centreline*, not the car. A car on a racing line is
+crossing the track between corners, so its heading differs from the centreline even where the
+centreline is straight, and at 1800 m the transitions between corners are long enough that the car
+is mid-transition over most of what the profile calls straight.
+
+**The assertion was replaced rather than loosened.** It now requires a corner to add more than a
+whole contact patch of separation on top of whatever the straightest track shows — measured,
+`58.73 - 28.93 = 29.80 cm`, which is 1.49 mark widths. That is a physical margin rather than a
+tuned ratio. The "two tracks on a straight" claim is still tested, on the Stadium, where there is
+genuinely straight track: C8 measured 0.063 cm of separation there and that assertion is unchanged
+and still passes.
+
+### What this does not measure
+
+**Nothing here has been looked at on screen.** The fold is verified numerically and through a
+compiled shader, but no capture has been taken at the 1800 m configuration, and `L_SpaHarness` still
+carries the interim 960 m overrides at the time of writing, so the demo map does not yet run this
+configuration at all.
+
+**The cost of the read path is unmeasured.** The shader went from 9 texture fetches per road pixel
+to 18, because every tap of the 3x3 tent now resolves two neighbouring texels and blends them by
+hand rather than letting the sampler do it. No frame time or GPU time has been captured at the new
+configuration, so the 4.484 ms frame and 2.351 ms GPU from R6 remain the last real figures and they
+were taken at a different lap, a different density and a different shader.
+
+**The cost of the per-stroke scissor is unmeasured.** It forces a canvas flush whenever consecutive
+strokes belong to different rows, where the existing code deliberately defers every flush to batch
+the whole frame's strokes into one. With twenty cars laying four contacts each the row changes
+should be few, but "should be" is not a measurement, and the 0.09 ms paint figure for 80 contacts
+predates this.
+
+**The road-mesh fold ratio is not settled.** The tightest three-point radius over one road segment
+measures 191 cm against a 400 cm half width, a ratio of 0.48, against 0.22 at C8's 480 m and 0.46 at
+the pre-C8 1500 m layout that looked right. That measure is a discrete curvature estimate that
+spikes at spline knots rather than a true local radius — C8 reached the same conclusion about the
+Stadium's 0.88 — so whether a slow corner still passes through itself is a judgement for a capture
+and that capture has not been taken.
