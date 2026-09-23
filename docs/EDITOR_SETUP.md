@@ -333,6 +333,43 @@ taken effect and the run would have silently measured nothing.
 If this instrument gets used often, the gate should become a `UDeveloperSettings` property, which
 `ConfigSettingsToolset` *can* set. Not done now because D6 is where profiling becomes routine.
 
+## 2026-09-23 — The paint timing measurement no longer needs the editor at all
+
+Change: none to any asset. Recorded here because it supersedes the recipe directly above.
+
+The Live Coding workaround above exists because MCP cannot set a console variable **in a running
+editor**. That is still true and is still worth knowing. But the measurement never needed the
+running editor in the first place.
+
+`r.RacetrackSurface.TimePaint` is declared `ECVF_Default` and read with `GetValueOnGameThread`, so
+an ordinary `-ExecCmds` sets it at startup. The editor *binary* can boot an uncooked map directly
+in game mode, which is what makes this work where the standalone game target cannot:
+
+```
+UnrealEditor.exe "<abs path>/RubberAccumDemo.uproject" /Game/Maps/L_TrackHarness -game \
+  -ExecCmds="r.RacetrackSurface.TimePaint 1" \
+  -windowed -resx=1280 -resy=720 -nosplash -nosound -abslog="C:/RSBuild/r6.log"
+```
+
+Better than the old recipe on four counts, which is why R6 was taken this way:
+
+- **No source edit**, so nothing can be left un-reverted. The old recipe's revert step was a manual
+  action with no check on it.
+- **No Live Coding**, so no editor restart risk and no patch DLLs.
+- **It obeys this project's own measurement rule.** `MEASUREMENTS.md` says Development or Shipping
+  and never editor, because editor frame-rate smoothing hides spikes. Simulate-In-Editor broke that
+  rule out of necessity. A standalone `-game` run does not.
+- **Reproducible from one command line** that goes in the measurement entry, rather than a
+  four-step procedure recorded in prose.
+
+**The trap, which cost a run.** Git Bash rewrites a leading-slash argument that looks like a POSIX
+path, so `/Game/Maps/L_TrackHarness` arrived as `C:/Program Files/Git/Game/Maps/L_TrackHarness` and
+the map silently failed to load — the engine logged `LoadPackage can't find package` and carried on
+into an empty world. Prefix the command with `MSYS_NO_PATHCONV=1`, or run it from PowerShell.
+
+Still not reachable this way: `stat unit` and `stat GPU` write to the screen rather than the log, so
+frame rate remains uncaptured. That gap is unchanged.
+
 ### Live Coding confirmed again on the plugin module
 
 Three `CompileLiveCoding` calls succeeded in this session, all patching
