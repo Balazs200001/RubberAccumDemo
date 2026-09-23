@@ -113,7 +113,7 @@ protected:
 	ETrackLayout Layout = ETrackLayout::Stadium;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "10000.0"))
-	double AuthoredLayoutLapLength = 150000.0;
+	double AuthoredLayoutLapLength = 48000.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "0.0"))
 	double ElevationExaggeration = 2.5;
@@ -149,16 +149,16 @@ protected:
 	double CornerRadius = 3000.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "100.0"))
-	double TrackWidth = 1200.0;
+	double TrackWidth = 800.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "2", ClampMax = "64"))
 	int32 PointsPerCorner = 8;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "0.5"))
-	double SurfaceCentimetresPerTexel = 9.765625;
+	double SurfaceCentimetresPerTexel = 3.125;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "50.0"))
-	double RoadSegmentLength = 200.0;
+	double RoadSegmentLength = 128.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	double RoadHeightAboveSpline = 1.0;
