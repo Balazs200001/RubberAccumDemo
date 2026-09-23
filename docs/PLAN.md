@@ -2068,12 +2068,37 @@ sampled 773 ticks of the second lap at 1800 m. It now runs until the car has com
 samples 5240. **Both numbers above come from the fixed loop**; the figures the broken loop produced
 were different and wrong.
 
-**Not verified.** Nothing has been looked at on screen: the road-mesh fold ratio measures 0.48
-against C8's 0.22, but whether a slow corner still passes through itself needs a capture and the map
-still carries its interim 960 m overrides. The read path went from 9 texture fetches per road pixel
-to 18 and no frame time has been taken at the new configuration. The per-stroke scissor forces a
-canvas flush on every row change, against a paint path that deliberately batches the whole frame,
-and that cost is unmeasured.
+**The road still passed through itself, and the lap length was not the reason.** Seen on screen at
+1800 m, Campus still crumpled. The authored polyline there is fine — its tightest three-point radius
+is 1066 cm against a 400 cm half width — but the Catmull-Rom through it dips to **167 cm**, because
+the corner turns about 110 degrees across segments of 42 to 53 units and no cubic follows that
+without bulging. Clamping the tangents was tried first and moves it from 167 cm to 164 cm, which is
+nothing: the tangent at that point is already shorter than its neighbouring segments, so a clamp
+never fires. **The authored Campus was opened up instead**, with one extra point so the spline has
+the control to track the arc, and the tightest radius on the whole lap is now **455 cm at La
+Source**, which is the genuine hairpin. Figures in [MEASUREMENTS.md](MEASUREMENTS.md).
+
+`RubberAccumDemo.Track.RoadNeverPassesThroughItself` now encodes the exit condition numerically
+rather than leaving it to a capture: it walks both road edges ring by ring and fails if either stops
+advancing along the centreline, which is what the offset curve crossing its own centre of curvature
+looks like.
+
+**Measured cost.** The read path went from 9 texture fetches per road pixel to 18 and it cost
+**0.6 % of GPU time**, 2.351 to 2.365 ms, because the scene is render-thread bound and always was.
+The paint pass went from a 0.030 ms median to **0.210 ms**, seven times worse, while its p99.9 is
+unchanged at 0.978 against 0.999 ms — and this phase cannot say how much of that is the per-stroke
+scissor and how much is a render target 7.5 times the bytes, because no capture exists with four
+rows and the scissor off.
+
+**A console variable could not release the field for a capture and two command-line switches
+replaced it.** `-ExecCmds` runs at frame 1, after `BeginPlay` has read the variable, so the first
+frame captures measured a frozen grid and the one that did not only ran because a human pressed `P`.
+`-ReleaseField` and `-FreezeField` are read through `FParse::Param` and do not depend on ordering.
+
+**Not verified.** The 0.6 % GPU figure is not evidence that manual bilinear is cheap in general,
+only that it is free in a render-thread-bound scene. No rubber has been judged on screen at this
+configuration. The Stadium's inside edge advances 1.51 cm per 128 cm ring, a ratio of 1.01, which
+is a pinch point rather than a fold and is left as found.
 
 ---
 
