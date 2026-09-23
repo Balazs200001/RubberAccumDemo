@@ -63,6 +63,8 @@ protected:
 	TObjectPtr<UMaterialInterface> RoadMaterial;
 
 private:
+	double WrapDistance(double DistanceAlongTrack) const;
+
 	void GenerateTrackSpline();
 
 	void GenerateRoadMesh();

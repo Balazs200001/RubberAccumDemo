@@ -251,6 +251,20 @@ double ARacetrackCircuit::GetTrackLength() const
 	return Spline != nullptr ? static_cast<double>(Spline->GetSplineLength()) : 0.0;
 }
 
+double ARacetrackCircuit::WrapDistance(double DistanceAlongTrack) const
+{
+	const double Length = GetTrackLength();
+
+	if (Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	const double Wrapped = FMath::Fmod(DistanceAlongTrack, Length);
+
+	return Wrapped < 0.0 ? Wrapped + Length : Wrapped;
+}
+
 FVector ARacetrackCircuit::GetWorldPositionAtDistance(double DistanceAlongTrack, double LateralOffsetAlpha) const
 {
 	const double Length = GetTrackLength();
@@ -260,14 +274,7 @@ FVector ARacetrackCircuit::GetWorldPositionAtDistance(double DistanceAlongTrack,
 		return GetActorLocation();
 	}
 
-	double WrappedDistance = FMath::Fmod(DistanceAlongTrack, Length);
-
-	if (WrappedDistance < 0.0)
-	{
-		WrappedDistance += Length;
-	}
-
-	const float DistanceFloat = static_cast<float>(WrappedDistance);
+	const float DistanceFloat = static_cast<float>(WrapDistance(DistanceAlongTrack));
 	const FVector CentreLocation = Spline->GetLocationAtDistanceAlongSpline(DistanceFloat, ESplineCoordinateSpace::World);
 	const FVector RightVector = Spline->GetRightVectorAtDistanceAlongSpline(DistanceFloat, ESplineCoordinateSpace::World);
 	const double ClampedAlpha = FMath::Clamp(LateralOffsetAlpha, -1.0, 1.0);
@@ -284,12 +291,6 @@ FVector ARacetrackCircuit::GetWorldDirectionAtDistance(double DistanceAlongTrack
 		return GetActorForwardVector();
 	}
 
-	double WrappedDistance = FMath::Fmod(DistanceAlongTrack, Length);
-
-	if (WrappedDistance < 0.0)
-	{
-		WrappedDistance += Length;
-	}
-
-	return Spline->GetDirectionAtDistanceAlongSpline(static_cast<float>(WrappedDistance), ESplineCoordinateSpace::World);
+	return Spline->GetDirectionAtDistanceAlongSpline(
+		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::World);
 }
