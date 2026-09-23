@@ -139,10 +139,10 @@ protected:
 	double CorneringLineCommitment = 0.5;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	double ApexLateralOffsetAlpha = 0.7;
+	double ApexLateralOffsetAlpha = 0.6;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	double MaxCornerDeviationAlpha = 0.20;
+	double MaxCornerDeviationAlpha = 0.30;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double MaxApexLateralOffsetAlpha = 0.90;
