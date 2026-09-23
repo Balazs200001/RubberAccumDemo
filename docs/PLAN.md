@@ -2102,6 +2102,71 @@ is a pinch point rather than a fold and is left as found.
 
 ---
 
+## C10 — The demo has to be legible in a recording, without narration
+
+Added 2026-09-24, requested directly after looking at C9's surface and liking it. Everything in this
+phase serves one goal: **someone watching a video of the demo should be able to tell what changed
+and when, without a voiceover and without reading a log.**
+
+Today every control writes to `UE_LOG` and nothing else. `ApplyTimeDilation` logs
+`Time dilation now %.2fx`, `ApplyDepositionScale` logs its own line, `SetFieldPaused` logs the
+release — and none of it is on screen. In a recording the dilation changes and the viewer has no way
+to know it happened.
+
+### C10.1 — Put every control change on screen
+
+`GEngine->AddOnScreenDebugMessage` is the whole mechanism. It was explicitly chosen as the simplest
+thing that gets text on screen; it does not need to be pretty and it does not need a HUD class.
+
+Every existing control announces itself: `P` for the field, `.` and `,` for time dilation, `]` and
+`[` for the deposition scale. Each message carries the value it moved to, not just that it moved.
+**There is no on-screen text anywhere in the project today**, so this is greenfield.
+
+### C10.2 — Flip the debug material through the channels
+
+The buffer holds three channels and the debug material only ever shows the sum. A viewer cannot
+tell rubber from a skid mark.
+
+`MF_SampleRacetrackSurface` already exposes what this needs: four outputs, `Coverage` carrying all
+three and three more carrying one channel each. `M_SurfaceAccumulationDebug` consumes `Coverage`
+alone. So the work is a selector on the road material and a key that cycles it, announcing the
+current view through C10.1.
+
+The cycle is: **all channels together, then rubber, then skid marks, then marbles.**
+
+**Marbles will be black and that is correct.** Nothing writes that channel — a rolling wheel writes
+`RubberBuildup` and a locked one writes `SkidMark`, and marbles do not arrive until phase G. The
+on-screen message should name the channel so an empty view reads as *nothing here yet* rather than
+as a bug.
+
+### C10.3 — Decay, and a rate control from 0 to 20x
+
+**Decay does not run.** `USurfaceAccumulationBuffer::ApplyDecay(WorldContext, Retention)` exists,
+is measured in `SurfaceBudgetTests` and `SurfaceBufferTimingTests`, and **has no production caller
+at all**. Nothing in the demo has ever faded. The racing line that C9 measured is a pure
+accumulation, which is why `MEASUREMENTS.md` records it as *"a transient, most legible somewhere
+between"* two lap counts — it only ever gets darker.
+
+So this is not a keybind on an existing feature. It is **phase E's coupling arriving early**, and
+it splits:
+
+- **Run the decay pass at all**, from the subsystem tick, at a retention derived from a
+  half-life in seconds rather than a per-frame constant, so the rate is frame-rate independent the
+  way C0 made deposition frame-rate independent.
+- **Then** a control from **0x to 20x** of that rate, on the same pattern as the deposition scale:
+  a console variable the circuit clamps and announces on screen. 0x must mean *no decay at all*,
+  which is today's behaviour and the baseline everything so far was measured against.
+
+**What this phase must not do is change the numbers C9 measured without saying so.** Decay at any
+non-zero rate moves the saturation figures, the 8.2:1 contrast and the laps-to-63 % counts, all of
+which were taken with nothing fading. A decay rate of 0 has to remain available and has to reproduce
+those numbers exactly, or the comparison is lost.
+
+*Exit: a recording of the demo shows, on screen, every change the operator makes; the channels can be
+inspected one at a time; decay runs and its rate can be taken to zero to reproduce the C9 figures.*
+
+---
+
 ## Standing rules for this backlog
 
 - A phase is not complete until its exit condition has been demonstrated, and what was *not*
