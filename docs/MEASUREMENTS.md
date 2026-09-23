@@ -39,6 +39,13 @@ Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
 date do not record it and their absolute figures should be read as indicative; the ratios and
 shapes measured *within* a single run are unaffected.
 
+**Narrowed 2026-09-23 by measurement rather than caution.** The confound is not uniform. Re-taking
+the whole suite on mains showed the CPU game-thread figure moving by 2 to 3.7x and the
+GPU-timestamped paint and decay figures not moving at all. So the pre-2026-09-23 GPU pass numbers
+are sound and only the CPU wall-clock ones needed the re-take. Details under
+[the mains re-take](#2026-09-23--r2-re-taken-on-mains-and-what-the-battery-confound-actually-touched).
+The rule stands for every future entry regardless.
+
 ### What the timestamp bracket actually contains
 
 The two timestamps are written on the GPU timeline, but the work between them is submitted from
@@ -653,6 +660,10 @@ discharge.
 **OUTSTANDING: re-take on mains power.** Until then this table establishes the shape and a
 pessimistic bound, not a figure to compare against the paint-pass numbers elsewhere in this file.
 
+*Closed 2026-09-23 by [the mains re-take](#2026-09-23--r2-re-taken-on-mains-and-what-the-battery-confound-actually-touched).
+Three mains runs agree to within 5 % where these spread by 2.42x, the 1 ms crossover is measured at
+234 spline points, and the reading below about the editor run is corrected there.*
+
 ### Gate: PASSED, no bail-out
 
 Eighty contacts at harness spline complexity cost **0.5053 ms** on the worst run, which is
@@ -717,6 +728,12 @@ It is kept here for the comparison, and because the reason it differs turned out
 first assumed. The initial reading of the discrepancy was that the editor number was optimistic and
 the headless ones were the truth. With the battery cause known, the more likely reading is that the
 editor run was simply taken at a higher clock, and **none of the three is a mains-power figure**.
+
+*Corrected 2026-09-23. The second reading was right and the first was backwards. The editor run
+matches the mains runs to within 5 % at every spline complexity, so it was a full-clock run and the
+two headless runs were the throttled ones. Calling the headless runs "the numbers of record" above
+was a method judgement standing in for a measurement. See
+[the mains re-take](#2026-09-23--r2-re-taken-on-mains-and-what-the-battery-confound-actually-touched).*
 
 ### Method note for every future measurement in this project
 
@@ -814,3 +831,202 @@ written in phase B. Three consequences:
   needs console access MCP does not have, so a bloom-off capture has still never been taken.
 - **The mark's shape along its length was not examined**, only its width. The end caps add half the
   width to the quad's length and nothing has checked what that looks like.
+
+---
+
+## 2026-09-23 — R2 re-taken on mains, and what the battery confound actually touched
+
+The outstanding item from the R2 entry above. Six headless runs, editor closed.
+
+```
+Build:    Development, editor target, headless through UnrealEditor-Cmd.exe
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU, driver 592.82, D3D12, SM6
+Power:    MAINS. Win32_Battery BatteryStatus = 2 (AC connected) sampled before and after every
+          run. Charge rose from 50 % to 51 % across the set, so the adapter was carrying the load
+          rather than the machine merely being plugged into a dead socket. Scheme: Balanced.
+Command:  -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+Result:   36 of 36 tests pass in all six runs.
+```
+
+Two sets, for two different jobs:
+
+- **M1, M2, M3** run the test *unchanged*. Same binary, same command, same candidates as headless
+  runs A and B above. Only the power state differs, so this is the controlled comparison.
+- **F1, F2, F3** run it after adding spline-point candidates 128, 192 and 384, and a printed
+  crossover figure. These answer the design question the unchanged test could only bracket.
+
+### The spread collapses from 2.4x to 5 %
+
+Full search, 80 contacts, the figure every conclusion turns on:
+
+| Spline points | Battery A | Battery B | Battery, third run | **Mains M1 / M2 / M3** | Mains spread |
+|---|---|---|---|---|---|
+| 18 | 0.5053 ms | 0.2830 ms | 0.3540 ms | **0.1383 / 0.1377 / 0.1451 ms** | 1.05x |
+| 64 | 1.1915 ms | 0.5334 ms | — | **0.3148 / 0.3105 / 0.3208 ms** | 1.03x |
+| 256 | 4.0437 ms | 1.7317 ms | — | **1.0915 / 1.0985 / 1.1166 ms** | 1.02x |
+| 1024 | 15.5313 ms | 6.4214 ms | — | **4.0965 / 4.1411 / 4.1687 ms** | 1.02x |
+
+Three battery runs of the same binary spread by up to 2.42x against each other. Three mains runs
+spread by 1.05x at worst and 1.02x at the three larger sizes. **The battery diagnosis is confirmed
+by removing the cause and watching the spread go away**, which is a stronger result than the
+after-the-fact attribution the earlier entry could make.
+
+Mains is 3.65x faster than battery run A at harness complexity, and 2.05x faster than run B.
+
+### The editor run was not optimistic. It was the only full-clock run of the three.
+
+The earlier entry recorded the editor run as *"optimistic by about four times against the worst
+headless run"*, kept it *"for the comparison rather than as evidence"*, and stated that **"the
+headless runs are the numbers of record"**. The mains figures reverse that.
+
+| Spline points, 80 contacts | Editor run, 2026-09-22 | Mains mean, M1 to M3 | Editor / mains |
+|---|---|---|---|
+| 18 | 0.1332 ms | 0.1404 ms | 0.95 |
+| 64 | 0.3025 ms | 0.3154 ms | 0.96 |
+| 256 | 1.0773 ms | 1.1022 ms | 0.98 |
+| 1024 | 4.1797 ms | 4.1354 ms | 1.01 |
+
+The editor run agrees with the mains runs to within 5 % at every complexity. It was taken at full
+clock; the two headless runs were the throttled ones. **The conclusion recorded on 2026-09-22 —
+that the headless runs were the truth and the editor run flattered the result — was backwards**,
+and it was backwards for a reason worth keeping: headless was assumed to be the more rigorous
+method, so its numbers were trusted over the editor's on method grounds when the actual difference
+between them was power state and nothing else. Rigour in the harness does not make a number right
+if an uncontrolled variable is moving underneath it.
+
+### The 1 ms crossover, measured rather than interpolated
+
+The open question was where the full search passes 1 ms at 80 contacts, because a real 7 km circuit
+carries 70 to 256 spline points depending on authoring density and the battery runs put the
+crossover somewhere inside that same range. The test now samples 128, 192 and 384 as well, and
+prints the crossover it finds.
+
+| Spline points | F1 | F2 | F3 |
+|---|---|---|---|
+| 18 | 0.1404 ms | 0.1369 ms | 0.1375 ms |
+| 64 | 0.3079 ms | 0.3054 ms | 0.3291 ms |
+| 128 | 0.5695 ms | 0.5692 ms | 0.5788 ms |
+| 192 | 0.8215 ms | 0.8288 ms | 0.8521 ms |
+| 256 | 1.0677 ms | 1.0941 ms | 1.1014 ms |
+| 384 | 1.5546 ms | 1.6207 ms | 1.6648 ms |
+| 1024 | 4.1405 ms | 4.2828 ms | 4.3038 ms |
+| **Crossover, printed by the test** | **238 points** | **233 points** | **230 points** |
+
+**Roughly 234 spline points at 80 contacts.** The single-segment lookup stays flat at 0.0001 ms per
+contact across the whole range, as it did on battery, so the speedup column now reaches 450x at
+1024 points.
+
+### Decision: the segment cache is still not implemented, and the reason is now a number
+
+Against the authoring densities PLAN.md names for a 7 km circuit:
+
+| Authoring density | Spline points | Cost at 80 contacts | Share of a 60 Hz frame |
+|---|---|---|---|
+| Harness circuit as built | 18 | 0.14 ms | 0.8 % |
+| One point every 100 m | 70 | 0.33 ms | 2.0 % |
+| One point every 27 m | 256 | 1.09 ms | 6.5 % |
+| Crossover | **234** | 1.00 ms | 6.0 % |
+
+So the sparse end of the range is clear by a factor of three and the dense end crosses. The ranges
+are separated in the sense that matters — the answer now depends on a property of the circuit
+someone authors, not on which run you happened to read.
+
+**Not implemented, on three grounds:**
+
+1. **No caller pays this cost today.** Searching the whole repo for the world-space
+   `RegisterSurfaceContact` overload finds the Blueprint library wrapper and three automation
+   tests. `ASplineFollowingCar` uses `RegisterSurfaceContactInTrackSpace` and performs no search at
+   all, so the live five-car scene runs **zero** spline searches per frame. Every 80-contact search
+   figure in this file is synthetic, and optimising a path with no users is the thing the plan's
+   measure-before-optimising rule exists to prevent.
+2. **The harness is 18 points**, 0.14 ms, 0.8 % of a frame.
+3. **The fix stays cheap to add later.** `FindInputKeyOnSegmentClosestToWorldLocation`
+   (`SplineComponent.h:837`) is measured flat at O(1), the change is localised to the conversion
+   call site, and nothing about deferring it makes it harder.
+
+**The condition to implement it, stated so it is not a judgement call next time: when a circuit
+with more than about 230 centreline spline points exists, or when any world-space caller reaches
+80 contacts per frame in a real scene.** Neither is true now.
+
+One caveat against the table above, which is speculation and is labelled as such: 256 points for a
+7 km circuit is one point every 27 m, and a hand-authored Spa would plausibly need several times
+that through the tighter corners. At 1024 points the cost is 4.2 ms and the cache is not optional.
+That is not a measurement of any circuit that exists, so it does not change the decision, but it is
+the direction the risk points.
+
+### What the battery confound touched: the game thread, not the GPU
+
+The R2 entry above closes with a method note warning that *every* absolute figure in this file
+predates the power-state rule and should be read as indicative. The full suite ran in all six runs,
+so the paint and decay passes were re-taken on mains at no extra cost. They did not move.
+
+Against the C0 "after" figures, which are the correct comparison because they are post-batching:
+
+| Pass | Battery, C0 after, 3 runs | **Mains, F1 to F3** | Moved? |
+|---|---|---|---|
+| Paint, 1 contact | 0.0920 / 0.1000 / 0.0910 ms | **0.0930 / 0.0930 / 0.1100 ms** | no |
+| Paint, 4 contacts | 0.0930 / 0.1050 / 0.0910 ms | **0.0920 / 0.0940 / 0.0910 ms** | no |
+| Paint, 80, uniform heading | 0.0960 / 0.0890 / 0.0900 ms | **0.0920 / 0.1040 / 0.0900 ms** | no |
+| Paint, 80, 80 distinct headings | 0.1060 / 0.1150 / 0.0980 ms | **0.1080 / 0.1070 / 0.0960 ms** | no |
+| Full-buffer decay | 0.1290 / 0.1200 / 0.1210 ms | **0.1380 / 0.1410 / 0.1190 ms** | no |
+
+**Battery cost the game-thread spline search a factor of 2 to 3.7 and cost the GPU-timestamped
+paint and decay passes nothing measurable.** Decay is if anything marginally slower on mains, which
+is run-to-run noise rather than a signal.
+
+That result is worth more than the re-take itself, because it says which of this file's older
+figures actually needed one:
+
+- **The B3, C0 and B4 GPU pass figures did not need re-taking**, and that is now demonstrated
+  rather than assumed. They are timed with RHI timestamp queries on the GPU timeline, and the
+  GPU's clock was not what the power state was throttling.
+- **R2 did need it**, because it is the only CPU wall-clock measurement in the file.
+- **The five-car real-scene entry is the one still genuinely open.** It is a GPU timestamp, so the
+  reasoning above suggests it is safe, but it also ran inside a live editor frame where the game
+  thread sets the pace, and its tail — p99 0.4450 ms against a 0.0460 ms median — is contention.
+  Contention with a throttled game thread is not the same measurement as contention with a fast
+  one. R6 re-takes it on mains.
+
+The B4 sweep also re-ran on mains. Its paint column now reads 0.089 to 0.116 ms across all nine
+configurations against the 0.351 to 0.368 ms recorded in the original sweep. **That is C0's
+batching, not the power state**, and the two must not be confused: the original sweep predates the
+flush-deferral guard. The sweep's own conclusion is unchanged and is now better supported — paint
+is flat to within 3 % across a 64-fold range of buffer sizes, and decay still tracks bytes touched,
+2048 RGBA16f at 0.199 to 0.215 ms and 4096 RGBA32f at 1.895 to 2.323 ms.
+
+### Unrelated finding: the B5 saturating figures have changed since phase R3
+
+Not something this measurement went looking for. The `Accumulator.SaturationCurve` numbers printed
+by all six runs differ from the B5 table recorded on 2026-09-22, identically in every run:
+
+| Pass | B5 as recorded, pre-R3 | Current, all six runs |
+|---|---|---|
+| 1 | 0.06494 | **0.09888** |
+| 10 | 0.48877 | **0.64795** |
+| 40 | 0.93213 | **0.98682** |
+| Sibling channel after 40 | 0.03406 | **0.00785** |
+
+The additive column is unchanged to the last digit, and so is the additive sibling channel at
+exactly 0.50000. Only the saturating path moved.
+
+The cause is the R3 restructure: the stroke's texel footprint is built in track space now, so the
+sampled texel sits differently under the brush than it did against the world-XY region. The
+effective alpha at that texel has gone from 0.065 to 0.0989 — from 65 % of the nominal 0.1
+increment to 99 % of it.
+
+The B5 *model* still holds exactly, which is the reassuring part. B5 explained the sibling collapse
+as `0.5 * (1 - a)^40` with `a` the effective alpha, and got 0.035 against 0.03406 measured. The same
+model at the new alpha gives `0.5 * (1 - 0.09888)^40 = 0.00777` against **0.00785** measured. The
+mechanism is unchanged; only the sampled point under the brush moved.
+
+**This bears on a carried unknown and does not close it.** The open item is whether the saturating
+path retains the brush falloff that R4 proved the additive path discards. These numbers say the
+falloff is doing almost nothing *at the sampled texel* — 99 % of nominal is not a 65 % attenuation
+— but one texel is not a profile, and R4's method was a profile. Settling it properly means the
+`PaintedStrokeWidth` readback run against `ESurfacePaintMode::Saturating`, which is a small
+addition to an existing test and is not done here.
+
+**The B5 table above is stale against the current code and should be read as the pre-R3 figures it
+is.** It is left in place rather than edited, because the reasoning built on it is sound and the
+entry is the record of what was measured on the day.
