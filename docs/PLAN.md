@@ -1089,6 +1089,31 @@ one line is the point.
 > making the apex only 1.5 times darker per texel than the straight. Lowering it concentrates the
 > apex and narrows the fan. This strengthens rather than weakens the phase E argument below.
 
+> **Re-counted 2026-09-23 after [C8](#c8--four-tyre-contacts-per-car-and-the-circuit-rescaled-to-resolve-them),
+> which moved all three terms at once.** Four wheels per car, an 800 cm track and a 3.125 cm texel
+> change the geometry the counts rest on, so
+> `RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction` was re-run over the same
+> 12.67 laps of a twenty-car field, now counting each wheel rather than each car.
+>
+> | | texels inked | span | passes per texel per lap | exposure per lap | laps to 63 % |
+> |---|---|---|---|---|---|
+> | Busiest straight texel | 57 | 178 cm | 21.39 | 0.004278 | ~78 |
+> | Busiest apex texel | 90 | 281 cm | 12.08 | 0.012077 | ~28 |
+>
+> **Measured contrast is now 2.8 to 1, up from 1.5.** The apex is close to twice as legible as it
+> was, which is a result C8 did not set out to get and should not be claimed as its purpose.
+>
+> Both rates roughly doubled, because halving the track halves `AdjacentSpacing` and packs the same
+> field into half the width. The contrast improved on top of that because a car's four wheels
+> straddle the corner band rather than sitting on one line, so the apex gains the front-and-rear
+> pair where the straight only gains the same coincident pair it already had. The straight count of
+> 21.39 is again about 1.7 times the 12.67 the static stripe spacing predicts, for the same
+> residual-convergence reason recorded above, and that ratio is now asserted rather than noted.
+>
+> **The band widths grew in texels and shrank in centimetres**, which is the rescale working: the
+> apex band is 90 texels against 29, and 281 cm against 283, so the same feature is resolved three
+> times more finely without changing size on the track.
+
 **What this exposes is a limit of having no decay.** The 5:1 is a ratio of *rates*, and coverage
 runs through `1 - exp(-3E)`, which compresses everything near the top. When the apex reaches 95 %
 at about 50 laps the straight is at about 45 % — clearly separable. By the time the straight
@@ -1603,6 +1628,87 @@ not to pay that, and the same decision holds. The buffer cannot tell either way.
 dark mark among the four, a corner fills the screen without texels reading as blocks, the buffer
 allocates at 15360 x 256 for 31457280 bytes, and the saturation figures in `MEASUREMENTS.md` come
 from a re-run count rather than from this document's arithmetic.*
+
+### Measured on implementing, 2026-09-23. Four predictions held, two did not.
+
+All 55 automation tests pass headlessly with the editor closed, and both build paths are clean.
+Full numbers in [MEASUREMENTS.md](MEASUREMENTS.md); what follows is only where this section was
+wrong.
+
+**The buffer figures were exact.** `15360 x 256 texels, 31457280 bytes` at `3.125000 cm per texel`,
+with a 20 cm contact patch storing as `6.40` texels and 1024 texels of margin under the cap. The
+readback confirms the stored mark: **6 inked texels, 18.75 cm** against a 20 cm patch, where the
+same test reads 2 texels at the old density. The Stadium lands at 9895 x 256, 19.33 MiB.
+
+**The bicycle model validated better than it needed to.** On the Stadium's constant 3000 cm
+radius, with a driver holding the centreline at zero line commitment so nothing but the wheelbase
+separates the axles, the rear axle tracks **3.156 cm inside the front against 3.267 cm** from
+`Wheelbase² / (2R)` — 3.4 % off a formula nothing in the code computes. On a straight the same
+measurement gives 0.063 cm, so the two-tracks-not-four claim holds to within a millimetre.
+
+**The offtracking table above was pessimistic, and it was measured at the wrong moment.** Over a
+settled lap of the rescaled Spa a car's front and rear tracks separate by up to **56.76 cm, 2.84
+mark widths**, and exceed one mark width over **5.1 %** of the lap. The table predicted 1.22 to
+2.21 mark widths from steady-state offtracking alone.
+
+The reason it undershot is the more interesting half, and it is a mechanism this section missed
+entirely. **Two different effects separate the axles, and they act in opposite directions.**
+Steady-state offtracking puts the rear inside the front. During turn-in the body is yawed into the
+corner, so the front axle — one wheelbase along the heading — is displaced toward the *inside*
+instead, and at the lateral rates this model reaches that term is the larger of the two. The first
+version of the four-tracks test asserted "rear inside front" at the tightest point on the lap,
+measured the front 19.43 cm inside the rear, and failed. Both readings are correct vehicle
+behaviour; the test was asserting one of them everywhere. It now checks the steady-state sign on
+the Stadium, where there is a genuine constant-radius corner to be steady in, and checks only
+*resolvability* on Spa, where the transient dominates.
+
+**The road-mesh fold gets about twice as bad, not 13 % worse.** That estimate held the measuring
+chord at a fixed 200 cm; the honest comparison holds it at one road-ring spacing, which scales with
+the layout. Measured, as the tightest three-point radius over one `RoadSegmentLength`:
+
+| | tightest radius | half width | ratio |
+|---|---|---|---|
+| Spa at 1500 m, 1200 wide, 400 cm rings | 277 cm | 600 | 0.46 |
+| **Spa at 480 m, 800 wide, 128 cm rings** | **89 cm** | **400** | **0.22** |
+| Stadium at 480 m equivalent, 128 cm rings | 352 cm | 400 | 0.88 |
+
+The fold ratio is `TightestRadius / HalfWidth`, and holding the chord at a fixed fraction of the
+lap makes it proportional to `LapLength / TrackWidth`. That ran at 125 and now runs at 60, so the
+fold is 2.08 times deeper — **and it is unavoidable, not a bad choice.** The cars are a fixed
+physical size, so a shorter lap has to carry a proportionally wider track, and a proportionally
+wider track folds harder on the same kinks. Holding the old ratio at a 480 m lap would need a
+384 cm track, which fails the wheel-alpha headroom above. Whether it is visible is a judgement for
+a capture, not a number.
+
+The Stadium's 0.88 is new information and is not the same defect: it is a curvature spike at the
+straight-to-corner knot, where a Catmull-Rom through the generated points has no curvature
+continuity. It has always been there and is marginal.
+
+**The wheel-alpha headroom was conservative.** Twenty cars over 6000 ticks put the widest wheel at
+alpha **0.7864** against the 0.860 to 0.905 predicted, with **zero** contacts discarded outside the
+ribbon. The margin is 0.21 rather than 0.10, so the choice of 800 over 600 has more room than it
+was justified on.
+
+**The two wheel bands abut exactly, as predicted.** Each band measures 80.0 cm against an 80 cm
+wheel track, overlapping by 0.0 cm, and the whole feature spans 160 cm, 20 % of the track.
+
+**The world-space conversion costs 0.3658 ms**, measured at 80 contacts on a 77-point spline rather
+than interpolated: the timing test now carries 77 as a candidate because that is what
+`RacetrackLayouts::SpaCentreline` holds. That is 2.2 % of a 60 Hz frame and about 8 % of the
+4.484 ms frame this scene actually runs at. The segment-cache path measures **0.0087 ms at the same
+point, 42 times cheaper** and flat in spline points. **The cache is still not implemented**, and
+the cost of not implementing it is now a number rather than an estimate.
+
+**A defect this change exposed, which predates it.** `ARacetrackCircuit::PostInitializeComponents`
+was the only caller of `ConfigureTrackRibbon`, and `AActor::PostActorConstruction` only runs
+`PostInitializeComponents` when `World->AreActorsInitialized()` (`Actor.cpp:4436`), which is false
+in the editor world the automation tests spawn into. **No host test has ever configured the surface
+ribbon.** It did not matter while `ASplineFollowingCar` used the track-space overload, which needs
+no centreline; the moment the wheels went through the world-space API every contact was discarded
+for want of one, and the counting test was silently measuring against the ribbon struct's own
+defaults of 1200 cm and 9.7656 cm per texel rather than against the circuit. `PublishTrackRibbon`
+is now called from `OnConstruction` and `SetLayout` as well, which also means editing `TrackWidth`
+or the layout in the editor resizes the ribbon instead of waiting for the next play session.
 
 ---
 
