@@ -294,3 +294,16 @@ FVector ARacetrackCircuit::GetWorldDirectionAtDistance(double DistanceAlongTrack
 	return Spline->GetDirectionAtDistanceAlongSpline(
 		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::World);
 }
+
+double ARacetrackCircuit::GetCorneringAmountAtDistance(double DistanceAlongTrack) const
+{
+	if (Spline == nullptr || GetTrackLength() <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	const FVector Local = Spline->GetLocationAtDistanceAlongSpline(
+		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::Local);
+
+	return FMath::Abs(Local.X) > StraightLength * 0.5 ? 1.0 : 0.0;
+}

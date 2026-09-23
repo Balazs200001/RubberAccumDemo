@@ -37,6 +37,18 @@ public:
 
 	FVector GetWorldDirectionAtDistance(double DistanceAlongTrack) const;
 
+	double GetCorneringAmountAtDistance(double DistanceAlongTrack) const;
+
+	double GetCornerRadius() const
+	{
+		return CornerRadius;
+	}
+
+	double GetStraightLength() const
+	{
+		return StraightLength;
+	}
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "500.0"))
 	double StraightLength = 6000.0;

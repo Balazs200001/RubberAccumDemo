@@ -157,4 +157,66 @@ bool FRacetrackCircuitLateralOffsetMovesAcrossTrackWidth::RunTest(const FString&
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners,
+	"RubberAccumDemo.Track.CorneringAmountSeparatesStraightsFromCorners",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	const double Length = Track->GetTrackLength();
+
+	TestEqual(TEXT("The lap starts on a straight"), Track->GetCorneringAmountAtDistance(0.0), 0.0);
+	TestEqual(TEXT("The middle of the first straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.097), 0.0);
+	TestEqual(TEXT("The middle of the first corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.347), 1.0);
+	TestEqual(TEXT("The middle of the second straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.597), 0.0);
+	TestEqual(TEXT("The middle of the second corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.847), 1.0);
+
+	TestEqual(
+		TEXT("Cornering amount wraps with distance"),
+		Track->GetCorneringAmountAtDistance(Length * 1.347),
+		Track->GetCorneringAmountAtDistance(Length * 0.347));
+
+	constexpr int32 SampleCount = 2000;
+	int32 CorneringSamples = 0;
+
+	for (int32 Sample = 0; Sample < SampleCount; ++Sample)
+	{
+		CorneringSamples += Track->GetCorneringAmountAtDistance(Length * Sample / SampleCount) > 0.5 ? 1 : 0;
+	}
+
+	const double MeasuredCorneringFraction = static_cast<double>(CorneringSamples) / SampleCount;
+	const double StadiumPerimeter = 2.0 * Track->GetStraightLength() + 2.0 * UE_DOUBLE_PI * Track->GetCornerRadius();
+	const double ExpectedCorneringFraction = 2.0 * UE_DOUBLE_PI * Track->GetCornerRadius() / StadiumPerimeter;
+
+	AddInfo(FString::Printf(
+		TEXT("Cornering fraction of the lap: %.4f measured against %.4f from the stadium geometry"),
+		MeasuredCorneringFraction,
+		ExpectedCorneringFraction));
+
+	TestTrue(
+		TEXT("The share of the lap reported as cornering matches the stadium's own geometry"),
+		FMath::IsNearlyEqual(MeasuredCorneringFraction, ExpectedCorneringFraction, 0.02));
+
+	Track->Destroy();
+
+	return true;
+}
+
 #endif
