@@ -330,11 +330,77 @@ world, so placing several car instances in a level does not need each one wired 
 `ASurfaceVerificationRig` is **deleted**, along with `/Game/Maps/L_SurfaceVerification`, which
 contained nothing else once the rig was gone. The cars replaced its driving half and
 `BP_SurfaceRegionDisplay` replaced its display half.
-| C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line |
+| C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line — **C++ complete 2026-09-23, exit not demonstrated until R5** |
 | C4 | Time compression with lap counter | 50 laps in about two minutes |
 | C5 | Fixed-camera observation mode | Repeatable identical load per run |
 
 *Exit: press play, walk away, come back to a marked track.*
+
+### C3, implemented 2026-09-23. The C++ is done and tested; the exit condition waits on R5.
+
+Five new automation tests, 41 of 41 passing, all three build paths clean. **The exit condition
+"traffic spreads across the line" cannot be demonstrated until R5**, because nothing renders the
+buffer correctly yet. What is demonstrated is the behaviour that produces the spread, by number.
+
+**Cornering comes from the circuit's own geometry, not from sampling the spline.** `ARacetrackCircuit`
+generates the stadium from `StraightLength` and `CornerRadius`, so it already knows where the
+corners are in closed form. `GetCorneringAmountAtDistance` returns 1 inside a corner and 0 on a
+straight by testing the local X of the point against half the straight length.
+
+The alternative was central-differencing the spline tangent to recover curvature numerically. It was
+rejected: no public UE 5.8 API returns curvature, so it needs a tunable step size that has to sit
+above the reparam table's own resolution and below one segment, and it depends on closed-loop wrap
+behaviour in `FInterpCurve` that could not be confirmed from the source. That is the clever
+implementation where the obvious one was in the same file. The accessor is checked against the
+geometry rather than against itself: the share of the lap it reports as cornering measures
+**0.6110 against 0.6110** from `2*pi*R / perimeter`.
+
+**Speed, slip and line are all functions of position now.**
+
+| Quantity | On a straight | In a corner | Measured |
+|---|---|---|---|
+| Speed | `StraightLineSpeed` | x `CorneringSpeedFraction` | 3000 → 1650 cm/s |
+| Slip, which sets stroke intensity | `StraightSlipAmount` | `CorneringSlipAmount` | 0.080 → 0.450 |
+| Line | `BaselineLateralOffsetAlpha` | x `(1 - CorneringLineCommitment)` | 0.600 → 0.060 at commitment 0.9 |
+
+Two mechanisms stop that being a square wave. The car reads cornering at its own position **and**
+at `BrakingLookaheadCentimetres` ahead, taking the maximum, so it slows *before* the corner rather
+than on entering it — measured at 2583 cm/s while still 538 cm short of the entry. Speed and line
+then ramp toward their targets under `FMath::FInterpConstantTo` at bounded rates, so a car has a
+finite braking distance and a finite rate of changing line.
+
+**The car now uses the struct overload of `RegisterSurfaceContactInTrackSpace`.** Because the line
+moves within a frame, `LateralOffsetAlphaPerSecond` is genuinely non-zero, and `BuildStrokes` uses
+it to back-derive the stroke's start alpha. The six-argument overload leaves that field zero and
+would paint each frame's stroke at a constant offset, losing the lateral movement.
+
+**The circuit spawns the field.** `CarCount` and a per-driver derivation replace five hand-typed
+offsets in the map. Each driver's baseline offset is spread across `DriverLateralSpread`, and its
+line commitment is interpolated from `DriverLineCommitmentAtCentre` to `DriverLineCommitmentAtEdge`
+by how far off-centre it starts — a driver already on the line has little to give up, one sitting
+wide has a lot. The defaults reproduce the C2 capture's -0.4 to +0.4 spread exactly.
+
+**The emergence tension, stated because it is the obvious oral-assessment attack.** C1 rejected an
+authored racing line, and E and F rest on the line being emergent from measured buildup. A design
+where cars follow a computed ideal line would make that tautological.
+
+This design does not compute one. No component stores, looks up or targets a "best" lateral
+position; each car responds only to local geometry at its own position, with its own coefficients.
+What spreads the traffic is that drivers differ, and what concentrates it in corners is that each
+driver independently gives up some of its own offset.
+
+**The honest limit, which should be stated rather than defended:** the response formula and the
+coefficient spread are still authored, so the *result* is a consequence of choices made here. The
+strong form of the claim — cars discovering a fast line by measuring their own lap times — is a
+controller-design project of its own and is deliberately out of scope. What C3 claims is the weaker
+and still real thing: it authors the question, not the answer. What later phases read is the
+time-integrated buildup through the saturating accumulator and the decay pass, which no car can
+see. Any write-up should make the weak claim, not the strong one.
+
+**Not verified.** Nothing has been seen on screen, so "traffic spreads" rests on two cars in a test
+holding 0.600 and 0.060 from the same baseline, not on a capture. The five map-placed cars lost
+their hand-set offsets when `LateralOffsetAlpha` was renamed, so until they are deleted the map runs
+ten cars, five of them stacked on the centreline.
 
 **Status 2026-09-22: C0 COMPLETE.** Eighty contacts cost 0.0890 to 0.1150 ms against a four-contact
 budget that was 0.2620 to 0.2820 ms, so the exit condition is met with room to spare — eighty
@@ -569,10 +635,22 @@ flat in stroke count. **Recorded here rather than discovered in C4. Not implemen
 | R3 | Buffer domain and paint path moved to track space, including the lap-seam split | Contacts land on the ribbon, and no stroke is smeared across the buffer at the seam — **met 2026-09-23** |
 | R4 | Read the painted stroke width back from the buffer | A texel profile, settling whether D1's "narrow" requirement is already violated — **met 2026-09-23** |
 | R5 | Receiving material samples by mesh UV, and a road carrying track-space UVs | Rubber appears on the road where the cars drive |
-| R6 | Re-take the real-scene measurement and compare against the five-car baseline | Numbers in `MEASUREMENTS.md` against median 0.0460 ms, p99 0.4450 ms, 1346 samples |
+| R6 | Re-take the real-scene measurement and compare against the five-car baseline | Numbers in `MEASUREMENTS.md` against median 0.0460 ms, p99 0.4450 ms, 1346 samples — **met 2026-09-23** |
 
-**Status 2026-09-23: R1 to R4 complete, R5 and R6 outstanding.** 36 of 36 automation tests pass
-headlessly, twice. All three build paths pass.
+**Status 2026-09-23: R1 to R4 and R6 complete. R5 is the only task outstanding, and it is the one
+that needs the editor.** 41 of 41 automation tests pass headlessly. All three build paths pass.
+
+**R6 met 2026-09-23, and it took the twenty-car measurement with it.** Twenty cars in the live
+harness cost **0.0220 ms median against 0.0210 ms for five** — flat in stroke count, which is C0's
+claim holding in a real scene rather than on a synthetic bench. Against the five-car baseline the
+median halved and p90 improved eightfold, but most of that is the run being standalone `-game`
+rather than Simulate-In-Editor; the paint pass did not get faster, the frame around it got quieter.
+Full attribution and the surviving tail in [MEASUREMENTS.md](MEASUREMENTS.md).
+
+**The measurement no longer needs the editor, Live Coding, or MCP.** `r.RacetrackSurface.TimePaint`
+is `ECVF_Default`, so `-ExecCmds` sets it on a standalone `-game` command line. That replaces the
+four-step temporary-source-edit recipe in `EDITOR_SETUP.md` and, unlike it, obeys this project's own
+rule against measuring in the editor.
 
 **R2 gate: passed.** Eighty contacts at the harness circuit's 18-point spline cost 0.5053 ms on the
 worst of three runs, 3.03 % of a 60 Hz frame, comfortably inside any reading of the gate.
