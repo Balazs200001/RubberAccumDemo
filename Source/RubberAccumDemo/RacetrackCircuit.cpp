@@ -12,6 +12,34 @@
 #include "SurfaceTrackRibbon.h"
 #include "UObject/ConstructorHelpers.h"
 
+namespace RacetrackLayouts
+{
+	constexpr double CorneringSampleSpacing = 150.0;
+	constexpr int32 MaximumCorneringSamples = 4096;
+
+	const FVector2D SpaCentreline[] = {
+		{258, 622}, {215, 660}, {160, 715}, {110, 765}, {75, 795},
+		{48, 800}, {35, 775}, {42, 745}, {75, 700}, {110, 655},
+		{150, 600}, {185, 550}, {205, 490}, {215, 440}, {235, 400},
+		{270, 370}, {310, 330}, {350, 290}, {420, 240}, {520, 180},
+		{620, 130}, {720, 90}, {830, 55}, {930, 30}, {1020, 22},
+		{1075, 40}, {1105, 75}, {1145, 85}, {1190, 60}, {1240, 40},
+		{1300, 45}, {1350, 75}, {1372, 120}, {1360, 165}, {1320, 190},
+		{1270, 195}, {1180, 215}, {1080, 255}, {990, 290}, {920, 320},
+		{890, 370}, {905, 420}, {960, 450}, {1050, 470}, {1150, 490},
+		{1225, 515}, {1240, 560}, {1200, 590}, {1160, 605}, {1200, 640},
+		{1270, 665}, {1330, 685}, {1340, 730}, {1310, 780}, {1250, 815},
+		{1180, 838}, {1100, 845}, {1030, 835}, {975, 800}, {950, 740},
+		{945, 670}, {940, 600}, {900, 545}, {830, 505}, {760, 478},
+		{700, 468}, {620, 480}, {540, 505}, {470, 530}, {420, 545},
+		{385, 552}, {370, 585}, {360, 620}, {352, 650}, {320, 645},
+		{290, 632}
+	};
+}
+
+using RacetrackLayouts::CorneringSampleSpacing;
+using RacetrackLayouts::MaximumCorneringSamples;
+
 ARacetrackCircuit::ARacetrackCircuit()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -147,6 +175,7 @@ void ARacetrackCircuit::OnConstruction(const FTransform& Transform)
 	Super::OnConstruction(Transform);
 
 	GenerateTrackSpline();
+	BuildCorneringProfile();
 	GenerateRoadMesh();
 }
 
@@ -262,38 +291,45 @@ void ARacetrackCircuit::PostInitializeComponents()
 	Subsystem->ConfigureTrackRibbon(Spline, Ribbon);
 }
 
-void ARacetrackCircuit::GenerateTrackSpline()
+void ARacetrackCircuit::BuildStadiumPoints(TArray<FVector>& OutPoints) const
 {
-	if (Spline == nullptr)
-	{
-		return;
-	}
-
 	const int32 PointsPerHalfCorner = FMath::Max(PointsPerCorner, 1);
 	const double HalfLength = StraightLength * 0.5;
 
-	TArray<FVector> Points;
-	Points.Reserve(2 * PointsPerHalfCorner + 3);
+	OutPoints.Reserve(2 * PointsPerHalfCorner + 3);
 
-	Points.Add(FVector(-HalfLength, CornerRadius, 0.0));
-	Points.Add(FVector(HalfLength, CornerRadius, 0.0));
+	OutPoints.Add(FVector(-HalfLength, CornerRadius, 0.0));
+	OutPoints.Add(FVector(HalfLength, CornerRadius, 0.0));
 
 	const FVector RightCornerCentre(HalfLength, 0.0, 0.0);
 	for (int32 Step = 1; Step <= PointsPerHalfCorner; ++Step)
 	{
 		const double Angle = FMath::DegreesToRadians(90.0 - 180.0 * Step / PointsPerHalfCorner);
-		Points.Add(RightCornerCentre + FVector(CornerRadius * FMath::Cos(Angle), CornerRadius * FMath::Sin(Angle), 0.0));
+		OutPoints.Add(RightCornerCentre + FVector(CornerRadius * FMath::Cos(Angle), CornerRadius * FMath::Sin(Angle), 0.0));
 	}
 
-	Points.Add(FVector(-HalfLength, -CornerRadius, 0.0));
+	OutPoints.Add(FVector(-HalfLength, -CornerRadius, 0.0));
 
 	const FVector LeftCornerCentre(-HalfLength, 0.0, 0.0);
 	for (int32 Step = 1; Step < PointsPerHalfCorner; ++Step)
 	{
 		const double Angle = FMath::DegreesToRadians(-90.0 - 180.0 * Step / PointsPerHalfCorner);
-		Points.Add(LeftCornerCentre + FVector(CornerRadius * FMath::Cos(Angle), CornerRadius * FMath::Sin(Angle), 0.0));
+		OutPoints.Add(LeftCornerCentre + FVector(CornerRadius * FMath::Cos(Angle), CornerRadius * FMath::Sin(Angle), 0.0));
 	}
+}
 
+void ARacetrackCircuit::BuildAuthoredLayoutPoints(TArray<FVector>& OutPoints) const
+{
+	OutPoints.Reserve(UE_ARRAY_COUNT(RacetrackLayouts::SpaCentreline));
+
+	for (const FVector2D& Point : RacetrackLayouts::SpaCentreline)
+	{
+		OutPoints.Add(FVector(-Point.Y, Point.X, 0.0));
+	}
+}
+
+void ARacetrackCircuit::ApplySplinePoints(const TArray<FVector>& Points)
+{
 	Spline->ClearSplinePoints(false);
 
 	for (int32 Index = 0; Index < Points.Num(); ++Index)
@@ -303,6 +339,107 @@ void ARacetrackCircuit::GenerateTrackSpline()
 	}
 
 	Spline->SetClosedLoop(true, true);
+}
+
+void ARacetrackCircuit::GenerateTrackSpline()
+{
+	if (Spline == nullptr)
+	{
+		return;
+	}
+
+	TArray<FVector> Points;
+
+	if (Layout == ETrackLayout::Stadium)
+	{
+		BuildStadiumPoints(Points);
+		ApplySplinePoints(Points);
+		return;
+	}
+
+	BuildAuthoredLayoutPoints(Points);
+	ApplySplinePoints(Points);
+
+	const double AuthoredLength = GetTrackLength();
+
+	if (AuthoredLength <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const double Scale = AuthoredLayoutLapLength / AuthoredLength;
+	FVector Centre = FVector::ZeroVector;
+
+	for (const FVector& Point : Points)
+	{
+		Centre += Point;
+	}
+
+	Centre /= Points.Num();
+
+	for (FVector& Point : Points)
+	{
+		Point = (Point - Centre) * Scale;
+	}
+
+	ApplySplinePoints(Points);
+}
+
+void ARacetrackCircuit::SetLayout(ETrackLayout NewLayout, double NewLapLength)
+{
+	Layout = NewLayout;
+	AuthoredLayoutLapLength = NewLapLength;
+
+	GenerateTrackSpline();
+	BuildCorneringProfile();
+	GenerateRoadMesh();
+}
+
+void ARacetrackCircuit::BuildCorneringProfile()
+{
+	CorneringProfile.Reset();
+
+	const double Length = GetTrackLength();
+
+	if (Spline == nullptr || Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const int32 SampleCount = FMath::Clamp(
+		FMath::RoundToInt32(Length / CorneringSampleSpacing), 16, MaximumCorneringSamples);
+
+	const double Spacing = Length / SampleCount;
+
+	CorneringProfile.Reserve(SampleCount);
+
+	double TightestCurvature = 0.0;
+
+	for (int32 Sample = 0; Sample < SampleCount; ++Sample)
+	{
+		const double Distance = Spacing * Sample;
+
+		const FVector Behind = Spline->GetDirectionAtDistanceAlongSpline(
+			static_cast<float>(WrapDistance(Distance - Spacing)), ESplineCoordinateSpace::Local);
+
+		const FVector Ahead = Spline->GetDirectionAtDistanceAlongSpline(
+			static_cast<float>(WrapDistance(Distance + Spacing)), ESplineCoordinateSpace::Local);
+
+		const double Curvature = (Ahead - Behind).Size() / (2.0 * Spacing);
+
+		CorneringProfile.Add(Curvature);
+		TightestCurvature = FMath::Max(TightestCurvature, Curvature);
+	}
+
+	if (TightestCurvature <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	for (double& Entry : CorneringProfile)
+	{
+		Entry = FMath::Clamp(Entry / TightestCurvature, 0.0, 1.0);
+	}
 }
 
 double ARacetrackCircuit::GetTrackLength() const
@@ -356,13 +493,16 @@ FVector ARacetrackCircuit::GetWorldDirectionAtDistance(double DistanceAlongTrack
 
 double ARacetrackCircuit::GetCorneringAmountAtDistance(double DistanceAlongTrack) const
 {
-	if (Spline == nullptr || GetTrackLength() <= UE_DOUBLE_SMALL_NUMBER)
+	const double Length = GetTrackLength();
+
+	if (CorneringProfile.Num() == 0 || Length <= UE_DOUBLE_SMALL_NUMBER)
 	{
 		return 0.0;
 	}
 
-	const FVector Local = Spline->GetLocationAtDistanceAlongSpline(
-		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::Local);
+	const double Position = WrapDistance(DistanceAlongTrack) / Length * CorneringProfile.Num();
+	const int32 Index = FMath::Clamp(FMath::FloorToInt32(Position), 0, CorneringProfile.Num() - 1);
+	const int32 NextIndex = (Index + 1) % CorneringProfile.Num();
 
-	return FMath::Abs(Local.X) > StraightLength * 0.5 ? 1.0 : 0.0;
+	return FMath::Lerp(CorneringProfile[Index], CorneringProfile[NextIndex], Position - Index);
 }

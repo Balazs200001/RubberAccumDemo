@@ -8,6 +8,13 @@ class ASplineFollowingCar;
 class UProceduralMeshComponent;
 class USplineComponent;
 
+UENUM()
+enum class ETrackLayout : uint8
+{
+	Stadium,
+	Spa
+};
+
 UCLASS()
 class ARacetrackCircuit : public AActor
 {
@@ -40,6 +47,8 @@ public:
 
 	double GetCorneringAmountAtDistance(double DistanceAlongTrack) const;
 
+	void SetLayout(ETrackLayout NewLayout, double NewLapLength);
+
 	double GetCornerRadius() const
 	{
 		return CornerRadius;
@@ -51,6 +60,12 @@ public:
 	}
 
 protected:
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
+	ETrackLayout Layout = ETrackLayout::Stadium;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "10000.0"))
+	double AuthoredLayoutLapLength = 150000.0;
+
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "500.0"))
 	double StraightLength = 6000.0;
 
@@ -97,6 +112,14 @@ private:
 
 	void GenerateTrackSpline();
 
+	void BuildStadiumPoints(TArray<FVector>& OutPoints) const;
+
+	void BuildAuthoredLayoutPoints(TArray<FVector>& OutPoints) const;
+
+	void ApplySplinePoints(const TArray<FVector>& Points);
+
+	void BuildCorneringProfile();
+
 	void GenerateRoadMesh();
 
 	void BindAccumulationTargetToRoad();
@@ -106,4 +129,6 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UProceduralMeshComponent> Road;
+
+	TArray<double> CorneringProfile;
 };
