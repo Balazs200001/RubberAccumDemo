@@ -128,7 +128,7 @@ protected:
 	ETrackLayout Layout = ETrackLayout::Stadium;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "10000.0"))
-	double AuthoredLayoutLapLength = 48000.0;
+	double AuthoredLayoutLapLength = 180000.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "0.0"))
 	double ElevationExaggeration = 2.5;

@@ -326,11 +326,11 @@ bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(cons
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon,
-	"RubberAccumDemo.Track.SpaLayoutFitsTheUnfoldedRibbon",
+	FRacetrackCircuitSpaLayoutFoldsIntoFourRows,
+	"RubberAccumDemo.Track.SpaLayoutFoldsIntoFourRows",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon::RunTest(const FString& Parameters)
+bool FRacetrackCircuitSpaLayoutFoldsIntoFourRows::RunTest(const FString& Parameters)
 {
 	UWorld* World = FindRenderableWorld();
 
@@ -361,14 +361,18 @@ bool FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon::RunTest(const FString& Par
 	Ribbon.CentimetresPerTexel = Track->GetSurfaceCentimetresPerTexel();
 
 	AddInfo(FString::Printf(
-		TEXT("Spa layout: %.1f cm of lap at %.1f cm wide, %.6f cm per texel, %d x %d texels, %lld bytes at "
-			"RGBA16f, and a %.1f cm contact patch stores as %.2f texels"),
+		TEXT("Spa layout: %.1f cm of lap at %.1f cm wide, %.6f cm per texel, %d x %d texels in %d rows of %d, "
+			"allocating %d x %d for %lld bytes at RGBA16f, and a %.1f cm contact patch stores as %.2f texels"),
 		Length,
 		Ribbon.TrackWidth,
 		Ribbon.CentimetresPerTexel,
 		Ribbon.AlongTrackTexels(),
 		Ribbon.AcrossTrackTexels(),
-		Ribbon.TexelCount() * 8,
+		Ribbon.RowCount(),
+		Ribbon.TexelsPerRow(),
+		Ribbon.AtlasWidth(),
+		Ribbon.AtlasHeight(),
+		Ribbon.AtlasTexelCount() * 8,
 		MarkWidth,
 		Ribbon.WorldDistanceToTexels(MarkWidth)));
 
@@ -376,23 +380,31 @@ bool FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon::RunTest(const FString& Par
 		TEXT("The rescale lands the lap within one percent of the requested length"),
 		FMath::IsNearlyEqual(Length, RequestedLapLength, RequestedLapLength * 0.01));
 
-	TestTrue(TEXT("The Spa layout fits the ribbon unfolded"), Ribbon.FitsUnfolded());
+	TestEqual(TEXT("The Spa layout folds into four rows"), Ribbon.RowCount(), 4);
+	TestTrue(TEXT("The folded Spa layout fits the texture cap"), Ribbon.FitsTheTextureCap());
 
 	AddInfo(FString::Printf(
-		TEXT("The along-track axis uses %d of the %d texel maximum, leaving %d of margin against a rescale "
-			"landing a fraction long"),
-		Ribbon.AlongTrackTexels(),
+		TEXT("A row uses %d of the %d texel maximum, leaving %d of margin against a rescale landing a "
+			"fraction long"),
+		Ribbon.TexelsPerRow(),
 		FSurfaceTrackRibbon::MaximumTexelsPerRow,
-		FSurfaceTrackRibbon::MaximumTexelsPerRow - Ribbon.AlongTrackTexels()));
+		FSurfaceTrackRibbon::MaximumTexelsPerRow - Ribbon.TexelsPerRow()));
 
 	TestTrue(
-		TEXT("The along-track axis keeps real margin under the maximum rather than sitting on it, so a lap "
-			"that rescales a fraction long cannot push the ceil over the cap and refuse the allocation"),
-		Ribbon.AlongTrackTexels() <= FSurfaceTrackRibbon::MaximumTexelsPerRow - 512);
+		TEXT("A row keeps real margin under the maximum rather than sitting on it, so a lap that rescales a "
+			"fraction long cannot push the ceil over the cap and refuse the allocation"),
+		Ribbon.TexelsPerRow() <= FSurfaceTrackRibbon::MaximumTexelsPerRow - 512);
+
+	const int64 CommittedBytes = 117964800ll;
+	const int64 AllocatedBytes = Ribbon.AtlasTexelCount() * 8;
 
 	TestTrue(
-		TEXT("The buffer stays inside the 32 MiB default that phase B committed to"),
-		Ribbon.TexelCount() * 8 <= 32ll * 1024ll * 1024ll);
+		FString::Printf(
+			TEXT("The buffer allocates the %lld bytes C9 committed to, give or take what the measured rescale "
+				"moves the ceil by, got %lld"),
+			CommittedBytes,
+			AllocatedBytes),
+		FMath::Abs(AllocatedBytes - CommittedBytes) <= CommittedBytes / 100);
 
 	const FVector Start = Track->GetWorldPositionAtDistance(0.0, 0.0);
 	const FVector AfterOneLap = Track->GetWorldPositionAtDistance(Length, 0.0);
@@ -1844,12 +1856,12 @@ bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FStr
 		return false;
 	}
 
-	constexpr int64 CommittedBudgetBytes = 32ll * 1024ll * 1024ll;
+	constexpr int64 CommittedBudgetBytes = 118ll * 1024ll * 1024ll;
 
 	const double CentimetresPerTexel = Track->GetSurfaceCentimetresPerTexel();
 	const double MarkWidth = GetDefault<ASplineFollowingCar>()->GetContactWidth();
 
-	AddInfo(TEXT("layout | lap cm | along | across | bytes | MiB | mark texels | tightest radius vs half width"));
+	AddInfo(TEXT("layout | lap cm | along | across | rows | atlas | bytes | MiB | mark texels | tightest radius vs half width"));
 
 	for (const ETrackLayout Layout : { ETrackLayout::Stadium, ETrackLayout::Spa })
 	{
@@ -1860,16 +1872,19 @@ bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FStr
 		Ribbon.TrackWidth = Track->GetTrackWidth();
 		Ribbon.CentimetresPerTexel = CentimetresPerTexel;
 
-		const int64 Bytes = Ribbon.TexelCount() * 8;
+		const int64 Bytes = Ribbon.AtlasTexelCount() * 8;
 		const double TightestRadius = TightestRadiusOverAChord(*Track, Track->GetRoadSegmentLength());
 		const double HalfWidth = Track->GetTrackWidth() * 0.5;
 
 		AddInfo(FString::Printf(
-			TEXT("%s | %.0f | %d | %d | %lld | %.2f | %.2f | %.0f vs %.0f, ratio %.2f"),
+			TEXT("%s | %.0f | %d | %d | %d | %d x %d | %lld | %.2f | %.2f | %.0f vs %.0f, ratio %.2f"),
 			Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
 			Ribbon.TrackLength,
 			Ribbon.AlongTrackTexels(),
 			Ribbon.AcrossTrackTexels(),
+			Ribbon.RowCount(),
+			Ribbon.AtlasWidth(),
+			Ribbon.AtlasHeight(),
 			Bytes,
 			Bytes / (1024.0 * 1024.0),
 			Ribbon.WorldDistanceToTexels(MarkWidth),
@@ -1879,14 +1894,14 @@ bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FStr
 
 		TestTrue(
 			FString::Printf(
-				TEXT("The %s layout fits the unfolded ribbon at %.6f cm per texel"),
+				TEXT("The %s layout folds to an atlas inside the texture cap at %.6f cm per texel"),
 				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
 				CentimetresPerTexel),
-			Ribbon.FitsUnfolded());
+			Ribbon.FitsTheTextureCap());
 
 		TestTrue(
 			FString::Printf(
-				TEXT("The %s layout stays inside the 32 MiB default phase B committed to, at %lld bytes"),
+				TEXT("The %s layout stays inside the 118 MiB default C9 committed to, at %lld bytes"),
 				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
 				Bytes),
 			Bytes <= CommittedBudgetBytes);
