@@ -563,9 +563,11 @@ bool FSplineFollowingCarDriversTakeDifferentLinesThroughACorner::RunTest(const F
 		TEXT("A driver with no line commitment keeps its baseline offset through the corner"),
 		FMath::IsNearlyEqual(UncommittedAlpha, SharedBaselineAlpha, 0.01));
 
+	const double ApexSide = FMath::Sign(Track->GetSignedCorneringAtDistance(CornerDistance));
+
 	TestTrue(
-		TEXT("A committed driver gives up most of its baseline offset through the corner"),
-		CommittedAlpha < SharedBaselineAlpha * 0.25);
+		TEXT("A committed driver crosses to the inside of the corner rather than to the centreline"),
+		CommittedAlpha * ApexSide > 0.2);
 
 	TestTrue(
 		TEXT("Two drivers on the same baseline take measurably different lines, which is what spreads traffic"),
