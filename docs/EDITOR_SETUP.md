@@ -628,3 +628,74 @@ its root and the plane is a child, so the actor's transform and the region-deriv
 compete for the same slot. Measured bounds after the fix are -10000 to +10000 on both axes, which
 is the region size derived rather than typed. That is the point of the rig owning the surface at
 all: the plane cannot silently disagree with the region it is displaying.
+
+## 2026-09-23 — a read-time blur on the sampled buffer
+
+### `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+
+Asset: `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+Change: modified
+Why: at the production density a texel is 9.765625 cm, and the road is viewed close enough that
+individual texels read as blocks. Density cannot be raised to fix it — 2.44 cm per texel would need
+about 61440 texels along a 1500 m lap against the 16384 limit that already forced the layout down to
+1500 m. So the coarseness is a consequence of the storage ceiling and has to be softened when the
+buffer is read, not when it is stored.
+Made via: `MaterialTools.add_expression` x4, `ObjectTools.set_properties`, `connect_expressions` x6,
+`recompile`, `AssetTools.save_assets`
+
+Nodes added:
+
+| Node | Purpose |
+|---|---|
+| `MaterialExpressionCustom_0` | `BlurredExposure`, `CMOT_Float3`, 3x3 tent over nine taps |
+| `MaterialExpressionTextureProperty_0` | `TMTM_TexelSize`, fed by the `AccumulationTarget` input |
+| `MaterialExpressionScalarParameter_0` | `SurfaceBlurTexels`, default 1.0, group `Racetrack Surface` |
+| `MaterialExpressionTextureObject_0` | `T_EmptyAccumulation`, into the function input's `Preview` pin |
+
+`MaterialExpressionMultiply_1`'s `A` input moved from `MaterialExpressionTextureSample_0`'s `RGB`
+to the custom node. `TextureSample_0` is left in the graph, dangling, for the same reason the
+world-position chain was left on 2026-09-23: `delete_expression` halts the editor on a
+MaterialFunction.
+
+Three choices in here worth defending:
+
+- **The blur is applied to exposure, not to coverage.** It is spliced in before the
+  `x SaturationConstant -> x -1 -> Exp -> OneMinus` chain, so the function still evaluates
+  `1 - exp(-k * E)`, now on a locally averaged `E`. Averaging after the curve would be averaging
+  saturated values, which is not a quantity that means anything. Averaging exposure is also the
+  physically sensible reading: a contact patch spread over slightly more surface.
+- **Offsets come from `TextureProperty` set to `TMTM_TexelSize`, not a typed constant.** That
+  property returns texel size in UV space, which on a 15360 x 123 ribbon is wildly different per
+  axis — and that is exactly right, because texels are square in world space. A single hardcoded
+  offset would smear the mark along the track and barely blur it across.
+- **The radius is a parameter, defaulting to 1 texel.** `SurfaceBlurTexels = 0` reproduces the
+  previous look exactly, so the blur can be switched off to prove it is not hiding anything. Note
+  that this puts a sampling-quality knob in the plugin's deliverable function rather than in the
+  host's debug material. The alternative — blurring inside `M_SurfaceAccumulationDebug` — would
+  require duplicating the saturation curve outside the one place that owns it, which is the failure
+  the fail-loud collection default exists to catch.
+
+**A compile warning was fixed on the way, and it is not established whether it was pre-existing.**
+After the first recompile, an autosave logged `Failed to compile Material for platform PCD3D_SM6`
+against `MF_SampleRacetrackSurface.uasset`. That is the MaterialFunction's own preview material,
+not the shipped shader: `M_SurfaceAccumulationDebug` recompiled clean before and after. The cause
+is that the `AccumulationTarget` function input's `Preview` pin was unconnected and
+`TextureSample_0` carries no default texture of its own (`Texture: None`), so a preview compile had
+no texture to sample. Wiring `T_EmptyAccumulation` into that `Preview` pin — the job that asset was
+created for — stopped the warning recurring on save. Whether the custom node introduced the failure
+or merely exposed a pre-existing one could not be settled: the only logs from before the edit are
+`-game` and headless runs, and neither compiles an editor preview material at all.
+
+### What was verified, and what was not
+
+Verified: the wiring, by reading every input back after connecting it; that
+`M_SurfaceAccumulationDebug` recompiles without error; that the warning above does not recur on
+save; that `is_dirty` returns false rather than trusting the save's return value; and that the
+circuit renders with twenty cars in a PIE session on `L_SpaHarness`.
+
+Not verified: that the blur looks better, or that it visibly softens a texel edge. A PIE session
+was run for about four minutes and the road was still within a few percent of zero coverage, which
+is what the deposition rate predicts — the runtime log states 63 % coverage at roughly 17 laps with
+twenty cars. Raising `r.RacetrackSurface.DepositionScale` would have made this visible in seconds,
+and no MCP tool can set a console variable, which is the same gap recorded on 2026-09-22. Judging
+it needs a human in a play session pressing `]`.
