@@ -57,11 +57,30 @@ void ASplineFollowingCar::ResizeCarMesh()
 		DesiredCarHeight / MeshSize.Z));
 }
 
+void ASplineFollowingCar::ConfigureDriver(
+	ARacetrackCircuit* InTrack,
+	double InStartingDistanceAlongTrack,
+	double InBaselineLateralOffsetAlpha,
+	double InCorneringLineCommitment)
+{
+	Track = InTrack;
+	StartingDistanceAlongTrack = InStartingDistanceAlongTrack;
+	BaselineLateralOffsetAlpha = InBaselineLateralOffsetAlpha;
+	CorneringLineCommitment = InCorneringLineCommitment;
+
+	PlaceOnTrack();
+}
+
+void ASplineFollowingCar::PlaceOnTrack()
+{
+	DistanceAlongTrack = StartingDistanceAlongTrack;
+	LateralOffsetAlpha = BaselineLateralOffsetAlpha;
+	SpeedCentimetresPerSecond = StraightLineSpeedCentimetresPerSecond;
+}
+
 void ASplineFollowingCar::BeginPlay()
 {
 	Super::BeginPlay();
-
-	DistanceAlongTrack = StartingDistanceAlongTrack;
 
 	if (Track == nullptr)
 	{
@@ -76,13 +95,15 @@ void ASplineFollowingCar::BeginPlay()
 	{
 		UE_LOG(LogTemp, Warning, TEXT("%s found no ARacetrackCircuit in the level to follow"), *GetName());
 	}
+
+	PlaceOnTrack();
 }
 
 void ASplineFollowingCar::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (Track == nullptr)
+	if (Track == nullptr || DeltaSeconds <= UE_SMALL_NUMBER)
 	{
 		return;
 	}
@@ -94,6 +115,30 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		return;
 	}
 
+	const double CorneringAmount = FMath::Max(
+		Track->GetCorneringAmountAtDistance(DistanceAlongTrack),
+		Track->GetCorneringAmountAtDistance(DistanceAlongTrack + BrakingLookaheadCentimetres));
+
+	const double TargetSpeed = StraightLineSpeedCentimetresPerSecond
+		* FMath::Lerp(1.0, CorneringSpeedFraction, CorneringAmount);
+
+	SpeedCentimetresPerSecond = FMath::FInterpConstantTo(
+		SpeedCentimetresPerSecond,
+		TargetSpeed,
+		DeltaSeconds,
+		SpeedChangeCentimetresPerSecondSquared);
+
+	const double TargetLateralOffsetAlpha =
+		BaselineLateralOffsetAlpha * (1.0 - CorneringLineCommitment * CorneringAmount);
+
+	const double PreviousLateralOffsetAlpha = LateralOffsetAlpha;
+
+	LateralOffsetAlpha = FMath::FInterpConstantTo(
+		LateralOffsetAlpha,
+		TargetLateralOffsetAlpha,
+		DeltaSeconds,
+		LineChangeAlphaPerSecond);
+
 	DistanceAlongTrack += SpeedCentimetresPerSecond * DeltaSeconds;
 
 	const FVector Position = Track->GetWorldPositionAtDistance(DistanceAlongTrack, LateralOffsetAlpha);
@@ -102,11 +147,14 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 	SetActorLocation(Position);
 	SetActorRotation(Direction.Rotation());
 
-	Subsystem->RegisterSurfaceContactInTrackSpace(
-		DistanceAlongTrack,
-		LateralOffsetAlpha,
-		SpeedCentimetresPerSecond,
-		SlipAmount,
-		ContactWidth,
-		Channel);
+	FSurfaceTrackContact Contact;
+	Contact.Coordinate.DistanceAlongCentreline = DistanceAlongTrack;
+	Contact.Coordinate.LateralOffsetAlpha = LateralOffsetAlpha;
+	Contact.CentimetresPerSecondAlongCentreline = SpeedCentimetresPerSecond;
+	Contact.LateralOffsetAlphaPerSecond = (LateralOffsetAlpha - PreviousLateralOffsetAlpha) / DeltaSeconds;
+	Contact.SlipAmount = FMath::Lerp(StraightSlipAmount, CorneringSlipAmount, static_cast<float>(CorneringAmount));
+	Contact.ContactWidth = ContactWidth;
+	Contact.Channel = Channel;
+
+	Subsystem->RegisterSurfaceContactInTrackSpace(Contact);
 }
