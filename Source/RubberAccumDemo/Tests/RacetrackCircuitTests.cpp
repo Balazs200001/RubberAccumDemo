@@ -1854,6 +1854,108 @@ bool FRacetrackCircuitNoWheelFallsOffTheRibbon::RunTest(const FString& Parameter
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitRoadNeverPassesThroughItself,
+	"RubberAccumDemo.Track.RoadNeverPassesThroughItself",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitRoadNeverPassesThroughItself::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	const double Step = Track->GetRoadSegmentLength();
+	const double HalfWidth = Track->GetTrackWidth() * 0.5;
+
+	AddInfo(TEXT("layout | tightest edge | advance per ring | implied radius | radius vs half width"));
+
+	for (const ETrackLayout Layout : { ETrackLayout::Stadium, ETrackLayout::Spa })
+	{
+		Track->SetLayout(Layout, Track->GetAuthoredLayoutLapLength());
+
+		const double Length = Track->GetTrackLength();
+		const int32 Rings = FMath::Max(FMath::RoundToInt32(Length / Step), 3);
+
+		double TightestAdvance = TNumericLimits<double>::Max();
+		double TightestAtDistance = 0.0;
+		double TightestEdgeAlpha = 0.0;
+
+		for (int32 Ring = 0; Ring < Rings; ++Ring)
+		{
+			const double Distance = Length * Ring / Rings;
+			const double NextDistance = Length * (Ring + 1) / Rings;
+			const FVector Forward = Track->GetWorldDirectionAtDistance(Distance);
+
+			for (const double Alpha : { -1.0, 1.0 })
+			{
+				const FVector Here = Track->GetWorldPositionAtDistance(Distance, Alpha);
+				const FVector Ahead = Track->GetWorldPositionAtDistance(NextDistance, Alpha);
+				const double Advance = FVector::DotProduct(Ahead - Here, Forward);
+
+				if (Advance < TightestAdvance)
+				{
+					TightestAdvance = Advance;
+					TightestAtDistance = Distance;
+					TightestEdgeAlpha = Alpha;
+				}
+			}
+		}
+
+		const double RingLength = Length / Rings;
+		const double AdvanceRatio = TightestAdvance / RingLength;
+		const double ImpliedRadius = AdvanceRatio < 1.0
+			? HalfWidth / FMath::Max(1.0 - AdvanceRatio, UE_DOUBLE_SMALL_NUMBER)
+			: TNumericLimits<double>::Max();
+
+		AddInfo(FString::Printf(
+			TEXT("%s | %s edge at %.0f cm, %.1f %% of the lap | %.2f of %.2f cm | %.0f cm | %.2f"),
+			Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+			TightestEdgeAlpha < 0.0 ? TEXT("left") : TEXT("right"),
+			TightestAtDistance,
+			100.0 * TightestAtDistance / Length,
+			TightestAdvance,
+			RingLength,
+			ImpliedRadius,
+			ImpliedRadius / HalfWidth));
+
+		TestTrue(
+			FString::Printf(
+				TEXT("The %s road never doubles back on itself: the tightest edge still advances %.2f cm per "
+					"%.2f cm ring, and a negative advance is the offset curve crossing its own centre of "
+					"curvature"),
+				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+				TightestAdvance,
+				RingLength),
+			TightestAdvance > 0.0);
+
+		TestTrue(
+			FString::Printf(
+				TEXT("The %s road keeps its inside edge off a pinch point, at %.0f cm of implied radius against "
+					"a %.0f cm half width"),
+				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+				ImpliedRadius,
+				HalfWidth),
+			ImpliedRadius > HalfWidth);
+	}
+
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget,
 	"RubberAccumDemo.Track.BothLayoutsFitTheCapAndTheMemoryBudget",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
