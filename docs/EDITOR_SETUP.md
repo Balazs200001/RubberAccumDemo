@@ -974,3 +974,69 @@ false for both plugin assets rather than trusting the save's return value.
 Not verified at the time of writing: that the folded read produces the right *picture*. The editor
 was running the pre-C9 C++ when these edits were made, so nothing had yet published a row count
 other than the collection's fail-loud 0. Nothing here has been looked at on screen.
+
+---
+
+## 2026-09-23 — Hazard: Live Coding a change to the *size* of a static array renders garbage
+
+Change: none. A misleading screenshot happened and was chased for twenty minutes.
+Why this is here: it will happen again to anyone who uses the Live Coding MCP tool to avoid a
+close-and-reopen cycle.
+
+`RacetrackLayouts::SpaCentreline` went from 77 points to 78 as part of opening up Campus. Rather
+than close the editor to build, `LiveCodingToolset.CompileLiveCoding` was used to patch the running
+editor, the level was reloaded, and the circuit was captured. The capture looked right at Campus.
+
+**A full top-down view then showed a long needle spike where the bus-stop chicane should be.**
+
+The source was not at fault, and this was established before changing anything:
+
+- All 78 points in the array were read back and compared against the original — only indices 47, 48
+  and 49 had been replaced by the four new ones, with nothing dropped or duplicated in the
+  reformatting.
+- The spline was reconstructed offline with UE's own Catmull-Rom tangent rule
+  (`tangent = (P[i+1] - P[i-1]) / 2`) and the maximum bulge of any segment away from its chord was
+  measured at **7.0 units on a 47.4 unit chord for the original points and 6.2 on the same chord
+  after the change**. A 13–15 % bulge is ordinary. Nothing remotely like a needle exists in either
+  point set.
+
+**The cause is that `UE_ARRAY_COUNT(SpaCentreline)` is a compile-time constant baked into
+`BuildAuthoredLayoutPoints`.** Live Coding patches code, and the patched function was iterating 78
+elements. Whether the data symbol it read was the relocated 78-element array or the original
+77-element one cannot be determined after the fact, but a patched loop count against an unrelocated
+array walks one element past the end and feeds whatever follows it into the spline as a point. That
+is exactly what a single wild spike looks like.
+
+**A clean build with the editor closed produces no spike**, and the same circuit then reports
+`57600 x 256 texels folded into 4 rows of 14400` where the Live Coding session reported 57601.
+
+**The rule taken from this, which extends the one already recorded on 2026-09-22.** That entry says
+Live Coding does not reliably introduce new *reflection*. This adds: **it does not reliably handle a
+change to the size of a static array either, and the failure is silent and looks like a geometry
+bug rather than a build problem.** Live Coding is for changing the body of a function. Anything that
+changes a compile-time constant — an array extent, a `constexpr`, an enum count — needs the editor
+closed and a real build.
+
+**Nothing captured from a Live Coding session should be trusted as evidence.** The Campus capture
+taken in that session was discarded for the same reason, even though it happened to be correct.
+
+---
+
+## 2026-09-23 — The `L_SpaHarness` file-size check for leaked actors no longer works
+
+Recorded because the hazard entry above it gives a size signature that is now wrong.
+
+That entry says `L_SpaHarness.umap` is 737340 bytes clean and 993171 with leaked test actors, and
+tells you to check the size after running tests with the editor open. **At the C9 configuration the
+clean map is 2047445 bytes**, so the old figures no longer separate the two cases.
+
+The reason is not leaked actors. `UProceduralMeshComponent` serialises its sections into the map,
+and the road mesh scales with the lap: `RoadSegmentLength` is 128 cm against a 180000 cm lap, which
+is **1406 rings against the 375** the interim 960 m configuration carried at 256 cm. The actor list
+was checked directly and holds fifteen actors — the template lighting and sky, one
+`RacetrackCircuit_0`, and no `ASplineFollowingCar` at all.
+
+**Check the actor list, not the file size.** `SceneTools.find_actors` with an empty name filter
+lists every actor in the level in one call, and a second `ARacetrackCircuit` or any
+`ASplineFollowingCar` is the real signature of the leak. The file size now tracks the road mesh and
+will move whenever the lap length or the segment length does.
