@@ -1,7 +1,10 @@
 #include "RacetrackCircuit.h"
 
+#include "Components/InputComponent.h"
 #include "Components/SplineComponent.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -75,6 +78,92 @@ void ARacetrackCircuit::BeginPlay()
 
 	BindAccumulationTargetToRoad();
 	SpawnField();
+	BindTimeControls();
+	PlaceObserverAboveTrack();
+}
+
+void ARacetrackCircuit::PlaceObserverAboveTrack()
+{
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (Controller == nullptr || Controller->GetPawn() == nullptr)
+	{
+		return;
+	}
+
+	const FBox Bounds = GetComponentsBoundingBox(true);
+
+	if (!Bounds.IsValid)
+	{
+		return;
+	}
+
+	const FVector Centre = Bounds.GetCenter();
+	const FVector Extent = Bounds.GetExtent();
+	const double Framing = FMath::Max(Extent.X, Extent.Y) * ObserverFramingScale;
+
+	const double Pitch = FMath::DegreesToRadians(ObserverPitchDegrees);
+	const FVector Eye(
+		Centre.X - Framing * FMath::Cos(Pitch),
+		Centre.Y,
+		Centre.Z + Framing * FMath::Sin(Pitch));
+
+	const FRotator Look(-ObserverPitchDegrees, 0.0, 0.0);
+
+	Controller->GetPawn()->SetActorLocationAndRotation(Eye, Look);
+	Controller->SetControlRotation(Look);
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s placed the observer at %s looking down %.0f degrees over a %.0f by %.0f cm circuit"),
+		*GetName(),
+		*Eye.ToCompactString(),
+		ObserverPitchDegrees,
+		Extent.X * 2.0,
+		Extent.Y * 2.0);
+}
+
+void ARacetrackCircuit::BindTimeControls()
+{
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (Controller == nullptr)
+	{
+		return;
+	}
+
+	EnableInput(Controller);
+
+	if (InputComponent == nullptr)
+	{
+		return;
+	}
+
+	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARacetrackCircuit::SpeedUpTime);
+	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARacetrackCircuit::SlowDownTime);
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("Press . to speed time up and , to slow it down, between %.2fx and %.0fx"),
+		SlowestTimeDilation,
+		FastestTimeDilation);
+}
+
+void ARacetrackCircuit::SpeedUpTime()
+{
+	ApplyTimeDilation(UGameplayStatics::GetGlobalTimeDilation(this) * TimeDilationStep);
+}
+
+void ARacetrackCircuit::SlowDownTime()
+{
+	ApplyTimeDilation(UGameplayStatics::GetGlobalTimeDilation(this) / TimeDilationStep);
+}
+
+void ARacetrackCircuit::ApplyTimeDilation(float Dilation)
+{
+	const float Clamped = FMath::Clamp(Dilation, SlowestTimeDilation, FastestTimeDilation);
+
+	UGameplayStatics::SetGlobalTimeDilation(this, Clamped);
+
+	UE_LOG(LogRacetrackSurface, Log, TEXT("Time dilation now %.2fx"), Clamped);
 }
 
 void ARacetrackCircuit::SpawnField()
@@ -330,7 +419,7 @@ void ARacetrackCircuit::BuildAuthoredLayoutPoints(TArray<FVector>& OutPoints) co
 
 	for (const FVector& Point : RacetrackLayouts::SpaCentreline)
 	{
-		OutPoints.Add(FVector(-Point.Y, Point.X, Point.Z));
+		OutPoints.Add(FVector(-Point.Y, Point.X, Point.Z * ElevationExaggeration));
 	}
 }
 
@@ -436,10 +525,10 @@ void ARacetrackCircuit::BuildCorneringProfile()
 		const double TurnAngle = FMath::Atan2(
 			FVector::CrossProduct(Behind, Ahead).Z, FVector::DotProduct(Behind, Ahead));
 
-		const double Curvature = FMath::Abs(TurnAngle) / (2.0 * Spacing);
+		const double SignedCurvature = TurnAngle / (2.0 * Spacing);
 
-		CorneringProfile.Add(Curvature);
-		TightestCurvature = FMath::Max(TightestCurvature, Curvature);
+		CorneringProfile.Add(SignedCurvature);
+		TightestCurvature = FMath::Max(TightestCurvature, FMath::Abs(SignedCurvature));
 		TotalTurningRadians += TurnAngle * 0.5;
 	}
 
@@ -448,7 +537,14 @@ void ARacetrackCircuit::BuildCorneringProfile()
 		return;
 	}
 
-	TArray<double> Ranked = CorneringProfile;
+	TArray<double> Ranked;
+	Ranked.Reserve(CorneringProfile.Num());
+
+	for (const double Entry : CorneringProfile)
+	{
+		Ranked.Add(FMath::Abs(Entry));
+	}
+
 	Ranked.Sort();
 
 	const int32 PercentileIndex = FMath::Clamp(
@@ -460,7 +556,7 @@ void ARacetrackCircuit::BuildCorneringProfile()
 
 	for (double& Entry : CorneringProfile)
 	{
-		Entry = FMath::Clamp(Entry / SustainedCurvature, 0.0, 1.0);
+		Entry = FMath::Clamp(Entry / SustainedCurvature, -1.0, 1.0);
 	}
 }
 
@@ -513,7 +609,7 @@ FVector ARacetrackCircuit::GetWorldDirectionAtDistance(double DistanceAlongTrack
 		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::World);
 }
 
-double ARacetrackCircuit::GetCorneringAmountAtDistance(double DistanceAlongTrack) const
+double ARacetrackCircuit::GetSignedCorneringAtDistance(double DistanceAlongTrack) const
 {
 	const double Length = GetTrackLength();
 
@@ -527,4 +623,9 @@ double ARacetrackCircuit::GetCorneringAmountAtDistance(double DistanceAlongTrack
 	const int32 NextIndex = (Index + 1) % CorneringProfile.Num();
 
 	return FMath::Lerp(CorneringProfile[Index], CorneringProfile[NextIndex], Position - Index);
+}
+
+double ARacetrackCircuit::GetCorneringAmountAtDistance(double DistanceAlongTrack) const
+{
+	return FMath::Abs(GetSignedCorneringAtDistance(DistanceAlongTrack));
 }

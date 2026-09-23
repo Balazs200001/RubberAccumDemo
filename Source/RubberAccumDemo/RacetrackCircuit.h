@@ -47,6 +47,8 @@ public:
 
 	double GetCorneringAmountAtDistance(double DistanceAlongTrack) const;
 
+	double GetSignedCorneringAtDistance(double DistanceAlongTrack) const;
+
 	void SetLayout(ETrackLayout NewLayout, double NewLapLength);
 
 	double GetTightestCurvature() const
@@ -75,6 +77,24 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "10000.0"))
 	double AuthoredLayoutLapLength = 150000.0;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "0.0"))
+	double ElevationExaggeration = 2.5;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Time", meta = (ClampMin = "1.01"))
+	float TimeDilationStep = 1.5f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Time", meta = (ClampMin = "0.01"))
+	float SlowestTimeDilation = 0.1f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Time", meta = (ClampMin = "1.0"))
+	float FastestTimeDilation = 20.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Observer", meta = (ClampMin = "10.0", ClampMax = "89.0"))
+	double ObserverPitchDegrees = 62.0;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Observer", meta = (ClampMin = "1.0"))
+	double ObserverFramingScale = 2.4;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "500.0"))
 	double StraightLength = 6000.0;
@@ -119,6 +139,16 @@ private:
 	double WrapDistance(double DistanceAlongTrack) const;
 
 	void SpawnField();
+
+	void BindTimeControls();
+
+	void PlaceObserverAboveTrack();
+
+	void SpeedUpTime();
+
+	void SlowDownTime();
+
+	void ApplyTimeDilation(float Dilation);
 
 	void GenerateTrackSpline();
 
