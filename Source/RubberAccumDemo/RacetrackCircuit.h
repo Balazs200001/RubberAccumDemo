@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "RacetrackCircuit.generated.h"
 
+class ASplineFollowingCar;
 class UProceduralMeshComponent;
 class USplineComponent;
 
@@ -74,8 +75,25 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UMaterialInterface> RoadMaterial;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0", ClampMax = "64"))
+	int32 CarCount = 5;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field")
+	TSubclassOf<ASplineFollowingCar> CarClass;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double DriverLateralSpread = 0.4;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double DriverLineCommitmentAtCentre = 0.2;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double DriverLineCommitmentAtEdge = 0.8;
+
 private:
 	double WrapDistance(double DistanceAlongTrack) const;
+
+	void SpawnField();
 
 	void GenerateTrackSpline();
 

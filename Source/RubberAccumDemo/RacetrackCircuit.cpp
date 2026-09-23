@@ -6,6 +6,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
+#include "SplineFollowingCar.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
@@ -30,6 +31,8 @@ ARacetrackCircuit::ARacetrackCircuit()
 	{
 		RoadMaterial = DebugSurfaceMaterial.Object;
 	}
+
+	CarClass = ASplineFollowingCar::StaticClass();
 }
 
 void ARacetrackCircuit::BeginPlay()
@@ -37,6 +40,62 @@ void ARacetrackCircuit::BeginPlay()
 	Super::BeginPlay();
 
 	BindAccumulationTargetToRoad();
+	SpawnField();
+}
+
+void ARacetrackCircuit::SpawnField()
+{
+	UWorld* World = GetWorld();
+
+	if (World == nullptr || CarClass == nullptr || CarCount <= 0)
+	{
+		return;
+	}
+
+	const double Length = GetTrackLength();
+
+	if (Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	for (int32 Index = 0; Index < CarCount; ++Index)
+	{
+		const double GridFraction = CarCount > 1 ? static_cast<double>(Index) / (CarCount - 1) : 0.5;
+		const double BaselineAlpha = FMath::Lerp(-DriverLateralSpread, DriverLateralSpread, GridFraction);
+		const double DistanceFromCentre = FMath::Abs(GridFraction * 2.0 - 1.0);
+
+		const double LineCommitment = FMath::Lerp(
+			DriverLineCommitmentAtCentre,
+			DriverLineCommitmentAtEdge,
+			DistanceFromCentre);
+
+		const double StartingDistance = Length * Index / CarCount;
+		const FTransform SpawnTransform(
+			GetWorldDirectionAtDistance(StartingDistance).Rotation(),
+			GetWorldPositionAtDistance(StartingDistance, BaselineAlpha));
+
+		ASplineFollowingCar* Car = World->SpawnActorDeferred<ASplineFollowingCar>(
+			CarClass,
+			SpawnTransform,
+			this,
+			nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+
+		if (Car == nullptr)
+		{
+			continue;
+		}
+
+		Car->ConfigureDriver(this, StartingDistance, BaselineAlpha, LineCommitment);
+		Car->FinishSpawning(SpawnTransform);
+	}
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s spawned a field of %d cars spread across %.2f of the track width"),
+		*GetName(),
+		CarCount,
+		DriverLateralSpread * 2.0);
 }
 
 void ARacetrackCircuit::BindAccumulationTargetToRoad()
