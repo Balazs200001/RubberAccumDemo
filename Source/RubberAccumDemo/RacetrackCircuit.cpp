@@ -457,6 +457,7 @@ void ARacetrackCircuit::OnConstruction(const FTransform& Transform)
 	GenerateTrackSpline();
 	BuildCorneringProfile();
 	GenerateRoadMesh();
+	PublishTrackRibbon();
 }
 
 void ARacetrackCircuit::GenerateRoadMesh()
@@ -548,6 +549,11 @@ void ARacetrackCircuit::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
 
+	PublishTrackRibbon();
+}
+
+void ARacetrackCircuit::PublishTrackRibbon()
+{
 	UWorld* World = GetWorld();
 
 	if (World == nullptr || Spline == nullptr)
@@ -674,6 +680,7 @@ void ARacetrackCircuit::SetLayout(ETrackLayout NewLayout, double NewLapLength)
 	GenerateTrackSpline();
 	BuildCorneringProfile();
 	GenerateRoadMesh();
+	PublishTrackRibbon();
 }
 
 void ARacetrackCircuit::BuildCorneringProfile()

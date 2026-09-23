@@ -41,6 +41,21 @@ public:
 		return TrackWidth;
 	}
 
+	double GetSurfaceCentimetresPerTexel() const
+	{
+		return SurfaceCentimetresPerTexel;
+	}
+
+	double GetAuthoredLayoutLapLength() const
+	{
+		return AuthoredLayoutLapLength;
+	}
+
+	double GetRoadSegmentLength() const
+	{
+		return RoadSegmentLength;
+	}
+
 	FVector GetWorldPositionAtDistance(double DistanceAlongTrack, double LateralOffsetAlpha) const;
 
 	FVector GetWorldDirectionAtDistance(double DistanceAlongTrack) const;
@@ -214,6 +229,8 @@ private:
 	void DepositSlower();
 
 	void ApplyDepositionScale(float Scale);
+
+	void PublishTrackRibbon();
 
 	void GenerateTrackSpline();
 
