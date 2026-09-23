@@ -2,12 +2,14 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Components/SplineComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
+#include "SurfaceTrackSpace.h"
 #include "../RacetrackCircuit.h"
 #include "../SplineFollowingCar.h"
 
@@ -51,6 +53,67 @@ namespace
 	double AlphaPerContactWidth(const ARacetrackCircuit& Track, const ASplineFollowingCar& Car)
 	{
 		return Car.GetContactWidth() / (Track.GetTrackWidth() * 0.5);
+	}
+
+	bool WheelLateralOffsets(
+		const ARacetrackCircuit& Track,
+		const ASplineFollowingCar& Car,
+		TArray<double>& OutAlphas)
+	{
+		const USplineComponent* Centreline = Track.GetCentreline();
+
+		if (Centreline == nullptr)
+		{
+			return false;
+		}
+
+		OutAlphas.Reset(ASplineFollowingCar::WheelCount);
+
+		for (const FVector& WheelPosition : Car.GetWheelPositions())
+		{
+			FSurfaceTrackCoordinate Coordinate;
+
+			RacetrackSurfaceTrackSpace::WorldToTrack(
+				*Centreline, Track.GetTrackWidth(), WheelPosition, Coordinate);
+
+			OutAlphas.Add(Coordinate.LateralOffsetAlpha);
+		}
+
+		return true;
+	}
+
+	double TightestRadiusOverAChord(const ARacetrackCircuit& Track, double ChordCentimetres)
+	{
+		const double Length = Track.GetTrackLength();
+		const double Chord = FMath::Max(ChordCentimetres, 1.0);
+		const int32 SampleCount = FMath::Clamp(FMath::RoundToInt32(Length / Chord), 8, 8192);
+
+		double Tightest = TNumericLimits<double>::Max();
+
+		for (int32 Sample = 0; Sample < SampleCount; ++Sample)
+		{
+			const double Distance = Length * Sample / SampleCount;
+
+			const FVector Behind = Track.GetWorldPositionAtDistance(Distance - Chord, 0.0);
+			const FVector At = Track.GetWorldPositionAtDistance(Distance, 0.0);
+			const FVector Ahead = Track.GetWorldPositionAtDistance(Distance + Chord, 0.0);
+
+			const double SideA = FVector2D(At.X - Behind.X, At.Y - Behind.Y).Size();
+			const double SideB = FVector2D(Ahead.X - At.X, Ahead.Y - At.Y).Size();
+			const double SideC = FVector2D(Ahead.X - Behind.X, Ahead.Y - Behind.Y).Size();
+
+			const double TwiceArea = FMath::Abs(
+				(At.X - Behind.X) * (Ahead.Y - Behind.Y) - (At.Y - Behind.Y) * (Ahead.X - Behind.X));
+
+			if (TwiceArea <= UE_DOUBLE_SMALL_NUMBER)
+			{
+				continue;
+			}
+
+			Tightest = FMath::Min(Tightest, SideA * SideB * SideC / (2.0 * TwiceArea));
+		}
+
+		return Tightest;
 	}
 }
 
@@ -285,27 +348,51 @@ bool FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon::RunTest(const FString& Par
 		return false;
 	}
 
-	Track->SetLayout(ETrackLayout::Spa, 150000.0);
+	const double RequestedLapLength = Track->GetAuthoredLayoutLapLength();
+
+	Track->SetLayout(ETrackLayout::Spa, RequestedLapLength);
 
 	const double Length = Track->GetTrackLength();
+	const double MarkWidth = GetDefault<ASplineFollowingCar>()->GetContactWidth();
 
 	FSurfaceTrackRibbon Ribbon;
 	Ribbon.TrackLength = Length;
 	Ribbon.TrackWidth = Track->GetTrackWidth();
-	Ribbon.CentimetresPerTexel = 9.765625;
+	Ribbon.CentimetresPerTexel = Track->GetSurfaceCentimetresPerTexel();
 
 	AddInfo(FString::Printf(
-		TEXT("Spa layout: %.1f cm of lap, %d x %d texels, %lld bytes at RGBA16f"),
+		TEXT("Spa layout: %.1f cm of lap at %.1f cm wide, %.6f cm per texel, %d x %d texels, %lld bytes at "
+			"RGBA16f, and a %.1f cm contact patch stores as %.2f texels"),
 		Length,
+		Ribbon.TrackWidth,
+		Ribbon.CentimetresPerTexel,
 		Ribbon.AlongTrackTexels(),
 		Ribbon.AcrossTrackTexels(),
-		Ribbon.TexelCount() * 8));
+		Ribbon.TexelCount() * 8,
+		MarkWidth,
+		Ribbon.WorldDistanceToTexels(MarkWidth)));
 
 	TestTrue(
 		TEXT("The rescale lands the lap within one percent of the requested length"),
-		FMath::IsNearlyEqual(Length, 150000.0, 1500.0));
+		FMath::IsNearlyEqual(Length, RequestedLapLength, RequestedLapLength * 0.01));
 
 	TestTrue(TEXT("The Spa layout fits the ribbon unfolded"), Ribbon.FitsUnfolded());
+
+	AddInfo(FString::Printf(
+		TEXT("The along-track axis uses %d of the %d texel maximum, leaving %d of margin against a rescale "
+			"landing a fraction long"),
+		Ribbon.AlongTrackTexels(),
+		FSurfaceTrackRibbon::MaximumTexelsPerRow,
+		FSurfaceTrackRibbon::MaximumTexelsPerRow - Ribbon.AlongTrackTexels()));
+
+	TestTrue(
+		TEXT("The along-track axis keeps real margin under the maximum rather than sitting on it, so a lap "
+			"that rescales a fraction long cannot push the ceil over the cap and refuse the allocation"),
+		Ribbon.AlongTrackTexels() <= FSurfaceTrackRibbon::MaximumTexelsPerRow - 512);
+
+	TestTrue(
+		TEXT("The buffer stays inside the 32 MiB default that phase B committed to"),
+		Ribbon.TexelCount() * 8 <= 32ll * 1024ll * 1024ll);
 
 	const FVector Start = Track->GetWorldPositionAtDistance(0.0, 0.0);
 	const FVector AfterOneLap = Track->GetWorldPositionAtDistance(Length, 0.0);
@@ -378,7 +465,7 @@ bool FRacetrackCircuitSpaLayoutHasGradedCorners::RunTest(const FString& Paramete
 		return false;
 	}
 
-	Track->SetLayout(ETrackLayout::Spa, 150000.0);
+	Track->SetLayout(ETrackLayout::Spa, Track->GetAuthoredLayoutLapLength());
 
 	const double Length = Track->GetTrackLength();
 
@@ -684,41 +771,229 @@ bool FSplineFollowingCarRegistersMoreSlipInACornerThanOnAStraight::RunTest(const
 
 	const double Length = Track->GetTrackLength();
 
+	float StraightSlip = 0.0f;
+	float CornerSlip = 0.0f;
+	int32 StraightContactCount = 0;
+	int32 CornerContactCount = 0;
+
 	Car->ConfigureDriver(Track, Length * StraightLapFraction, 0.0, 0.0, UnusedDriverSeed);
 	Subsystem->ResetSurface();
 	Car->Tick(TickSeconds);
 
-	if (Subsystem->GetPendingContactCount() != 1)
-	{
-		AddError(FString::Printf(
-			TEXT("Expected exactly one pending contact from one car tick, got %d"),
-			Subsystem->GetPendingContactCount()));
-		return false;
-	}
+	StraightContactCount = Subsystem->GetPendingContactCount();
 
-	const float StraightSlip = Subsystem->GetPendingContacts()[0].SlipAmount;
+	for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
+	{
+		StraightSlip = FMath::Max(StraightSlip, Contact.SlipAmount);
+	}
 
 	Car->ConfigureDriver(Track, Length * CornerLapFraction, 0.0, 0.0, UnusedDriverSeed);
 	TickCar(*Car, 30);
 	Subsystem->ResetSurface();
 	Car->Tick(TickSeconds);
 
-	if (Subsystem->GetPendingContactCount() != 1)
+	CornerContactCount = Subsystem->GetPendingContactCount();
+	CornerSlip = 1.0f;
+
+	for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
 	{
-		AddError(FString::Printf(
-			TEXT("Expected exactly one pending contact from one car tick, got %d"),
-			Subsystem->GetPendingContactCount()));
+		CornerSlip = FMath::Min(CornerSlip, Contact.SlipAmount);
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("One car tick registered %d contacts on a straight and %d in a corner, against %d wheels. The "
+			"least-slipping wheel carries %.3f in the corner against %.3f on the straight"),
+		StraightContactCount,
+		CornerContactCount,
+		ASplineFollowingCar::WheelCount,
+		CornerSlip,
+		StraightSlip));
+
+	TestEqual(
+		TEXT("One car tick registers one contact per wheel through the world-space API, not one for the car"),
+		StraightContactCount,
+		ASplineFollowingCar::WheelCount);
+
+	TestEqual(
+		TEXT("A car in a corner also registers one contact per wheel, so none is lost off the ribbon edge"),
+		CornerContactCount,
+		ASplineFollowingCar::WheelCount);
+
+	TestTrue(
+		TEXT("Even the least-slipping wheel in a corner carries more slip than any wheel on a straight, so "
+			"the comparison is about cornering rather than about a locked wheel"),
+		CornerContactCount > 0 && CornerSlip > StraightSlip);
+
+	Subsystem->ResetSurface();
+
+	Car->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSplineFollowingCarLaysFourTracksInACornerAndTwoOnAStraight,
+	"RubberAccumDemo.Car.LaysFourTracksInACornerAndTwoOnAStraight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSplineFollowingCarLaysFourTracksInACornerAndTwoOnAStraight::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
 		return false;
 	}
 
-	const float CornerSlip = Subsystem->GetPendingContacts()[0].SlipAmount;
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+	ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+
+	if (Track == nullptr || Car == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit or the car."));
+		return false;
+	}
+
+	const double MarkWidthInAlpha = AlphaPerContactWidth(*Track, *Car);
+	const double HalfWidth = Track->GetTrackWidth() * 0.5;
+	const double Wheelbase = Car->GetWheelbase();
+
+	const int32 FrontLeft = static_cast<int32>(ECarWheel::FrontLeft);
+	const int32 FrontRight = static_cast<int32>(ECarWheel::FrontRight);
+	const int32 RearLeft = static_cast<int32>(ECarWheel::RearLeft);
+
+	TArray<double> Alphas;
+
+	const double StadiumLength = Track->GetTrackLength();
+	const double SteadyCornerDistance = StadiumLength * CornerLapFraction;
+
+	Car->ConfigureDriver(Track, SteadyCornerDistance, 0.0, 0.0, UnusedDriverSeed);
+	TickCar(*Car, 120);
+
+	const bool bSteadyRead = WheelLateralOffsets(*Track, *Car, Alphas);
+
+	const double SteadyInsideSign =
+		FMath::Sign(Track->GetSignedCorneringAtDistance(Car->GetDistanceAlongTrack()));
+
+	const double SteadyOfftracking = bSteadyRead ? (Alphas[RearLeft] - Alphas[FrontLeft]) * HalfWidth : 0.0;
+	const double SteadySideSeparation = bSteadyRead ? FMath::Abs(Alphas[FrontLeft] - Alphas[FrontRight]) : 0.0;
+	const double PredictedOfftracking = Wheelbase * Wheelbase / (2.0 * Track->GetCornerRadius());
+
+	Car->ConfigureDriver(Track, 0.0, 0.0, 0.0, UnusedDriverSeed);
+	TickCar(*Car, 30);
+
+	const bool bStraightRead = WheelLateralOffsets(*Track, *Car, Alphas);
+	const double StraightSeparation = bStraightRead ? FMath::Abs(Alphas[RearLeft] - Alphas[FrontLeft]) : 0.0;
+
+	if (!bSteadyRead || !bStraightRead)
+	{
+		AddError(TEXT("The circuit reported no centreline to convert wheel positions against."));
+		Car->Destroy();
+		Track->Destroy();
+		return false;
+	}
 
 	AddInfo(FString::Printf(
-		TEXT("Registered slip %.3f on a straight against %.3f in a corner"), StraightSlip, CornerSlip));
+		TEXT("Stadium, constant %0.f cm radius, a driver holding the centreline with no line commitment so "
+			"nothing but the wheelbase separates the axles: the rear tracks %.3f cm to the %s of the front "
+			"against %.3f cm from Wheelbase squared over twice the radius. Left to right separation is "
+			"%.2f cm against a %.0f cm wheel track, and a straight gives %.3f cm"),
+		Track->GetCornerRadius(),
+		FMath::Abs(SteadyOfftracking),
+		SteadyOfftracking * SteadyInsideSign > 0.0 ? TEXT("inside") : TEXT("outside"),
+		PredictedOfftracking,
+		SteadySideSeparation * HalfWidth,
+		Car->GetWheelTrack(),
+		StraightSeparation * HalfWidth));
 
-	TestTrue(TEXT("The contact registered in a corner carries more slip than one on a straight"), CornerSlip > StraightSlip);
+	TestTrue(
+		TEXT("In steady cornering the rear axle tracks to the inside of the front, which is the offtracking "
+			"a rigid wheelbase produces and is what makes four wheels four tracks rather than two"),
+		SteadyOfftracking * SteadyInsideSign > 0.0);
 
-	Subsystem->ResetSurface();
+	TestTrue(
+		TEXT("Steady-state offtracking matches Wheelbase squared over twice the corner radius, so the pose "
+			"is the bicycle model rather than four offsets that happen to differ"),
+		FMath::IsNearlyEqual(
+			FMath::Abs(SteadyOfftracking), PredictedOfftracking, PredictedOfftracking * 0.35));
+
+	TestTrue(
+		TEXT("A car running straight lays two tracks, not four, because the front and rear wheels on one "
+			"side then sit at the same lateral offset"),
+		StraightSeparation < MarkWidthInAlpha * 0.25);
+
+	TestTrue(
+		TEXT("Left and right wheels stay a wheel track apart, so a single locked wheel is separable from "
+			"its opposite number"),
+		FMath::IsNearlyEqual(
+			SteadySideSeparation * HalfWidth, Car->GetWheelTrack(), Car->GetWheelTrack() * 0.1));
+
+	TestTrue(
+		TEXT("The wheel track is wider than a contact patch, without which four tracks could never read as "
+			"four"),
+		Car->GetWheelTrack() > Car->GetContactWidth());
+
+	Track->SetLayout(ETrackLayout::Spa, Track->GetAuthoredLayoutLapLength());
+
+	const double SpaLength = Track->GetTrackLength();
+
+	Car->ConfigureDriver(Track, 0.0, 0.0, 0.8, UnusedDriverSeed);
+
+	constexpr int32 TicksAcrossTwoLaps = 6000;
+
+	double WidestSeparation = 0.0;
+	double WidestSeparationOnAStraight = 0.0;
+	int32 SamplesOnTheSecondLap = 0;
+	int32 SamplesSeparatedByAMark = 0;
+
+	for (int32 Tick = 0; Tick < TicksAcrossTwoLaps; ++Tick)
+	{
+		Car->Tick(TickSeconds);
+
+		if (Car->GetDistanceAlongTrack() < SpaLength || !WheelLateralOffsets(*Track, *Car, Alphas))
+		{
+			continue;
+		}
+
+		const double Separation = FMath::Abs(Alphas[RearLeft] - Alphas[FrontLeft]);
+		const double Cornering = Track->GetCorneringAmountAtDistance(Car->GetDistanceAlongTrack());
+
+		++SamplesOnTheSecondLap;
+		SamplesSeparatedByAMark += Separation > MarkWidthInAlpha ? 1 : 0;
+		WidestSeparation = FMath::Max(WidestSeparation, Separation);
+
+		if (Cornering < 0.05)
+		{
+			WidestSeparationOnAStraight = FMath::Max(WidestSeparationOnAStraight, Separation);
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Spa at %.0f cm of lap, one driver over %d sampled ticks of a settled lap: the front and rear "
+			"tracks separate by at most %.2f cm, which is %.2f mark widths, and exceed one mark width over "
+			"%.1f %% of the lap. On the parts reading as straight the widest separation is %.2f cm"),
+		SpaLength,
+		SamplesOnTheSecondLap,
+		WidestSeparation * HalfWidth,
+		WidestSeparation / MarkWidthInAlpha,
+		SamplesOnTheSecondLap > 0 ? 100.0 * SamplesSeparatedByAMark / SamplesOnTheSecondLap : 0.0,
+		WidestSeparationOnAStraight * HalfWidth));
+
+	TestTrue(
+		TEXT("The lap was actually sampled rather than the car never completing one"),
+		SamplesOnTheSecondLap > 1000);
+
+	TestTrue(
+		TEXT("On the rescaled layout the front and rear tracks separate by more than a contact patch, so "
+			"four wheels store as four marks rather than two, which they would not at the old scale"),
+		WidestSeparation > MarkWidthInAlpha);
+
+	TestTrue(
+		TEXT("They stay together where the track is straight, so the separation is the corner geometry and "
+			"not a constant offset applied everywhere"),
+		WidestSeparationOnAStraight < WidestSeparation * 0.5);
 
 	Car->Destroy();
 	Track->Destroy();
@@ -1196,27 +1471,40 @@ bool FRacetrackCircuitSpawnedStripesMergeOnTheStraight::RunTest(const FString& P
 	const double Spacing = Track->GetAdjacentDriverSpacingCentimetres();
 	const double MarkWidth = Reference->GetContactWidth();
 	const double MergeTarget = MarkWidth / 4.0;
+	const double WheelTrack = Reference->GetWheelTrack();
 	const double BandWidth = 2.0 * Track->GetDriverLateralSpread() * Track->GetTrackWidth() * 0.5 + MarkWidth;
+	const double GapBetweenBands = WheelTrack - BandWidth;
+	const double WholeFeature = WheelTrack + BandWidth;
 	const double CarsOverATexel = Spacing > UE_DOUBLE_SMALL_NUMBER
 		? FMath::Min(MarkWidth / Spacing, static_cast<double>(Track->GetCarCount()))
 		: Track->GetCarCount();
 
 	AddInfo(FString::Printf(
 		TEXT("%d cars across %.4f of the track width on a %.0f cm track put adjacent baselines %.3f cm apart "
-			"against a %.1f cm mark, so the target is %.3f cm, the merged band is %.1f cm wide and a straight "
-			"texel is crossed by %.2f cars a lap"),
+			"against a %.1f cm mark, so the per-band target is %.3f cm and a straight texel is crossed by "
+			"%.2f cars a lap, each laying %d coincident wheels"),
 		Track->GetCarCount(),
 		Track->GetDriverLateralSpread() * 2.0,
 		Track->GetTrackWidth(),
 		Spacing,
 		MarkWidth,
 		MergeTarget,
+		CarsOverATexel,
+		ASplineFollowingCar::WheelsSharingATrack));
+
+	AddInfo(FString::Printf(
+		TEXT("Four wheels put a second band at the %.0f cm wheel track. Each band is %.1f cm wide, so the "
+			"two are %s by %.1f cm and the whole feature spans %.1f cm, which is %.1f %% of the track"),
+		WheelTrack,
 		BandWidth,
-		CarsOverATexel));
+		GapBetweenBands > 0.0 ? TEXT("separated") : TEXT("overlapped"),
+		FMath::Abs(GapBetweenBands),
+		WholeFeature,
+		100.0 * WholeFeature / Track->GetTrackWidth()));
 
 	TestTrue(
-		TEXT("Adjacent stripes overlap at least fourfold, so the field paints one merged band on a straight "
-			"rather than separate stripes with gaps between them"),
+		TEXT("Adjacent cars' corresponding wheels overlap at least fourfold, so each wheel band merges on a "
+			"straight rather than reading as separate stripes with gaps between them"),
 		Spacing <= MergeTarget);
 
 	TestTrue(
@@ -1225,10 +1513,392 @@ bool FRacetrackCircuitSpawnedStripesMergeOnTheStraight::RunTest(const FString& P
 		Spacing > 0.0);
 
 	TestTrue(
-		TEXT("The merged band is still a band and not the whole track"),
-		BandWidth < Track->GetTrackWidth() * 0.5);
+		TEXT("The wheel track is wider than a contact patch, so the two bands are a real second population "
+			"of marks rather than a widening of the first"),
+		WheelTrack > MarkWidth);
+
+	TestTrue(
+		TEXT("Both wheel bands together are still a feature on the track rather than the whole of it"),
+		WholeFeature < Track->GetTrackWidth() * 0.5);
 
 	Reference->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSplineFollowingCarLocksOneFrontWheelUnderBraking,
+	"RubberAccumDemo.Car.LocksOneFrontWheelUnderBraking",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSplineFollowingCarLocksOneFrontWheelUnderBraking::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("No USurfaceAccumulationSubsystem available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+	ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+	ASplineFollowingCar* Repeat = World->SpawnActor<ASplineFollowingCar>();
+
+	if (Track == nullptr || Car == nullptr || Repeat == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit or the cars."));
+		return false;
+	}
+
+	constexpr int32 LockupSeed = 77003;
+	constexpr int32 TicksAcrossManyBrakingZones = 30000;
+
+	Car->ConfigureDriver(Track, Track->GetTrackLength() * StraightLapFraction, 0.0, 0.8, LockupSeed);
+	Repeat->ConfigureDriver(Track, Track->GetTrackLength() * StraightLapFraction, 0.0, 0.8, LockupSeed);
+
+	int32 LockedTicks = 0;
+	int32 TicksWithAnyLock = 0;
+	int32 DivergentSamples = 0;
+	int32 RearLocks = 0;
+	int32 LeftLocks = 0;
+	int32 RightLocks = 0;
+	int32 SkidContacts = 0;
+	int32 BuildupContacts = 0;
+	int32 TicksWithAFullSetOfContacts = 0;
+
+	for (int32 Tick = 0; Tick < TicksAcrossManyBrakingZones; ++Tick)
+	{
+		Subsystem->ResetSurface();
+
+		Car->Tick(TickSeconds);
+		Repeat->Tick(TickSeconds);
+
+		const TOptional<ECarWheel> Locked = Car->GetLockedWheel();
+
+		if (Locked != Repeat->GetLockedWheel())
+		{
+			++DivergentSamples;
+		}
+
+		if (!Locked.IsSet())
+		{
+			continue;
+		}
+
+		++TicksWithAnyLock;
+		LockedTicks += Car->IsBraking() ? 1 : 0;
+
+		RearLocks += (Locked.GetValue() == ECarWheel::RearLeft
+			|| Locked.GetValue() == ECarWheel::RearRight) ? 1 : 0;
+
+		LeftLocks += Locked.GetValue() == ECarWheel::FrontLeft ? 1 : 0;
+		RightLocks += Locked.GetValue() == ECarWheel::FrontRight ? 1 : 0;
+
+		const TArray<FSurfaceTrackContact>& Contacts = Subsystem->GetPendingContacts();
+
+		if (Contacts.Num() != ASplineFollowingCar::WheelCount * 2)
+		{
+			continue;
+		}
+
+		++TicksWithAFullSetOfContacts;
+
+		for (int32 Index = 0; Index < ASplineFollowingCar::WheelCount; ++Index)
+		{
+			SkidContacts += Contacts[Index].Channel == EAccumulationChannel::SkidMark ? 1 : 0;
+			BuildupContacts += Contacts[Index].Channel == EAccumulationChannel::RubberBuildup ? 1 : 0;
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Over %d ticks on seed %d the car drew %d braking events and held a locked wheel for %d ticks, "
+			"all %d of them while braking. %d were front left and %d front right, %d were a rear wheel"),
+		TicksAcrossManyBrakingZones,
+		LockupSeed,
+		Car->GetBrakingDrawCount(),
+		TicksWithAnyLock,
+		LockedTicks,
+		LeftLocks,
+		RightLocks,
+		RearLocks));
+
+	AddInfo(FString::Printf(
+		TEXT("Across %d ticks where all eight contacts landed, %d went to SkidMark and %d to RubberBuildup, "
+			"so the locked wheel is %.2f of the four on average"),
+		TicksWithAFullSetOfContacts,
+		SkidContacts,
+		BuildupContacts,
+		TicksWithAFullSetOfContacts > 0
+			? static_cast<double>(SkidContacts) / TicksWithAFullSetOfContacts
+			: 0.0));
+
+	TestTrue(
+		TEXT("The car found braking zones to draw against at all"),
+		Car->GetBrakingDrawCount() > 0);
+
+	TestTrue(
+		TEXT("At least one braking event locked a wheel, so the probability is not effectively zero"),
+		TicksWithAnyLock > 0);
+
+	TestEqual(
+		TEXT("A locked wheel is only ever held while the car is braking"),
+		LockedTicks,
+		TicksWithAnyLock);
+
+	TestEqual(
+		TEXT("Only a front wheel ever locks, because this model has no trailing throttle or handbrake to "
+			"lock a rear one with"),
+		RearLocks,
+		0);
+
+	TestEqual(
+		TEXT("Two cars on the same seed lock the same wheel at the same moment, so the lockup is reproducible "
+			"from FieldRandomSeed and the grid index like everything else in the harness"),
+		DivergentSamples,
+		0);
+
+	TestEqual(
+		TEXT("Exactly one of the four wheels deposits on SkidMark while a wheel is locked"),
+		SkidContacts,
+		TicksWithAFullSetOfContacts);
+
+	TestEqual(
+		TEXT("The other three keep laying rubber rather than being suppressed by their neighbour locking"),
+		BuildupContacts,
+		TicksWithAFullSetOfContacts * (ASplineFollowingCar::WheelCount - 1));
+
+	Subsystem->ResetSurface();
+
+	Repeat->Destroy();
+	Car->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitNoWheelFallsOffTheRibbon,
+	"RubberAccumDemo.Track.NoWheelFallsOffTheRibbon",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitNoWheelFallsOffTheRibbon::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("No USurfaceAccumulationSubsystem available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	const int32 FieldSize = Track->GetCarCount();
+	const double Length = Track->GetTrackLength();
+
+	TArray<ASplineFollowingCar*> Field;
+
+	for (int32 Index = 0; Index < FieldSize; ++Index)
+	{
+		ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+
+		if (Car == nullptr)
+		{
+			AddError(TEXT("Failed to spawn a car for the field."));
+
+			for (ASplineFollowingCar* Spawned : Field)
+			{
+				Spawned->Destroy();
+			}
+
+			Track->Destroy();
+			return false;
+		}
+
+		Car->ConfigureDriver(
+			Track,
+			Length * StraightLapFraction,
+			Track->GetDriverBaselineLateralOffsetAlpha(Index),
+			Track->GetDriverLineCommitment(Index),
+			Track->GetDriverSeedForGridIndex(Index));
+
+		Field.Add(Car);
+	}
+
+	constexpr int32 TicksAcrossSeveralLaps = 6000;
+	constexpr int32 ContactDrainInterval = 500;
+
+	double WidestWheelAlpha = 0.0;
+	TArray<double> WheelAlphas;
+
+	Subsystem->ResetSurface();
+
+	for (int32 Tick = 0; Tick < TicksAcrossSeveralLaps; ++Tick)
+	{
+		for (ASplineFollowingCar* Car : Field)
+		{
+			Car->Tick(TickSeconds);
+
+			if (WheelLateralOffsets(*Track, *Car, WheelAlphas))
+			{
+				for (const double Alpha : WheelAlphas)
+				{
+					WidestWheelAlpha = FMath::Max(WidestWheelAlpha, FMath::Abs(Alpha));
+				}
+			}
+		}
+
+		if (Tick % ContactDrainInterval == ContactDrainInterval - 1)
+		{
+			const int32 DiscardedSoFar = Subsystem->GetContactsDiscardedOutsideRibbon();
+			Subsystem->ResetSurface();
+
+			if (DiscardedSoFar > 0)
+			{
+				break;
+			}
+		}
+	}
+
+	const int32 Discarded = Subsystem->GetContactsDiscardedOutsideRibbon();
+
+	AddInfo(FString::Printf(
+		TEXT("%d cars laying %d wheels each over %d ticks on a %.0f cm track put the widest wheel at alpha "
+			"%.4f, leaving %.4f of margin before a contact is discarded. Contacts discarded outside the "
+			"ribbon: %d"),
+		FieldSize,
+		ASplineFollowingCar::WheelCount,
+		TicksAcrossSeveralLaps,
+		Track->GetTrackWidth(),
+		WidestWheelAlpha,
+		1.0 - WidestWheelAlpha,
+		Discarded));
+
+	TestEqual(
+		TEXT("No wheel contact is discarded for falling outside the ribbon, which would be silent otherwise "
+			"because nothing in the running game reads the discard counter"),
+		Discarded,
+		0);
+
+	TestTrue(
+		TEXT("The widest wheel keeps real margin inside the ribbon rather than grazing the edge, which is "
+			"what sets the lower bound on track width once wheels sit off the car's own line"),
+		WidestWheelAlpha < 0.95);
+
+	Subsystem->ResetSurface();
+
+	for (ASplineFollowingCar* Car : Field)
+	{
+		Car->Destroy();
+	}
+
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget,
+	"RubberAccumDemo.Track.BothLayoutsFitTheCapAndTheMemoryBudget",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	constexpr int64 CommittedBudgetBytes = 32ll * 1024ll * 1024ll;
+
+	const double CentimetresPerTexel = Track->GetSurfaceCentimetresPerTexel();
+	const double MarkWidth = GetDefault<ASplineFollowingCar>()->GetContactWidth();
+
+	AddInfo(TEXT("layout | lap cm | along | across | bytes | MiB | mark texels | tightest radius vs half width"));
+
+	for (const ETrackLayout Layout : { ETrackLayout::Stadium, ETrackLayout::Spa })
+	{
+		Track->SetLayout(Layout, Track->GetAuthoredLayoutLapLength());
+
+		FSurfaceTrackRibbon Ribbon;
+		Ribbon.TrackLength = Track->GetTrackLength();
+		Ribbon.TrackWidth = Track->GetTrackWidth();
+		Ribbon.CentimetresPerTexel = CentimetresPerTexel;
+
+		const int64 Bytes = Ribbon.TexelCount() * 8;
+		const double TightestRadius = TightestRadiusOverAChord(*Track, Track->GetRoadSegmentLength());
+		const double HalfWidth = Track->GetTrackWidth() * 0.5;
+
+		AddInfo(FString::Printf(
+			TEXT("%s | %.0f | %d | %d | %lld | %.2f | %.2f | %.0f vs %.0f, ratio %.2f"),
+			Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+			Ribbon.TrackLength,
+			Ribbon.AlongTrackTexels(),
+			Ribbon.AcrossTrackTexels(),
+			Bytes,
+			Bytes / (1024.0 * 1024.0),
+			Ribbon.WorldDistanceToTexels(MarkWidth),
+			TightestRadius,
+			HalfWidth,
+			TightestRadius / HalfWidth));
+
+		TestTrue(
+			FString::Printf(
+				TEXT("The %s layout fits the unfolded ribbon at %.6f cm per texel"),
+				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+				CentimetresPerTexel),
+			Ribbon.FitsUnfolded());
+
+		TestTrue(
+			FString::Printf(
+				TEXT("The %s layout stays inside the 32 MiB default phase B committed to, at %lld bytes"),
+				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+				Bytes),
+			Bytes <= CommittedBudgetBytes);
+
+		TestTrue(
+			FString::Printf(
+				TEXT("A contact patch on the %s layout spans several texels rather than one or two, which is "
+					"what the rescale was for"),
+				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa")),
+			Ribbon.WorldDistanceToTexels(MarkWidth) >= 4.0);
+	}
+
 	Track->Destroy();
 
 	return true;
@@ -1455,7 +2125,10 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 	ApexHits.SetNumZeroed(LateralTexels);
 
 	constexpr int32 TicksAcrossSeveralLaps = 12000;
+	constexpr int32 ContactDrainInterval = 1000;
 	double TotalDistanceCovered = 0.0;
+
+	TArray<double> WheelAlphas;
 
 	for (int32 Tick = 0; Tick < TicksAcrossSeveralLaps; ++Tick)
 	{
@@ -1480,23 +2153,29 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 				continue;
 			}
 
-			const double Alpha = Car->GetLateralOffsetAlpha();
-
-			for (int32 Texel = 0; Texel < LateralTexels; ++Texel)
+			if (!WheelLateralOffsets(*Track, *Car, WheelAlphas))
 			{
-				const double TexelAlpha = 2.0 * (Texel + 0.5) / LateralTexels - 1.0;
+				continue;
+			}
 
-				if (FMath::Abs(Alpha - TexelAlpha) > HalfMarkInAlpha)
+			for (const double Alpha : WheelAlphas)
+			{
+				for (int32 Texel = 0; Texel < LateralTexels; ++Texel)
 				{
-					continue;
-				}
+					const double TexelAlpha = 2.0 * (Texel + 0.5) / LateralTexels - 1.0;
 
-				StraightHits[Texel] += StraightCrossings;
-				ApexHits[Texel] += ApexCrossings;
+					if (FMath::Abs(Alpha - TexelAlpha) > HalfMarkInAlpha)
+					{
+						continue;
+					}
+
+					StraightHits[Texel] += StraightCrossings;
+					ApexHits[Texel] += ApexCrossings;
+				}
 			}
 		}
 
-		if (Subsystem != nullptr && Tick % 4000 == 3999)
+		if (Subsystem != nullptr && Tick % ContactDrainInterval == ContactDrainInterval - 1)
 		{
 			Subsystem->ResetSurface();
 		}
@@ -1525,8 +2204,11 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 	const double StraightPassesPerLap = MostStraightHits / FMath::Max(LapsEachCar, UE_DOUBLE_SMALL_NUMBER);
 	const double ApexPassesPerLap = MostApexHits / FMath::Max(LapsEachCar, UE_DOUBLE_SMALL_NUMBER);
 
+	const int32 WheelsOverATexel = ASplineFollowingCar::WheelsSharingATrack;
+
 	const double PredictedStraightPasses = FMath::Clamp(
-		MarkWidth / Track->GetAdjacentDriverSpacingCentimetres(), 1.0, static_cast<double>(FieldSize));
+		MarkWidth / Track->GetAdjacentDriverSpacingCentimetres(), 1.0, static_cast<double>(FieldSize))
+		* WheelsOverATexel;
 
 	const float StraightPerContact = RacetrackSurfaceMapping::SlipToExposure(
 		Field[0]->GetStraightSlipAmount(), USurfaceAccumulationSubsystem::GetDepositionScale());
@@ -1538,20 +2220,26 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 	const double ApexExposurePerLap = ApexPassesPerLap * ApexPerContact;
 
 	AddInfo(FString::Printf(
-		TEXT("%d cars over %.2f laps, counting passes across %d lateral texels at %.4f cm each, sampled at "
-			"the middle of the longest straight and the longest apex. The busiest straight texel took %.2f "
-			"passes a lap across %d inked texels, against %.2f predicted from the stripe spacing. The "
-			"busiest apex texel took %.2f across %d inked texels, against the %d the one-texel figure assumes"),
+		TEXT("%d cars laying %d wheels each over %.2f laps, counting passes across %d lateral texels at "
+			"%.4f cm each, sampled at the middle of the longest straight and the longest apex. The busiest "
+			"straight texel took %.2f passes a lap across %d inked texels spanning %.0f cm, against %.2f "
+			"predicted from the stripe spacing times the %d wheels that share a track. The busiest apex "
+			"texel took %.2f across %d inked texels spanning %.0f cm, against the %d the one-texel figure "
+			"assumes"),
 		FieldSize,
+		ASplineFollowingCar::WheelCount,
 		LapsEachCar,
 		LateralTexels,
 		CentimetresPerTexel,
 		StraightPassesPerLap,
 		StraightTexelsInked,
+		StraightTexelsInked * CentimetresPerTexel,
 		PredictedStraightPasses,
+		WheelsOverATexel,
 		ApexPassesPerLap,
 		ApexTexelsInked,
-		FieldSize));
+		ApexTexelsInked * CentimetresPerTexel,
+		FieldSize * WheelsOverATexel));
 
 	AddInfo(FString::Printf(
 		TEXT("Measured exposure a lap: %.6f on the busiest straight texel and %.6f on the busiest apex "
@@ -1567,14 +2255,20 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 		LapsEachCar > 2.0);
 
 	TestTrue(
-		TEXT("No straight texel is crossed by the whole field, so the saturation table may not treat a "
-			"straight texel as taking every car the way an apex texel is assumed to"),
-		StraightPassesPerLap < FieldSize * 0.5);
+		TEXT("No straight texel is crossed by every wheel in the field, so the saturation table may not "
+			"treat a straight texel as taking the whole field the way an apex texel is assumed to"),
+		StraightPassesPerLap < FieldSize * WheelsOverATexel);
+
+	TestTrue(
+		TEXT("The straight count still exceeds what the static stripe spacing predicts, because the field "
+			"is bunched tighter than its baselines mid-straight while it is still lerping back from the "
+			"previous corner, so the static formula describes a steady state this layout never reaches"),
+		StraightPassesPerLap > PredictedStraightPasses);
 
 	TestTrue(
 		TEXT("No apex texel is crossed by the whole field either, so the one-texel apex figure is an upper "
 			"bound on concentration and not a prediction"),
-		ApexPassesPerLap < FieldSize);
+		ApexPassesPerLap < FieldSize * WheelsOverATexel);
 
 	TestTrue(
 		TEXT("The apex still lays more exposure a lap than the straight, so a racing line appears at all"),
