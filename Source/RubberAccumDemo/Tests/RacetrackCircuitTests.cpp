@@ -304,6 +304,44 @@ bool FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon::RunTest(const FString& Par
 
 	TestTrue(TEXT("The Spa layout is a closed loop"), Start.Equals(AfterOneLap, 1.0));
 
+	double LowestPoint = TNumericLimits<double>::Max();
+	double HighestPoint = TNumericLimits<double>::Lowest();
+	double SolidLength = 0.0;
+	double FlatLength = 0.0;
+
+	constexpr int32 ElevationSamples = 2000;
+
+	FVector Previous = Track->GetWorldPositionAtDistance(0.0, 0.0);
+
+	for (int32 Sample = 1; Sample <= ElevationSamples; ++Sample)
+	{
+		const FVector Current = Track->GetWorldPositionAtDistance(Length * Sample / ElevationSamples, 0.0);
+
+		LowestPoint = FMath::Min(LowestPoint, Current.Z);
+		HighestPoint = FMath::Max(HighestPoint, Current.Z);
+
+		SolidLength += (Current - Previous).Size();
+		FlatLength += FVector2D(Current.X - Previous.X, Current.Y - Previous.Y).Size();
+
+		Previous = Current;
+	}
+
+	const double Rise = HighestPoint - LowestPoint;
+
+	AddInfo(FString::Printf(
+		TEXT("Spa elevation: %.1f cm of rise, %.2f %% of the lap. Lap measures %.1f cm in three dimensions "
+			"against %.1f cm projected flat."),
+		Rise,
+		100.0 * Rise / Length,
+		SolidLength,
+		FlatLength));
+
+	TestTrue(TEXT("The Spa layout is not flat"), Rise > 1000.0);
+
+	TestTrue(
+		TEXT("Distance along the centreline follows the hill rather than its flat projection"),
+		SolidLength > FlatLength + 1.0);
+
 	Track->Destroy();
 
 	return true;
