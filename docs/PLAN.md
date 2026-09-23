@@ -2037,6 +2037,44 @@ crossing a row boundary is indistinguishable from one that does not; both build 
 tests passing headlessly with the editor closed; and a capture of the tightest corner showing the
 road turning cleanly.*
 
+### Measured on implementing, 2026-09-23. The arithmetic was a texel out and one prediction was backwards.
+
+All 63 automation tests pass headlessly with the editor closed and both build paths are clean. Full
+numbers in [MEASUREMENTS.md](MEASUREMENTS.md); what follows is only where this section was wrong.
+
+**The atlas is 14401 x 1024, not 14400.** The Spa rescale lands a hair over 180000 cm, so `ceil`
+gives 57601 along-track texels and each row carries one spare. **117972992 bytes, 112.51 MiB**, an
+extra 8192 bytes. The exact-division argument above is still why the configuration was chosen — it
+keeps the slack to one texel per row instead of hundreds — but the exactness does not survive a
+measured rescale, and the byte assertion in the host test is a one-percent tolerance because of it.
+The exact figure is still asserted against an exactly-constructed ribbon in the plugin's own test.
+
+**Folding did not make four tracks worse, which is what this section inherited from C8 and repeated.**
+Measured over a full settled lap the separation is **58.73 cm, 2.94 mark widths, resolvable over
+7.7 % of the lap**, against C8's 56.76 cm, 2.84 and 5.1 %. The inherited reasoning was that
+offtracking is `Wheelbase² / (2R)` and gentler corners reduce it, which is true of the steady-state
+term and wrong about which term dominates — C8 had already found the turn-in transient is larger,
+and that term scales with lateral rate rather than radius.
+
+**What the same test found instead is a real loss.** The separation no longer falls away on
+straights: on the straightest 1.5 % of the lap it is still 28.93 cm, 49 % of the corner maximum,
+where at 480 m it was comfortably under half. At this lap length the axles are separated by
+racing-line transitions rather than by centreline curvature, and the transitions are long enough to
+cover most of what the cornering profile calls straight. The "two tracks on a straight" claim now
+rests entirely on the Stadium, where there is genuinely straight track.
+
+**The test had also stopped measuring.** `TicksAcrossTwoLaps = 6000` was sized for a 480 m lap and
+sampled 773 ticks of the second lap at 1800 m. It now runs until the car has completed two laps and
+samples 5240. **Both numbers above come from the fixed loop**; the figures the broken loop produced
+were different and wrong.
+
+**Not verified.** Nothing has been looked at on screen: the road-mesh fold ratio measures 0.48
+against C8's 0.22, but whether a slow corner still passes through itself needs a capture and the map
+still carries its interim 960 m overrides. The read path went from 9 texture fetches per road pixel
+to 18 and no frame time has been taken at the new configuration. The per-stroke scissor forces a
+canvas flush on every row change, against a paint path that deliberately batches the whole frame,
+and that cost is unmeasured.
+
 ---
 
 ## Standing rules for this backlog
