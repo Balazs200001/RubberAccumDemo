@@ -1256,6 +1256,356 @@ the camera flies freely in both states.*
 
 ---
 
+## C8 — Four tyre contacts per car, and the circuit rescaled to resolve them
+
+Added 2026-09-23, outside the original scope. Requested directly, as two changes that were asked
+for together and turn out to be one change: **each car lays four separate tyre tracks rather than
+one line down its centre, and the circuit is rescaled so a single corner holds up when zoomed
+into.**
+
+They are one change because of a number worked out below: at today's scale the front and rear
+wheels of a car lay tracks **0.8 texels apart**, so four wheels would store as two. The rescale is
+what makes four wheels four.
+
+### The rescale is a one-dimensional decision, not a three-dimensional one
+
+`AuthoredLayoutLapLength`, `TrackWidth` and `SurfaceCentimetresPerTexel` look like three knobs.
+At the unfolded cap they are one.
+
+`FSurfaceTrackRibbon::MaximumTexelsPerRow` is 16384, which is the D3D 2D-texture dimension cap
+rather than a project choice, so the along-track axis cannot exceed it however the other two
+move. Spending that axis fully gives `LapLength = 16384 * CentimetresPerTexel`, and then
+
+```
+Bytes = 16384 * ceil(TrackWidth / CentimetresPerTexel) * 8
+```
+
+**Memory depends only on the across-track texel count.** Nothing else in the ribbon can move it.
+32 MiB is exactly 256 across-track texels at the cap, and today's ribbon uses 123 of them.
+
+That reframes the brief's own table. Its rows grow from 16.4 MB to 65.5 MB because they hold
+`TrackWidth` at 1200 while shortening the lap, which fattens the track relative to the layout by
+the same factor it sharpens the texel. Hold the across-track texel count instead and the memory
+is flat, and the decision reduces to: **how much circuit, against how fine a texel.**
+
+### The memory budget, which is not the 64 MB the brief provisionally allowed
+
+B4 recorded the committed default as **32.0 MiB**, and disqualified 128 MiB in terms: *"too much
+to impose by default in a plugin others install"*. 64 MB has no ruling of its own — RGBA32f at
+2048 square reached it and was disqualified on precision and decay cost rather than on bytes.
+
+Phase R then delivered the same 1500 m circuit in **15114240 bytes**, less than half the B4
+commitment, and never spent the difference. So the budget for this change is the headroom phase R
+created inside a figure phase B already signed off. **The ceiling is 32 MiB and it is not
+exceeded.**
+
+### Decided: 480 m of lap, 800 cm of track, 3.125 cm per texel
+
+Every figure is an exact ratio against what is already running, which is the reason this
+combination was chosen over several that are nearer the brief's suggestions.
+
+| | today | C8 | factor |
+|---|---|---|---|
+| `AuthoredLayoutLapLength` | 150000 cm | **48000 cm** | ÷ 3.125 |
+| `SurfaceCentimetresPerTexel` | 9.765625 | **3.125** | ÷ 3.125 |
+| `TrackWidth` | 1200 cm | **800 cm** | × 2/3 |
+| `RoadSegmentLength` | 400 cm | **128 cm** | ÷ 3.125 |
+| Along-track texels | 15360 | **15360** | unchanged |
+| Across-track texels | 123 | **256** | × 2.08 |
+| Buffer | 15114240 B, 14.41 MiB | **31457280 B, 30.00 MiB** | × 2.08 |
+| A 20 cm contact patch | 2.05 texels | **6.40 texels** | × 3.125 |
+
+`48000 / 3.125 = 15360` and `800 / 3.125 = 256`, both exact. Neither axis carries any `ceil`
+slack, which is not true today — `1200 / 9.765625 = 122.88` rounds up to 123, and the lap length
+straddles a `ceil` boundary badly enough that the same circuit has logged both 15361 and 15360
+along-track texels on different runs (`MEASUREMENTS.md`, *A correction to the recorded buffer
+size*).
+
+**The along-track extent deliberately does not change.** 15360 is the value the project already
+runs, allocates and measures, and it keeps the same 1024-texel margin under the cap.
+
+#### Why not 400 m at 2.44140625, which is the obvious candidate
+
+It is exactly four times today's density, it is the density
+`SurfaceStrokeWidthTests.cpp:68` already exercises, and `40000 / 2.44140625 = 16384` exactly. That
+last property is the reason to reject it: it lands **on** the cap, not under it. The Spa spline is
+rescaled about its centroid to hit `AuthoredLayoutLapLength` and then measured, and the measured
+result has already been seen to land a fraction either side of the requested figure. A fraction
+over here gives `ceil(16384.0001) = 16385`, `FitsUnfolded()` returns false, and
+`USurfaceAccumulationBuffer::Allocate` refuses the allocation — so the whole surface silently does
+not exist, with one `Error` in a log as the only symptom. A design that is correct only when a
+floating-point rescale rounds the right way is not a design.
+
+Rejected for the same reason: any pairing that spends the along-track axis to 16384.
+
+#### Why not keep `TrackWidth` at 1200
+
+Holding 1200 caps the density at 4.8828125 cm per texel (246 across-track texels, 32.24 MB) and a
+lap of 800 m. That is only a 2x density gain for the whole cost of the rescale, and it leaves the
+contact patch at 4.1 texels — still too few for a mark to have a profile rather than an edge.
+
+#### Why 800 cm and not 600
+
+600 cm is affordable — 246 across-track texels at 2.44140625, 28.83 MiB — and was rejected on
+headroom rather than on memory. A wheel sits 40 cm off the car's line and its contact patch
+reaches 50 cm, which is `50 / (TrackWidth/2)` in alpha. A contact outside `|alpha| <= 1` is
+**silently discarded** by `RegisterSurfaceContactInTrackSpace`, counted only in
+`ContactsDiscardedOutsideRibbon`, which nothing reads. Worst realistic car alpha is 0.735
+(baseline 0.075, commitment 0.8, apex target clamped at 0.9), and body yaw under maximum lateral
+rate adds about 0.06 more:
+
+| `TrackWidth` | outer wheel alpha at 0.735 | with maximum yaw |
+|---|---|---|
+| 600 | 0.902 | 0.961 |
+| **800** | **0.860** | **0.905** |
+| 1200 | 0.907 → 0.940 | — |
+
+600 leaves 0.039 of margin against a silent discard. 800 leaves 0.095. The test added below
+asserts the discard count is zero over a real field run, so this stops being a judgement either
+way, but the margin is the reason not to sit on the edge of it.
+
+800 cm also brackets the one proportion in the layout that can be derived rather than chosen.
+The track cannot scale with the lap — the cars are a fixed physical size, which is the harness
+convenience `EDITOR_SETUP.md` already flags — so the honest reference is **track width in car
+widths**. Real racing runs about 7.5 (15 m of Spa against a 2 m car). Today's harness runs 12.
+800 cm against the 100 cm car runs **8**.
+
+### What this supersedes
+
+**`EDITOR_SETUP.md`'s "Why 1500 m and not Spa, halved" is superseded, not contradicted.** Its
+reasoning was correct and is now answering a different question. It asked for the largest round
+lap that fits the cap *at a fixed production density of 9.7656 cm per texel*, and 1500 m was the
+right answer to that. C8 removes the fixed density from the question: the density is now chosen
+first, for what a corner has to look like close up, and the lap follows from it. Both documents
+carry the same table; only the free variable moved.
+
+Not superseded: RGBA16f, `k = 3.0`, the additive write, the C0 flush-deferral guard, the lap-seam
+split, and the ribbon shape itself.
+
+### Four wheels: the model, and why a naive one gives two tracks
+
+`ASplineFollowingCar` is a point on a spline. Its rotation is the spline tangent, it has no
+wheelbase, and adding four lateral offsets to it lays **two** tracks, because front and rear
+wheels at the same lateral offset trace the same curve. Two of the four would be exactly
+redundant.
+
+The fix is the textbook kinematic bicycle model, and it is chosen because it produces the wanted
+behaviour as a consequence rather than as a term added to get it:
+
+- **The tracked point is the rear axle.** `DistanceAlongTrack` and `LateralOffsetAlpha` describe
+  where the rear axle is. This is the standard convention and it is the one that makes the rest
+  fall out.
+- **Body heading is the rear axle's own velocity direction**, which is the no-slip rear-wheel
+  constraint. The car therefore gains a yaw independent of the spline tangent whenever it is
+  moving laterally, which it does not have today.
+- **Front axle = rear axle + heading × wheelbase.** A chord along the tangent of an arc lands
+  outside that arc, so the front axle traces radius `sqrt(R² + Wheelbase²)` while the rear traces
+  `R`. The rear cuts inside by `Wheelbase² / (2R)` with no code saying so.
+- The four wheels are then the two axles ± `WheelTrack/2` along the body's right vector.
+
+On a straight the heading is the tangent, the axles coincide laterally and the car lays **two**
+tracks. That is correct: a car going straight leaves two tyre tracks, not four. Four appear in
+corners, which is where a racing surface shows them.
+
+**This is the number that ties the rescale to the wheels.** Offtracking as a multiple of the
+contact patch is `Wheelbase² / (2 R * ContactWidth)`, which is independent of texel size and
+depends only on the corner radius — so only on the lap length:
+
+| | corner radius | offtracking | in contact patches | in texels |
+|---|---|---|---|---|
+| Today, 1500 m, fast corner | 1258 cm | 7.8 cm | 0.39 | **0.80** |
+| C8, 480 m, fast corner | 403 cm | 24.3 cm | 1.22 | **7.8** |
+| C8, 480 m, slow corner | 222 cm | 44.1 cm | 2.21 | **14.1** |
+
+Four wheels at today's scale would store as two everywhere but the very tightest corner. At
+480 m the front and rear tracks separate by one to two mark widths, which reads as two marks. The
+radii are measured from the authored centreline over an 80-unit and a 40-unit chord respectively;
+the test added below prints the real figures so these stop being arithmetic.
+
+#### Wheelbase and wheel track, and no mesh change
+
+| | value | derivation |
+|---|---|---|
+| `Wheelbase` | **140 cm** | axles at ±70 on a 220 cm body, leaving 40 cm of overhang at each end |
+| `WheelTrack` | **80 cm** | wheel centrelines at ±40 on a 100 cm body, so a 20 cm contact patch spans 30 to 50 cm and sits inside the body rather than proud of it |
+
+**The mesh does not change.** It is a scaled `/Engine/BasicShapes/Cube` standing in for a car, the
+wheels as defined sit inside it, and modelling wheel geometry is scope that was not asked for.
+`SetActorLocation` moves from the tracked point to `RearAxle + Heading * (Wheelbase / 2)`, so the
+box still straddles both axles once the tracked point becomes the rear axle rather than the
+centre.
+
+Both are `UPROPERTY` with accessors rather than file-scope constants, matching how `ContactWidth`
+is already exposed, because the tests below assert against them.
+
+### The API decision: the wheels register through the world-space boundary
+
+Priced both ways, as asked.
+
+|  | world-space `RegisterSurfaceContact` | track-space `RegisterSurfaceContactInTrackSpace` |
+|---|---|---|
+| Cost | one `FindInputKeyClosestToWorldLocation` per contact | zero spline searches, as today |
+| Geometry | correct by construction; offtracking falls out of rigid-body placement | hand-derived, needs local signed curvature in 1/cm, which nothing exposes |
+| New engine surface | none | a new curvature accessor on `ARacetrackCircuit`, and an arc-length correction `(1 - kappa * y)` for a point at lateral offset y |
+| Stroke velocity | exact, from the wheel's own previous world position | needs `omega x r` per wheel to be derived separately |
+| Seam | handled by the existing conversion | world space has no seam, but track space does |
+| Brief | exercises the engine-agnostic boundary the plugin exists to offer | does not |
+
+**Decided: world space.** Three reasons in order.
+
+1. It is the boundary the brief is about, it is what a real vehicle system would call, and
+   `PLAN.md` C7 already records that **nothing in this scene calls it** — the only callers repo-wide
+   are the Blueprint wrapper and three automation tests. Four wheels is the natural thing to
+   exercise it with.
+2. The track-space version reimplements a coordinate transform the plugin already owns, and it
+   gets the interesting part — offtracking — from hand-derived curvature rather than from
+   geometry. Per this project's stated preference, the obvious implementation over the clever one.
+3. Wheel velocity from `(Current - Previous) / dt` in world space is exact and free, and it is
+   what makes the stroke land where the wheel actually went.
+
+**The cost is real and it trips R2's own written trigger.** R2 recorded: *"Implement [the
+per-contact segment cache] when a circuit exceeds about 230 centreline spline points, **or when
+any world-space caller reaches 80 contacts per frame in a real scene**."* Twenty cars times four
+wheels is exactly 80. The Spa spline is 77 points; R2's linear-in-points result puts that near
+0.32 ms per frame, about 7 % of the measured 4.484 ms frame.
+
+`RacetrackSurface.Performance.TrackSpaceConversion` already measures both the full search and
+`FindInputKeyOnSegmentClosestToWorldLocation`, so the cache is already priced. **C8 measures the
+figure at 77 points and reports it. It does not implement the cache**, because that is plugin
+optimisation work that was not asked for and the trigger is a recommendation to the reader of
+this file, not a licence to expand scope. If the measured figure is bad, it is reported as bad.
+
+### Per-wheel slip, and what makes a wheel lock
+
+Each wheel carries its own `SlipAmount` and its own `EAccumulationChannel`. Three wheels keep the
+existing `Lerp(StraightSlipAmount, CorneringSlipAmount, CorneringAmount)` on `RubberBuildup`; a
+locked wheel carries `LockedWheelSlipAmount` on `SkidMark`.
+
+**The trigger is braking, and it reuses C6's mechanism rather than inventing one.** C6 established
+draw-once-on-a-rising-edge-and-hold, with the *release* debounced by distance because debouncing
+the draw did not work. The same shape applies here:
+
+- `BrakingAmount = clamp((Speed - TargetSpeed) / (StraightLineSpeed * (1 - CorneringSpeedFraction)), 0, 1)`,
+  which is the speed deficit normalised by the largest deficit the model can demand. Self-scaling,
+  no magic constant, and it is already computed in `Tick`.
+- On a rising edge through `BrakingEntryAmount`, draw once: whether this braking event locks a
+  wheel at all, and if so which **front** wheel. Held until the car has been below
+  `BrakingExitAmount` continuously for `SameBrakingEventSeparationCentimetres`.
+- Front only. Under braking, load transfers forward and the rear locks only on trailing throttle
+  or a handbrake, neither of which this model has.
+
+**The lockup draws from a second `FRandomStream`, not the existing one.** Seeded from the same
+`DriverSeed` through a fixed offset, so the run stays reproducible from `FieldRandomSeed` plus
+grid index exactly as before. The reason for a second stream rather than more draws on the first
+is that C6's corner-deviation distribution is a **measured** result with a recorded shape, and
+interleaving new draws into that stream would move every C6 figure for a reason unrelated to C6.
+Decorrelating costs one `FRandomStream` and keeps the earlier measurement reproducible.
+
+`LockupProbability` defaults to 0.15. That is a by-eye demo value in the same class as
+`MaxCornerDeviationAlpha`, and it is labelled as one rather than defended as derived.
+
+### The C6 stripe-merge condition, restated
+
+C6 asserted `AdjacentSpacing <= ContactWidth / 4` so that the field paints one merged band on a
+straight rather than separate stripes with gaps. Four wheels put a second population of marks at
+a fixed wheel-track offset, so that one sentence now has to be two.
+
+**Within a wheel band, the condition is unchanged, and so is the number.** Adjacent cars'
+*corresponding* wheels are still `AdjacentSpacing` apart, so the formula and the fourfold-overlap
+target say exactly what they said. At the new track width the spacing improves from 4.737 cm to
+**3.158 cm** against the same 5 cm target, because halving the track halves the spacing while the
+contact patch stays 20 cm.
+
+**Between the two wheel bands there is a new structure, and it is not forced to merge.** Each
+band is `2 * DriverLateralSpread * TrackWidth / 2 + ContactWidth` wide — 80 cm — and they sit
+`WheelTrack` = 80 cm apart, so at this field spread they close up exactly. Whether they merge is
+a consequence of the field spread against the wheel track, and both answers are physically
+correct: a lightly used road shows two strips, a heavily used one shows a single band.
+
+So the test asserts what must be true and **reports** what is a consequence:
+
+- asserted: `AdjacentSpacing <= ContactWidth / 4`, unchanged, now per band;
+- asserted: `WheelTrack > ContactWidth`, without which four tracks could never be four;
+- reported: band width, band separation, and whether the two close up.
+
+**One observation worth keeping for the write-up.** With four wheels the dominant line is a
+dominant *pair*, and the racing line — the thing this project claims emerges — is the centreline
+between them, which no tyre ever touches.
+
+### The saturation figures all move, and by how much is a count, not a derivation
+
+Every figure in the corrected C6 table is per texel per pass, and three separate terms change:
+the track halves in width, the texel shrinks 3.125-fold, and each car now lays four contacts of
+which two coincide on a straight. Deriving the product of those is exactly the mistake the C6
+entry already records making twice.
+
+`ReportLapsToSaturation` and
+`RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction` are both re-run, the counting
+test is extended to count per wheel rather than per car, and the corrected C6 table above and the
+matching `MEASUREMENTS.md` entry of 2026-09-23 are rewritten from the counted result.
+
+The direction is predictable and the magnitude is not: halving the track halves `AdjacentSpacing`,
+which doubles how many cars cross a straight texel; halving it also halves the corner fan in
+centimetres while the texel shrinks further, which cuts passes per apex texel. Both rates move
+and the 1.5:1 contrast may move either way.
+
+### Tasks
+
+| # | Task | Exit |
+|---|---|---|
+| C8.1 | `Wheelbase`, `WheelTrack`, `LockupProbability`, `LockedWheelSlipAmount` on `ASplineFollowingCar`, with accessors | Compiles, defaults as tabulated |
+| C8.2 | Rear-axle tracked point, heading from velocity, four wheel world positions, per-wheel previous position for exact velocity | Four distinct contacts a tick in a corner, two coincident lateral offsets on a straight |
+| C8.3 | Register through `RegisterSurfaceContact(WorldPosition, ...)` | The world-space boundary is exercised by the scene for the first time |
+| C8.4 | Braking-triggered lockup on one front wheel, second `FRandomStream`, `SkidMark` channel | One dark mark among four, reproducible from the seed |
+| C8.5 | `AuthoredLayoutLapLength` 48000, `TrackWidth` 800, `SurfaceCentimetresPerTexel` 3.125, `RoadSegmentLength` 128 | 15360 x 256, 31457280 bytes, logged at allocation |
+| C8.6 | Rewrite `RegistersMoreSlipInACornerThanOnAStraight`, which hard-asserts one pending contact a tick | Asserts the new model rather than the old one |
+| C8.7 | Restate and rewrite `SpawnedStripesMergeOnTheStraight` per the two conditions above | Both asserted, band geometry reported |
+| C8.8 | Extend `CountedPassesOverATexelAgainstThePrediction` to count per wheel | New counts in `MEASUREMENTS.md` from a real run |
+| C8.9 | New: zero contacts discarded outside the ribbon over a field run | The silent-discard path is checked, not assumed |
+| C8.10 | New: offtracking sign and magnitude, and the authored layout's tightest radius | Rear inside front, by a printed number |
+| C8.11 | Confirm the Stadium layout still fits the cap at 3.125 | 9895 x 256, 19.33 MiB, asserted |
+| C8.12 | `L_SpaHarness` instance overrides updated, logged in `EDITOR_SETUP.md` | The demo map runs the rescaled circuit |
+
+### Known interactions, recorded rather than fixed
+
+**The authored centreline has kinks tighter than the corners it draws, and finer texels will
+expose them.** The 76 points were read off a plan view by eye, which `EDITOR_SETUP.md` already
+records as not survey-accurate. Measured over a 400 cm road ring at today's 1500 m, the tightest
+radius on the layout is **277 cm** against a half-width of 600 — so `GenerateRoadMesh` already
+folds its inside edge through the centre of curvature somewhere near 66 % of the lap, and has done
+since it was written. It is invisible at 9.77 cm per texel on a 425 m circuit. At 480 m and 800 cm
+wide the same point has a radius of about 122 cm against a half-width of 400, so the fold gets
+about 13 % deeper in relative terms without changing in kind. **Not fixed**: smoothing the
+authored data is a change to the curvature signal that speed, slip and the C6 trigger all read,
+which is a C3 change needing its own measurement. C8.10 measures and prints it so it is on the
+record.
+
+**The sagitta bound tightens with the texel.** `s <= sqrt(8 * R * CentimetresPerTexel)` falls from
+988 cm to 313 cm for the fast corner and to 233 cm for the slow one. C3 already measured a stroke
+of about 330 cm at 20x dilation and 100 fps, so **stroke subdivision moves from "C4's first task"
+to a defect visible in the demo's own time controls above about 10x.** Still C4's task, still not
+started, now with a smaller margin.
+
+**`SameCornerSeparationCentimetres` is a car property tuned against the oval.** The oval is not
+rescaled, so 600 cm still gives exactly one draw per corner there. On a 480 m Spa the straight
+windows between corners are 3.125 times shorter, and if the shortest genuine window falls under
+600 cm a car will hold one deviation for a whole lap. Measured and reported by C8.10 rather than
+pre-emptively retuned.
+
+**`GridSpacingCentimetres` deliberately does not scale with the lap.** At 1400 cm the field's
+train covers 58 % of a 480 m lap against 19 % of a 1500 m one, so the grid reads as more spread
+out. Scaling it to 450 would restore the proportion and would also close the gap between cars to
+about one car length, against a measured along-track drift of 609 cm per 3000 ticks — which would
+promote the known drift defect from *visible in a long run* to *visible immediately*. C6 decided
+not to pay that, and the same decision holds. The buffer cannot tell either way.
+
+*Exit: each car lays four separately identifiable tyre tracks, a single locked wheel appears as one
+dark mark among the four, a corner fills the screen without texels reading as blocks, the buffer
+allocates at 15360 x 256 for 31457280 bytes, and the saturation figures in `MEASUREMENTS.md` come
+from a re-run count rather than from this document's arithmetic.*
+
+---
+
 ## Standing rules for this backlog
 
 - A phase is not complete until its exit condition has been demonstrated, and what was *not*
