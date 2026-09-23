@@ -1167,3 +1167,110 @@ edit is left in. Recorded in `EDITOR_SETUP.md` against the old recipe.
   distinct lines**, and the run should be repeated once the map is cleaned up if the spatial
   distribution ever matters to a measurement.
 - **Draw-call count still has never been read from a counter.**
+
+---
+
+## 2026-09-23 — Deposition was two to three times the derived rate, and frame-rate dependent
+
+Found by looking at the harness rather than by a test: rubber saturated the racing line inside a
+lap when the premise of the project is buildup over a session. Two separate faults, one on top of
+the other.
+
+### Fault one: stroke intensity was the raw slip amount
+
+`AppendStroke` set `Stroke.Intensity = Clamp(Contact.SlipAmount)`. With the harness car's cornering
+slip of 0.45 and `1 - exp(-3 E)`, one contact reached **74 % coverage** and three reached 98 %.
+
+That contradicts this file's own B6 derivation, quoted from the entry above: *"if the buildup
+channel is to approach saturation over 500 contacts, the per-contact increment is 0.002"*. The code
+was depositing 0.45 where the design said 0.002 — **225 times too much**. Slip is now scaled through
+`RacetrackSurfaceMapping::SlipToExposure`, so a full-slip contact deposits `ExposurePerUnitSlip`,
+0.002, and 500 of them reach 0.9502. Asserted in
+`RacetrackSurface.Stroke.ConvertsWidthAndIntensity`.
+
+### Fault two: a texel collected two to three deposits per pass, depending on frame rate
+
+Fixing the rate was not enough, which is what prompted measuring instead of tuning again.
+
+`PaintStrokes` sizes a stroke quad as `Length = Delta.Size() + Width`. The extra contact width is
+there so consecutive strokes leave no wedge gap when the heading changes between frames. It also
+makes neighbouring quads **overlap**, and the overlap fraction is `Width / Travel` — which depends
+on how far the car moved that frame, so on frame rate and on speed.
+
+Test `RacetrackSurface.Accumulator.DepositPerPassIsIndependentOfFrameRate`. One pass swept across a
+512-texel buffer, split into 16, 64 and 256 strokes, nominal intensity 0.01 per stroke.
+
+| Strokes over the sweep | Travel per stroke | Deposit before | Deposit after |
+|---|---|---|---|
+| 16 | 19.20 texels | 0.01999 | **0.01009** |
+| 64 | 4.80 texels | 0.01999 | **0.00993** |
+| 256 | 1.20 texels | **0.02998** | **0.00985** |
+| **Spread** | | **1.50x** | **1.024x** |
+
+Before, a pass deposited two to three times its nominal intensity and varied by half again across a
+sixteen-fold frame rate range. After, it deposits the nominal rate to within 2.4 %.
+
+The before figures land on exact multiples of 0.01 because a texel receives a **whole number** of
+overlapping strokes — that quantisation is the signature of the fault and is what identified it.
+
+**The fix is one line of reasoning: a stroke deposits for the ground it newly sweeps, not for the
+length it is drawn.** Intensity is scaled by `Travel / (Travel + Width)`. Summed over the
+`(Travel + Width) / Travel` strokes that cover a texel, the total is exactly one nominal deposit,
+independent of both frame rate and speed.
+
+### Why this mattered more than the visible symptom
+
+The symptom was cosmetic — the track went red too quickly. The defect was not.
+
+**Rubber laid per lap depended on frame rate.** Every future intensity comparison this project
+intends to make would have been affected: E5 couples skid decay to local buildup, and E7 is
+specified as *"two identical marks, traffic over one only, compare intensity"*. Two runs of E7 at
+different frame rates would have produced different buildup for no physical reason, and the
+difference would have looked like a result. The same applies to any measurement taken while
+something else was loading the machine — the same class of confound as the battery one recorded
+above, arriving through a different door.
+
+**No figure already in this file is affected.** The paint and decay timings measure how long a pass
+takes, not what it deposits, and the readback entries (B5, B6, R4) paint single strokes where there
+is no neighbour to overlap with. The B5 and B6 tables are unchanged by the fix, which is the check
+that it did not disturb the accumulator's arithmetic.
+
+### A test was improved rather than merely repaired
+
+`Accumulator.LinearGammaOnWrite` compared the stored value against a literal 0.5 and so broke on the
+scaling. Rather than adjust the constant, it now paints two strokes at 0.5 and 0.25 and asserts the
+**ratio**:
+
+```
+Additive passes at intensity 0.500 and 0.250 stored 0.3569 and 0.1804, a ratio of 1.978.
+Linear encoding gives 2.000, a 2.2 encoding would give 1.370
+```
+
+That tests the property the entry is actually about — linear versus gamma encoding — without
+depending on the absolute deposit at all, so it survives any future change to the deposition model.
+The first version would have needed editing again every time the rate moved.
+
+### Saturation timescale, and why it is reported at runtime rather than derived here
+
+With the rate correct, how long the line takes to appear is arithmetic over the field size, and it
+changes whenever the field or the slip values change. The circuit now prints it at startup:
+
+```
+One cornering contact deposits 0.001000 exposure. With 20 cars over one apex texel that is
+0.0200 per lap, so the apex reaches 63 % coverage in about 17 laps and 95 % in about 50
+```
+
+**Fifty laps to the apex saturating is the chosen target, not a hundred and not twenty.** The
+saturating curve is front-loaded — 63 % of the way at a third of the exposure — so the visible
+change is mostly done by lap 20 either way, and a twenty-lap target would compress all of it into
+the first six. It is also not the end of the evolution: once the apex saturates the less-committed
+drivers keep depositing beside it, so the line **widens**, which is the better evidence of an
+emergent racing line than the apex darkening.
+
+A 24 hour race is about 615 laps per car and is not what the rate should be tuned to. Duration is
+time compression's job, which is what the `.` and `,` controls are for.
+
+**Not verified.** The 17 and 50 lap figures assume every car crosses the same apex texel once per
+lap. That is close to true at a corner apex where the field converges and false on a straight where
+it is fanned out, so the straight-line figure is not predicted at all, only asserted to be far
+slower. Nothing has counted actual passes over a texel against the prediction.
