@@ -469,6 +469,19 @@ Track width stays at 1200 cm rather than scaling with the layout. Scaled properl
 spread to observe. This is stated as the harness convenience it is: the circuit is Spa's *shape* at
 21 % with a proportionally wide track, not a scale model of Spa.
 
+> **Superseded 2026-09-23 by [C8](PLAN.md). The reasoning above is not wrong; it answers a
+> question that is no longer the one being asked.** It solved for the largest round lap that fits
+> the cap *at a fixed density of 9.7656 cm per texel*, and 1500 m is the right answer to that. C8
+> removes the fixed density from the question: the texel size is chosen first, for what a corner
+> has to look like close up, and the lap follows from it. The lap is now **480 m at 3.125 cm per
+> texel**, which keeps the same 15360 along-track texels and the same 1024 of margin under the
+> cap. The table above still holds for its own question and is kept for that reason.
+>
+> The track-width note above also still holds and is now load-bearing rather than an aside. Because
+> the cars do not scale, a shorter lap must carry a proportionally wider track, and 800 cm on a
+> 480 m lap is **8 car widths** against real racing's roughly 7.5. What that costs is recorded
+> under the road-mesh fold in `MEASUREMENTS.md`.
+
 ### The centreline is authored, and how
 
 `RacetrackLayouts::SpaCentreline` in `RacetrackCircuit.cpp` is 76 points read off the circuit's plan
@@ -733,3 +746,52 @@ file still have the original pattern, so the hazard is reduced and not removed.
 **Run the automation tests with the editor closed.** The headless command in `CLAUDE.md` spawns
 into a throwaway world and cannot touch a saved map. If the tests must be run in the editor, check
 `git status` for a modified `.umap` afterwards and do not save the level on exit.
+
+---
+
+## 2026-09-23 — OUTSTANDING: `L_SpaHarness` must be repointed at the rescaled circuit
+
+Asset: `/Game/Maps/L_SpaHarness`
+Change: **not yet made.** The C++ defaults changed; the map still overrides them.
+Why: [C8](PLAN.md) rescales the circuit to 480 m at 3.125 cm per texel on an 800 cm track. Two of
+the four properties in the override table above are per-instance overrides on `RacetrackCircuit_0`,
+so **changing the C++ default does not change the demo.** The editor was closed and the MCP server
+was not listening when the work was done, so this could not be made at the time.
+
+| Property | Was | Set to | Why |
+|---|---|---|---|
+| `AuthoredLayoutLapLength` | 150000 | **48000** | The rescale. 48000 / 3.125 = 15360 along-track texels exactly |
+| `RoadSegmentLength` | 400 | **128** | 400 / 3.125, which holds rings-per-corner constant through the rescale |
+| `Layout` | `Spa` | unchanged | Still the authored centreline |
+| `CarCount` | 20 | unchanged | Still the density C3 and E7 need |
+
+Either set both to the new values, or clear both overrides so the instance follows the C++ defaults
+— they are now the same numbers, and clearing leaves less duplicated state to keep in sync.
+`TrackWidth` and `SurfaceCentimetresPerTexel` are **not** overridden and already follow the C++
+defaults, so they need no action; `DriverLateralSpread` likewise.
+
+Expected at runtime once done, against 15114240 bytes today:
+
+```
+Surface ribbon configured: 48000.0 cm of track at 800.0 cm wide, 3.1250 cm per texel,
+                           15360 x 256 texels, closed loop
+Accumulation buffer allocated at 15360 x 256, 31457280 bytes
+```
+
+**The editor must be restarted rather than Live Coded into this.** C8 adds reflected `UPROPERTY`
+members to `ASplineFollowingCar` (`Wheelbase`, `WheelTrack`, `LockupProbability`,
+`LockedWheelSlipAmount` and the braking thresholds), and the same rule recorded on 2026-09-22
+applies: Live Coding patches code but does not reliably introduce new reflection. Reloading the
+level is also needed for the road mesh, since `OnConstruction` does not re-run on a Live Coding
+patch alone.
+
+**Three things to look at once it is running, all of them judgements rather than numbers**, and all
+three are recorded as unverified in `MEASUREMENTS.md`:
+
+1. Whether a 20 cm mark at 6 texels reads as a tyre mark rather than a block, which is the whole
+   purpose of the rescale.
+2. Whether the road mesh visibly folds. Measured, the tightest radius over one 128 cm ring is
+   89 cm against a 400 cm half-width, a ratio of 0.22 where the 1500 m layout ran 0.46. The fold
+   predates C8 and C8 makes it about twice as deep. It should be looked for near 66 % of the lap.
+3. Whether a locked wheel reads as one dark mark among four. Press `]` a few times first — the
+   deposition rate puts the apex at 63 % coverage in about 28 laps at 1x.
