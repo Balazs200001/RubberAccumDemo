@@ -1763,6 +1763,282 @@ or the layout in the editor resizes the ribbon instead of waiting for the next p
 
 ---
 
+## C9 — Folded ribbon rows, so the along-track axis can exceed 16384 texels
+
+Added 2026-09-23, directly after C8's correction and because of it. C8 chose the texel size for what
+a corner has to look like close up, and then discovered the lap length that follows from it puts the
+road through itself. **This phase exists to make those two requirements stop excluding each other.**
+
+The argument is [C8's own correction](#corrected-2026-09-23-on-looking-at-it-480-m-is-below-the-geometric-floor-and-the-lap-length-is-wrong)
+and is not repeated here. The short version: a generated road offsets `TrackWidth/2` either side of
+the centreline, so the inside edge crosses its own centre of curvature wherever the local radius
+falls below the half width. At 800 cm of track that needs **954 m of lap to never fold and 1726 m
+for the authored kinks to be clean**, and 954 m at 3.125 cm per texel already needs 30528 along-track
+texels against a hardware cap of 16384.
+
+### Decided: 1800 m of lap, 800 cm of track, 3.125 cm per texel, four rows
+
+| | C8 as written | `L_SpaHarness` interim | **C9** |
+|---|---|---|---|
+| Lap | 480 m | 960 m | **1800 m** |
+| `TrackWidth` | 800 cm | 800 cm | **800 cm** |
+| `SurfaceCentimetresPerTexel` | 3.125 | 6.25 | **3.125** |
+| Along-track texels | 15360 | 15360 | **57600** |
+| Across-track texels | 256 | 128 | **256** |
+| Rows | 1 | 1 | **4** |
+| Allocation | 15360 x 256 | 15360 x 128 | **14400 x 1024** |
+| Bytes | 31457280, 30.00 MiB | 15728640, 15.00 MiB | **117964800, 112.50 MiB** |
+| A 20 cm contact patch | 6.40 texels | 3.20 texels | **6.40 texels** |
+| Geometry | **folds at every slow corner** | clears the comfortable line | **clears the kink line by 74 m** |
+
+Every figure divides exactly, which is the property C8 chose its numbers for and the reason a
+fraction-long rescale cannot push a `ceil` over a cliff:
+
+```
+180000 / 3.125 = 57600      57600 / 4 = 14400      800 / 3.125 = 256
+```
+
+**Why 1800 and not 1726.** 1726 m is the measured threshold itself, and the Spa spline is rescaled
+about its centroid to hit `AuthoredLayoutLapLength` and then *measured*, landing a fraction either
+side of the requested figure. Sitting on a threshold is the same mistake C8 rejected 400 m at
+2.44140625 for. 1800 m clears it by 74 m and leaves 1984 texels of margin under the 16384 cap.
+
+**Why not 1728 m**, which is 55296 along-track texels and a rounder 4 x 13824: it clears the kink
+threshold by 2 m. Same objection, worse margin.
+
+**`TrackWidth` stays 800 cm.** C8 measured the widest wheel at alpha 0.7864 with zero contacts
+discarded, a margin of 0.21 rather than the 0.10 it was justified on. Widening to 1200 would push
+the kink threshold to 2589 m and cost another 50 % of memory for nothing this phase needs.
+
+**`RoadSegmentLength` stays at its C++ default of 128 cm**, and `L_SpaHarness` drops its 256 cm
+override. `180000 / 128` is 1406.25, and `GenerateRoadMesh` rounds to 1406 segments at 128.02 cm, so
+this does not need to divide. At the tightest authored radius the sagitta is about 4.9 cm against
+69 cm at the ratio-preserving 480 cm, and the interim capture already recorded visible faceting at
+256 cm on a shorter lap.
+
+### The C++ default becomes the demo, and the 32 MiB commitment is retired
+
+C8 left the project with **the C++ defaults broken and the map overriding them into something
+valid**, which is backwards. This phase resolves it in the direction the map was already pointing:
+the C++ defaults become the real configuration and `L_SpaHarness` clears all three overrides.
+
+That also settles the budget question, which B4 had left as a commitment to 32.0 MiB with 128 MiB
+disqualified in terms: *"too much to impose by default in a plugin others install"*. **That argument
+is retired on its own premise.** The plugin is not being published, so there is no third party having
+a default imposed on them, and the reason to keep a small default was never anything else. Recorded
+as a reversal rather than quietly dropped: B4's reasoning was correct for a plugin that ships, and
+this one does not.
+
+So `FSurfaceTrackRibbon`'s own defaults move to the demo's numbers too, rather than staying a small
+safe fallback that disagrees with everything else in the project. **The consequence worth stating:
+a default-constructed ribbon is now folded, so the folded path is the default path** and every test
+that does not deliberately configure otherwise exercises it. A fold that only runs in the demo would
+rot; this one cannot.
+
+112.50 MiB is 1.4 % of this laptop's 7948 MB of dedicated VRAM.
+
+### Row layout, and the one formula
+
+Rows stack in Y. The along-track axis is cut into `RowCount` equal spans of lap, each laid out left
+to right across the full atlas width, and each row occupies a band of `AcrossTrackTexels` rows of
+atlas texels.
+
+```
+RowCount     = ceil(AlongTrackTexels / MaximumTexelsPerRow)
+TexelsPerRow = ceil(AlongTrackTexels / RowCount)
+AtlasWidth   = TexelsPerRow
+AtlasHeight  = RowCount * AcrossTrackTexels
+```
+
+`RowCount * TexelsPerRow` is at least `AlongTrackTexels`, never less, so the effective texel is at
+worst a shade finer than asked for and never coarser. At the chosen configuration both divisions are
+exact and there is no slack at all.
+
+The mapping from a ribbon coordinate `(u, v)`, `u` the fraction of the lap and `v` the fraction
+across the track, to the atlas:
+
+```
+s        = u * RowCount
+row      = clamp(floor(s), 0, RowCount - 1)
+atlasU   = s - row
+atlasV   = (row + v) / RowCount
+```
+
+The `clamp` is what makes `u = 1` land at the end of the last row rather than the start of a row that
+does not exist.
+
+**Two properties this buys, both of which matter more than they look.**
+
+- **An atlas texel stays isotropic in world terms on both axes.** `atlasU * AtlasWidth` is a texel
+  along the track and `atlasV * AtlasHeight` is a texel across it, at the same centimetres per texel.
+  So `PaintStrokes`, which draws a rotated quad of `(travel + width, width)` canvas pixels and
+  assumes a straight line between two points is the right shape, **needs no change at all**. The
+  fold lands entirely in `AppendStroke`.
+- **`RowCount == 1` is the identity.** `s = u`, `row = 0`, `atlasU = u`, `atlasV = v`. The unfolded
+  path is not a special case, it is the general case with one row, and every existing test that
+  configures a small ribbon keeps its current meaning.
+
+`NormalisedAlongTrack`, `NormalisedAcrossTrack` and `TrackToNormalised` keep meaning *ribbon* space
+and are unchanged. The fold is a separate, separately named step applied after them, so the one test
+that asserts on `TrackToNormalised` stays valid.
+
+### The write path: the lap seam stops being a special case
+
+`BuildStrokes` today splits a contact whose travel crosses the lap seam into two quads. Row
+boundaries need exactly the same treatment, and **the lap seam is one of them** — it is the boundary
+between the last row's end and the first row's start, so it coincides with a row boundary by
+construction at exactly one place. Phase R said it was designing for this; this is the phase that
+collects.
+
+So the `if (bCrossesSeam)` branch is replaced by a walk. Boundaries sit at every multiple of
+`TrackLength / RowCount`, including `0` and `TrackLength` themselves. The unwrapped span from the
+stroke's start to its end is cut at every boundary it crosses, and each piece is emitted separately.
+`Travel` is already clamped to one lap, so the walk is bounded at `RowCount + 1` pieces.
+
+**The trap this design avoids by construction.** A piece that ends exactly on a boundary must map to
+`atlasU = 1` of the row it is in, not `atlasU = 0` of the next one, and `floor` cannot tell those
+apart. So the row is chosen **from the piece's midpoint**, which is strictly inside one row for any
+piece of non-zero length, and both endpoints are then mapped within that known row. A stationary
+contact sitting exactly on a boundary is the one ambiguous case, and either answer draws the same
+dot with the same half clipped, which is what the lap seam already does today.
+
+**A defect folding would otherwise introduce, and the fix.** `PaintStrokes` draws a quad half a brush
+width longer than the travel at each end, so a contact at the track edge overhangs `v = 1` by half a
+contact width. Today that falls off the canvas and is lost. Folded, row *r*'s overhang would land in
+row *r+1*'s first across-texels — rubber from one part of the lap appearing at the far edge of a
+different part. `FCanvas::SetRenderTargetScissorRect` (`CanvasTypes.h:423`, applied per pass at
+`CanvasRender.h:21`) clips each stroke to its own row band and removes it exactly. It costs one call
+per stroke and no memory.
+
+That is affordable because `BeginDrawCanvasToRenderTarget` hardcodes `CDM_ImmediateDrawing`
+(`KismetRenderingLibrary.cpp:788`) and `FCanvas::DrawItem` flushes after every item
+(`Canvas.cpp:2084`), so **every stroke is already its own pass today.** There is no batching to lose,
+either to the extra splits or to the scissor. With `RowCount == 1` the rect is the whole target and
+nothing changes.
+
+The stroke carries its own `RowIndex` rather than having the buffer infer it from the stroke's Y,
+because a stroke lying exactly on `v = 1` of row *r* would infer row *r+1*.
+
+### The read path: the fold is the shader's problem too, and it does its own bilinear
+
+`MF_SampleRacetrackSurface` already does its sampling in **one** `MaterialExpressionCustom` node, a
+3x3 tent named `BlurredExposure` taking `Tex`, `UV`, `TexelSize` and `Radius`. The fold goes inside
+that same node. It gains one input, `Rows`.
+
+The node's `UV` is the mesh's UV0, which `GenerateRoadMesh` writes as `(distance/lap, across)` — so
+**the shader already receives a ribbon coordinate** and the tent is taken in ribbon space, with every
+tap folded independently. A tap that steps past the end of a row therefore folds into the start of
+the next one, which is the physically adjacent surface. The tent stops being a source of boundary
+artefacts and becomes correct across them.
+
+Two things the sampler would still get wrong, and what is done about each:
+
+- **Across the track.** `atlasV = (row + v)/RowCount` puts `v = 0` and `v = 1` exactly on the
+  boundary between two rows' bands, where a bilinear tap blends 50/50 with a neighbouring row's edge.
+  Fixed by clamping `v` into the half-texel inset before folding, which reproduces clamp addressing
+  within the band and costs one `clamp`.
+- **Along the track.** At a row end the correct neighbour is in the next row, which is nowhere near
+  it in the atlas. **Folding would regress something that is currently correct by accident**: the
+  render target's `AddressX` defaults to `TA_Wrap` (`TextureDefines.h:498` makes `TA_Wrap` the first
+  value), and on an unfolded ribbon wrapping past the end of the lap *is* the right neighbour,
+  because the lap is a loop.
+
+  So the shader does its own bilinear along the track: the along-track coordinate is taken to whole-
+  lap texel index space, the two neighbouring texel indices are wrapped around the lap, each is
+  folded into the atlas **separately**, each is sampled with its U snapped to the texel centre, and
+  the two are blended by hand.
+
+**Why snapping rather than a point sampler.** A bilinear sampler handed a UV at a texel centre
+returns that texel exactly, weights 1 and 0, so snapping U gives an exact sample in X while leaving
+the sampler's bilinear in Y — which is wanted, and correct, inside a band. It means the shader never
+depends on the render target's `Filter` or `AddressX`, both of which are invisible from the material
+and neither of which is currently set deliberately. `View.SharedPointClampedSampler` is reachable
+from a Custom node and was the alternative; it was rejected because it would replace one invisible
+dependency with another and would also kill the wanted bilinear in Y.
+
+**The price, stated plainly:** two texture fetches per tap instead of one, so **18 per road pixel**
+against 9. This is a measurement owed, not an estimate, and it is the first thing C9.M records.
+
+`SurfaceBlurTexels` **keeps its default of 1.0.** At 3.125 cm per texel a 1-texel tent widens a
+6.4-texel mark by about 31 %, and it is a real candidate for the smearing in the current captures —
+but changing it in the same phase that changes what a boundary looks like would confound the only
+check that matters, which is looking at the result. It is a parameter, so it is now an A/B with a
+slider rather than a rebuild, and it is a judgement to be made on screen rather than derived here.
+
+### Keeping the C++ and the HLSL from silently disagreeing
+
+The mapping exists twice by necessity: `FSurfaceTrackRibbon` writes it and the Custom node reads it.
+A silent disagreement puts rubber in the wrong place and nothing in the current test suite would
+notice.
+
+**One number crosses the boundary, not a formula.** `RowCount` is published to
+`MPC_RacetrackSurface` as a scalar, by the same `PublishRibbonToMaterials` that already publishes
+`SaturationConstant`. Everything else the shader needs it derives from `TMTM_TexelSize`, which is a
+per-draw preshader constant read from the actual bound texture — so the atlas width and the
+across-track texel count cannot disagree with the texture that is really there, because they are read
+off it.
+
+**The guard is a round trip through the real compiled shader, not a convention.** A stroke is painted
+at a known ribbon coordinate through the C++ path; `DrawMaterialToRenderTarget` then renders the
+material into a small target, which supplies UV 0..1 across it
+(`KismetRenderingLibrary.cpp:220` draws the material as one full-target tile); that target is read
+back with `ReadRenderTargetRawPixelArea`, which the stroke-width test already uses. **The mark has to
+come back at the ribbon coordinate it was put at.** If the write side and the read side disagree
+about the fold by so much as a row, the mark comes back somewhere else and the test fails.
+
+Whether a material renders under the headless automation command is **not yet established** and is
+the main risk in this phase. If it does not, the fallback is an editor-module test asserting the
+asset's Custom node code matches a canonical string in the runtime header — which proves the asset
+matches the repository but not that the HLSL matches the C++, and would be recorded as the weaker
+guard it is.
+
+**`RowCount` defaults to 0 in the collection**, matching the deliberate fail-loud default already
+used for `SaturationConstant`. The shader takes `max(Rows, 1)`, so an unpublished row count makes a
+folded ribbon read as though it were unfolded — which puts every mark at a quarter of its correct
+along-track position, four times over. That is not subtle, and the failure mode it guards is exactly
+the one C8 found: a configuration path that never runs.
+
+### Not in this phase
+
+- **The per-contact segment cache.** R2's trigger is tripped and the cost is measured at 0.3658 ms
+  against 0.0087 ms. It is a world-to-track conversion change and has nothing to do with the fold.
+  Doing it here would put two unrelated changes in one set of measurements.
+- **Narrowing `ContactWidth` from 20 cm.** It costs texels per mark and would open a gap between
+  wheel bands that currently abut at exactly 80.0 cm. It is a vehicle decision, not a storage one.
+- **The four-tracks resolvability figure.** A longer lap makes the 5.1 % worse, not better, and that
+  trade is real and still unfaced. C9.M measures it again at 1800 m so the number moves with the
+  change rather than being carried stale.
+- **`ElevationExaggeration`.** Stays at 2.5. A longer lap is what restores Spa's elevation, and this
+  phase delivers 3.75 times the lap C8 left, which is the correct fix arriving by the correct route.
+
+### Tests
+
+Rewritten rather than deleted, because they are correct today and assert a model that is changing:
+
+| Test | Becomes |
+|---|---|
+| `RacetrackSurface.Ribbon.RejectsTrackTooLongToFitUnfolded` | Asserts the row count steps at the right lap lengths and that both atlas dimensions stay under the cap, rather than that a long track is refused |
+| `RacetrackSurface.Ribbon.TexelExtentsFollowTrackDimensions` | Same shape, against the new defaults |
+| `RubberAccumDemo.Track.SpaLayoutFitsTheUnfoldedRibbon` | Asserts four rows, 14400 x 1024, 117964800 bytes and the margin under the cap |
+| `RubberAccumDemo.Track.BothLayoutsFitTheCapAndTheMemoryBudget` | Asserts the *atlas* fits the cap and the committed figure is the one above, with the Stadium still unfolded at one row |
+
+Added:
+
+- A stroke that crosses a row boundary splits, and the pieces together span the travel.
+- A stroke that crosses a row boundary **and** the lap seam at once, which is the last row's end
+  joining the first row's start.
+- The atlas mapping round-trips, including at `u = 0`, `u = 1` and exactly on every boundary.
+- A stroke painted at a known ribbon coordinate reads back from the atlas at the predicted texel.
+- The end-to-end round trip through the material described above.
+
+*Exit: a lap long enough that no slow corner passes through itself, at a texel fine enough that a
+20 cm contact patch is 6.4 texels; the buffer allocates at 14400 x 1024 for 117964800 bytes; a mark
+crossing a row boundary is indistinguishable from one that does not; both build paths clean; all
+tests passing headlessly with the editor closed; and a capture of the tightest corner showing the
+road turning cleanly.*
+
+---
+
 ## Standing rules for this backlog
 
 - A phase is not complete until its exit condition has been demonstrated, and what was *not*
