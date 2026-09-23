@@ -1387,3 +1387,88 @@ never called from the running game, so there is nothing to instrument in a real 
 tail is unexplained. The 223 fps figure is one scene on one machine at 1280 x 720 windowed with
 the template's lighting, and nothing has been varied to see what moves it. No draw-call count has
 been read from a counter, which remains true since C0.
+
+---
+
+## 2026-09-23 — C6: counting passes over a texel, and finding the prediction wrong in both directions
+
+Closes the gap this file has carried since phase C: *"Nothing has counted actual passes over a
+texel against the prediction."* Something has now, and the prediction did not survive it.
+
+```
+Build:    Development editor target, Live Coding patch 9, automation run in-editor
+Hardware: NVIDIA GeForce RTX 4070 Laptop GPU; Intel Core i7-14700HX
+Scene:    Default Stadium layout, 30921 cm lap, TrackWidth 1200 cm, spawned in an editor world
+Field:    20 cars, DriverLateralSpread 0.075, baselines and commitments from
+          ARacetrackCircuit::GetDriverBaselineLateralOffsetAlpha / GetDriverLineCommitment,
+          seeds from GetDriverSeedForGridIndex, FieldRandomSeed 20260923
+Method:   RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction. Ticks the field at
+          1/60 s for 12000 ticks, detects each car crossing a chosen along-track distance by the
+          change in floor((Distance - Chosen) / Length), and tests that car's LateralOffsetAlpha
+          against each of the 123 lateral texels for contact-patch coverage. No GPU, no readback:
+          this counts the contact geometry the deposition rate is derived from, not the painted
+          buffer.
+Samples:  the midpoint of the longest run below 0.02 cornering, and of the longest run above 0.98
+```
+
+### What was predicted, and what was counted
+
+| | texels inked | passes per texel per lap | exposure per lap | laps to 63 % |
+|---|---|---|---|---|
+| Busiest straight texel | 14 | **8.29** | 0.001658 | ~201 |
+| Busiest apex texel | 29 | **2.45** | 0.002447 | ~136 |
+| Straight, predicted from stripe spacing | — | 4.22 | — | — |
+| Apex, assumed by the one-texel figure | — | 20 | — | — |
+
+**Measured contrast: 1.5 to 1.** `PLAN.md` predicted 5:1 after C6, against 100:1 before it.
+
+Three separate errors, and they partly cancel, which is why the plan's conclusion reads as
+roughly right while both of its rows are wrong.
+
+**The straight row was too optimistic by five.** It took `20 * 0.0002` per straight texel, i.e.
+the whole field crossing one texel. But `AdjacentSpacing <= ContactWidth / 4` was chosen to give
+*four*-fold overlap precisely so the stripes merge without the field collapsing onto one line, so
+the arithmetic that sizes the spread and the arithmetic that predicts the exposure contradict each
+other. At 4.737 cm spacing against a 20 cm mark the static prediction is 4.22 cars per texel.
+
+**The straight count is nevertheless twice that static prediction, at 8.29.** Cars are not at
+their baselines in the middle of a straight. `LineChangeResponsiveness` is 2.0, a half-second time
+constant, and the oval's straight is about two seconds long, so the field is still lerping back
+from the previous corner when it crosses the sample point and is bunched tighter than the grid
+spacing puts it. The static formula describes a steady state this layout never reaches.
+
+**The apex row was too optimistic by eight.** The one-texel assumption was already flagged in this
+file as approximate because `DriverLineCommitmentAtCentre/AtEdge` are 0.2 and 0.8 rather than 1.0.
+C6 makes it much worse on purpose: `MaxCornerDeviationAlpha` of 0.20 spreads the arcs over 29
+texels, 283 cm, against the straight band's 14 texels and 137 cm. That 2:1 width ratio is exactly
+what the plan asked for and is the visible fan the feature exists to produce — but spreading the
+same twenty passes over 2.5 times the area drops the busiest apex texel to 2.45 passes, *below*
+the straight's 8.29.
+
+### The consequence the plan did not work out
+
+The apex wins on exposure only because a cornering contact carries five times the slip of a
+straight one. Geometry now works against it. Net, a corner texel darkens 1.5 times faster than a
+straight one, where before C6 it was 100 times faster.
+
+So **`MaxCornerDeviationAlpha` is a direct trade between how wide the fan is and how much darker
+the line is**, and the plan treats it as a free parameter tuned by eye for the fan alone. At 0.20
+the fan is clearly visible and the line is barely darker. Lowering it concentrates the apex and
+narrows the fan. Which end of that trade looks right is a judgement to make on a capture, not a
+number to derive, and it has not been made yet.
+
+This is also a second, independent argument for phase E. With no decay, a 1.5:1 rate ratio means
+the straight is at 45 % coverage when the apex reaches 63 %, and the two are visually close from
+the start rather than separating first and converging later.
+
+### Not verified
+
+These are oval figures. The demo runs Spa, whose corners are graded rather than on-or-off and
+whose straights are shorter relative to the lateral settling time, so both the residual-convergence
+inflation and the apex spread will differ and neither has been counted there. Nothing here touches
+the painted buffer: this counts contact-patch coverage, which is the input to the deposition
+arithmetic, not its output, so a bug between `RegisterSurfaceContactInTrackSpace` and the render
+target would not show up in it. The 12.67 laps are enough for the straight figure, which is nearly
+deterministic, and thin for the apex figure, which depends on a fresh triangular draw per car per
+corner. No screenshot has been taken of the resulting buffer, so the claim that the fan is visible
+as separable arcs is still arithmetic and not an observation.

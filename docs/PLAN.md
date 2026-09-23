@@ -1062,6 +1062,33 @@ effect of it: the total rubber laid on a straight per lap is unchanged at `20 * 
 only concentrates it into a twentieth of the area. Twenty separate thin stripes is the wrong shape;
 one line is the point.
 
+> **Corrected 2026-09-23 on implementing C6, by counting rather than deriving. Two of the three
+> rows above are wrong, and the conclusion survives for the wrong reason.** The straight-after-C6
+> row assumes all twenty cars cross one straight texel. They do not: the whole point of choosing
+> `AdjacentSpacing <= ContactWidth / 4` is *four*-fold overlap, so about four cars cross a given
+> straight texel, not twenty. The apex row's one-texel assumption fails in the other direction,
+> because the `MaxCornerDeviationAlpha` draw deliberately spreads the corner arcs over more texels
+> than the straight band occupies. `RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction`
+> now counts real passes on the oval over 12.67 laps of a twenty-car field:
+>
+> | | texels inked | passes per texel per lap | exposure per lap | laps to 63 % |
+> |---|---|---|---|---|
+> | Busiest straight texel | 14 | 8.29 | 0.001658 | ~201 |
+> | Busiest apex texel | 29 | 2.45 | 0.002447 | ~136 |
+>
+> **Measured contrast is 1.5:1, not 5:1 and not 100:1.** The apex is still the darker of the two,
+> so a line does appear, but only just. The straight count of 8.29 is itself about twice the 4.22
+> the static baseline spacing predicts, because on an oval this size the field has not finished
+> lerping back to its baselines by the middle of the straight — residual convergence from the
+> previous corner bunches it tighter than the grid does.
+>
+> The direction of the original argument holds: the geometric term collapses and the straights
+> speed up by roughly an order of magnitude. The magnitudes do not. **`MaxCornerDeviationAlpha`
+> now trades apex contrast against arc separability, and that trade is a by-eye call, not a
+> derived one** — 0.20 buys a 283 cm corner band against a 137 cm straight band, at the cost of
+> making the apex only 1.5 times darker per texel than the straight. Lowering it concentrates the
+> apex and narrows the fan. This strengthens rather than weakens the phase E argument below.
+
 **What this exposes is a limit of having no decay.** The 5:1 is a ratio of *rates*, and coverage
 runs through `1 - exp(-3E)`, which compresses everything near the top. When the apex reaches 95 %
 at about 50 laps the straight is at about 45 % — clearly separable. By the time the straight
@@ -1070,6 +1097,13 @@ reaches 95 % at about 250 laps the apex is at 99.99 % and the two are indistingu
 20 and 100 and flattening towards a uniformly saturated track after that. This is an argument for
 phase E being load-bearing rather than cosmetic, and it is the honest answer to "what does this
 look like after a 24 hour race".
+
+**Settled 2026-09-23: it does not, and the report no longer makes it.** `ReportLapsToSaturation`
+now derives the straight's geometric term from `GetAdjacentDriverSpacingCentimetres()` against the
+contact width and prints both rows, so the figure moves with `CarCount`, `TrackWidth` and
+`DriverLateralSpread` instead of being a constant in a log string. The apex row still assumes one
+texel takes the whole field and is now labelled in this file as the upper bound it is. The original
+text follows.
 
 **Not derived, only asserted:** that `ReportLapsToSaturation`'s one-apex-texel assumption survives
 C6. It is already approximate today, because `DriverLineCommitmentAtCentre` and `AtEdge` are 0.2
@@ -1108,6 +1142,48 @@ longitudinal acceleration as well as curvature, which is a larger change than C6
 *Exit: twenty cars run visibly nose-to-tail on the straights and fan into distinguishable arcs
 through a corner, the same seed reproduces the same run, and the accumulated buffer shows one
 dominant line with separable arcs around it at a corner rather than a single smear.*
+
+### Decided on implementing, 2026-09-23
+
+**The field-spacing drift stays a known defect. It is not promoted to a prerequisite.** The
+deposit does not depend on it. Every quantity in `ASplineFollowingCar::Tick` and the contact it
+registers is a function of that one car's own `DistanceAlongTrack` and `LateralOffsetAlpha` and
+the track's fixed curvature profile, with no term reading any other car, so drift changes *when*
+cars are near each other and never *where* any car deposits. Since every car completes whole laps,
+every car paints its line at every distance whatever the drift has done to the formation. The
+graded artefact is the buffer, and the buffer cannot tell.
+
+What C6 does change is the cost of the defect on screen: with the lateral spread at 0.075 the
+whole field is inside about one car width laterally, so a pair whose along-track gap drifts to
+under the 220 cm car length now reads as meshes intersecting rather than as cars on separate
+lines. The measured rate is -609 cm per 3000 ticks for one pair against 1400 cm of grid spacing,
+so a single long run will show it. That makes it a prerequisite for *one particular way of
+filming the exit condition* — a single continuous run used for both the nose-to-tail shot and the
+buffer shot — and not for the exit condition itself, which a short early clip plus a buffer
+capture demonstrates honestly. Recorded rather than fixed, because the cheapest fix that
+guarantees no overlap is a car correcting toward a formation slot, which is a controller and not
+an independent policy, and would need the same caveat as `DriverLateralSpread = 0`.
+
+There is a cheaper experiment that costs the emergence claim nothing, and it is not done here:
+`MEASUREMENTS.md` blames `FInterpConstantTo`'s rate limit on speed for the drift, and raising
+`SpeedChangeCentimetresPerSecondSquared` would test that without adding any coupling between
+cars, since each car's speed stays a function of its own position. That is a separate change with
+its own measurement.
+
+**The corner-entry trigger chattered, and the release is what needed fixing.** Drawing on a
+rising edge of `CorneringAmount` through 0.15 with a 0.05 release gave **2.82 draws per corner**,
+not one, which is nearer the per-frame jitter the design exists to avoid than the single held arc
+it asks for. The cause is in the C3 cornering profile, not in C6: sampling the trigger signal
+itself every 25 cm over one oval lap finds two genuine low windows of 2475 cm and 2450 cm and two
+spurious notches **25 cm wide**, single-sample artefacts of the 150 cm `CorneringSampleSpacing`.
+Debouncing the *draw* by distance was the wrong mechanism and left 1.57 draws per corner.
+Debouncing the *release* is the right one: a car stays committed until the track has been below
+the exit threshold continuously for `SameCornerSeparationCentimetres`, so a notch narrower than
+that cannot end a corner. At 600 cm — 24 times the measured notch and a quarter of the measured
+genuine window — the oval gives exactly **one draw per corner**, with every gap between draws
+landing on 15460 ± 15 cm, half a lap. The profile notches themselves are left alone; fixing them
+means touching the curvature signal that speed and slip also read, which is a C3 change and needs
+its own measurement.
 
 ---
 
