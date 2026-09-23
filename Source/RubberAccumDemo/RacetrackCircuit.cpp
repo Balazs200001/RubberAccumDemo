@@ -16,6 +16,17 @@
 #include "SurfaceTrackRibbon.h"
 #include "UObject/ConstructorHelpers.h"
 
+namespace
+{
+	TAutoConsoleVariable<int32> CVarReleaseFieldOnStart(
+		TEXT("RubberAccumDemo.ReleaseFieldOnStart"),
+		0,
+		TEXT("When 1, the field starts running rather than frozen on the grid, overriding bStartPaused. ")
+		TEXT("Exists so a frame-rate capture is reproducible from one command line, because releasing ")
+		TEXT("the field otherwise needs a human to press P."),
+		ECVF_Default);
+}
+
 namespace RacetrackLayouts
 {
 	constexpr double CorneringSampleSpacing = 150.0;
@@ -79,7 +90,7 @@ void ARacetrackCircuit::BeginPlay()
 
 	BindAccumulationTargetToRoad();
 	SpawnField();
-	SetFieldPaused(bStartPaused);
+	SetFieldPaused(bStartPaused && CVarReleaseFieldOnStart.GetValueOnGameThread() == 0);
 	BindTimeControls();
 	PlaceObserverAboveTrack();
 }
