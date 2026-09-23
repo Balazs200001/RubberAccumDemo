@@ -787,9 +787,36 @@ the fastest corner has 403 cm of radius against a 400 cm half width. Full deriva
 needs **954 m minimum at this track width, and 1726 m for the authored kinks to be clean**, and
 neither fits under the 16384 along-track cap at 3.125 cm per texel.
 
-`TrackWidth` and `SurfaceCentimetresPerTexel` are still **not** overridden and follow the C++
-defaults of 800 and 3.125. Whatever the next configuration is, it is set in C++ and only
-`AuthoredLayoutLapLength` and `RoadSegmentLength` need touching here.
+### Interim configuration applied, and it is an override of the C++ defaults
+
+Applied the same day so the demo has something valid to run on until folded rows land. **Three
+per-instance overrides now diverge from C++**, which is more duplicated state than this map has
+carried before and is deliberate, because the C++ defaults belong to C8 and the next phase will
+replace them.
+
+| Property | C++ default | Map override | Why |
+|---|---|---|---|
+| `AuthoredLayoutLapLength` | 48000 | **96000** | 960 m clears the 954 m comfortable fold threshold at 800 cm wide |
+| `SurfaceCentimetresPerTexel` | 3.125 | **6.25** | 96000 / 6.25 = 15360 and 800 / 6.25 = 128, both exact |
+| `RoadSegmentLength` | 128 | **256** | 400 x 96000 / 150000, holds rings-per-corner at the 1500 m value |
+| `TrackWidth` | 800 | not overridden | Unchanged |
+
+```
+15360 x 128 texels, 15728640 bytes, exactly 15.00 MiB
+a 20 cm contact patch stores as 3.20 texels
+```
+
+Against 2.05 texels before C8 and 6.40 at C8's 480 m. Worse than C8 on density, better than
+pre-C8, and geometrically valid, which 480 m was not.
+
+**Verified by capture, not by arithmetic.** Top-down close-ups of the chicane and of the tightest
+hairpin both show the road turning cleanly with no self-intersection. What remains is mild
+faceting on the inside edge from the 256 cm ring spacing, which is the benign failure mode of the
+two — a polygonal corner rather than a crumpled one. `L_SpaHarness.umap` saved at 740327 bytes,
+well clear of the 993171 that signals leaked test actors.
+
+**Not verified:** no rubber has been seen at 6.25 cm per texel. Every capture above is an empty
+buffer, so nothing here judges the surface, only the geometry it is painted onto.
 
 ---
 
