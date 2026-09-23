@@ -370,6 +370,117 @@ into an empty world. Prefix the command with `MSYS_NO_PATHCONV=1`, or run it fro
 Still not reachable this way: `stat unit` and `stat GPU` write to the screen rather than the log, so
 frame rate remains uncaptured. That gap is unchanged.
 
+## 2026-09-23 — R5: the receiving function samples by mesh UV
+
+### `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+
+Asset: `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+Change: modified
+Why: phase R stores surface state as a track-space ribbon, and the function still sampled by world
+position, which against a ribbon reads meaningless texels. The road mesh carries the ribbon
+coordinate in UV0 by construction, so a plain texture coordinate *is* the track-space lookup.
+Made via: `MaterialTools.add_expression` (`MaterialExpressionTextureCoordinate`),
+`connect_expressions` into `MaterialExpressionTextureSample_0`'s `UVs`, `recompile`,
+`AssetTools.save_assets`
+
+One node added, one wire moved. **The dangling world-position chain was left in the graph** —
+`WorldPosition_0`, `ComponentMask_0`, `ComponentMask_1`, `CollectionParameter_0`,
+`CollectionParameter_1`, `Subtract_0`, `Divide_0`, `Constant_0`, `Add_0`. Replacing the *consumer*
+takes them out of the compiled shader, and `delete_expression` asserts and halts the editor on a
+MaterialFunction, which is recorded further up this file. Verified saved with `is_dirty` returning
+false rather than trusting the save's boolean.
+
+**This edit was made and lost once before**, in the session where `delete_expression` halted the
+editor before anything was saved. Redone here and saved first.
+
+### `/Game/Maps/L_TrackHarness`
+
+Change: modified
+Why: the circuit spawns its own field now, so the five hand-placed `ASplineFollowingCar` actors
+were a duplicate population — and their hand-set `LateralOffsetAlpha` values were dead anyway,
+because C3 renamed that property to `BaselineLateralOffsetAlpha`. `BP_SurfaceRegionDisplay` went
+with them: its flat 200 m plane cannot show a ribbon, and the binding job it did is now done by the
+circuit's road.
+Made via: `SceneTools.remove_from_scene` six times, `AssetTools.save_assets`
+
+The map now holds the circuit, the template lighting and sky, and nothing else of ours.
+
+### The road mesh was wound inside out, and nobody had looked
+
+Not an editor change, but it was found here and it is the reason R5 appeared to fail at first.
+
+With the material fixed, the road still rendered nothing. The component reported
+`bVisible true`, the right override material, identity transform and correct bounds — so it existed
+and was not hidden. `M_SurfaceAccumulationDebug` has `TwoSided` false, which made backface culling
+the suspect.
+
+Confirmed against the engine's own reference rather than by guessing. `GenerateBoxMesh`'s top face
+(`KismetProceduralMeshLibrary.cpp`) has normal `(0,0,1)` and is therefore visible from above, and
+its winding gives `(v1-v0) x (v2-v0)` pointing **down**. `GenerateRoadMesh` wound the other way, so
+every triangle faced the ground. Swapped, and the road appeared immediately.
+
+**The mesh had been wrong since it was written** and was committed, built and measured against
+without anyone seeing it, because `PLAN.md` had been carrying "nothing has been seen on screen
+since the restructure" as a known gap. It cost nothing in the measurements — the paint path never
+touches the mesh — but it is the clearest argument in this project so far for looking at the thing.
+
+## 2026-09-23 — `/Game/Maps/L_SpaHarness`, a Spa-shaped circuit with twenty cars
+
+Asset: `/Game/Maps/L_SpaHarness`
+Change: created
+Why: the harness had only ever run the stadium oval. Spa is the circuit the phase R memory
+argument is built around, and nothing had ever driven its shape.
+Made via: `AssetTools.duplicate` of `/Game/Maps/L_TrackHarness`, then
+`ObjectTools.set_properties` on `RacetrackCircuit_0` and two `SceneTools.remove_from_scene`
+
+| Property | Value | Why |
+|---|---|---|
+| `Layout` | `Spa` | Selects the authored centreline over the generated stadium |
+| `AuthoredLayoutLapLength` | 150000 cm | See the scale note below |
+| `CarCount` | 20 | The density C3 and E7 need |
+| `RoadSegmentLength` | 400 cm | 1500 m of road at 200 cm would be 750 segments for no visible gain |
+
+`Floor_0` and `StaticMeshActor_0`, both from the `Template_Default` duplicate, were removed. They
+are a 80 m square sitting in the middle of a 425 by 266 m circuit, which reads as debris from above.
+
+### Why 1500 m and not "Spa, halved"
+
+The unfolded ribbon cannot exceed 16384 texels along the track, and folding is not implemented.
+
+| Scale | Lap | Along-track texels at 9.7656 cm | Fits |
+|---|---|---|---|
+| Full Spa | 7004 m | 71721 | no |
+| Halved | 3502 m | 35860 | no |
+| Quarter | 1751 m | 17929 | no, just over |
+| **21.4 %** | **1500 m** | **15361** | **yes** |
+
+So "halved" was not available. 1500 m is the largest round figure that fits at the production texel
+density, and it is the case `PLAN.md` already tabulated. Confirmed at runtime:
+
+```
+Surface ribbon configured: 150000.0 cm of track at 1200.0 cm wide, 9.7656 cm per texel,
+                           15361 x 123 texels, closed loop
+Accumulation buffer allocated at 15361 x 123, 15115224 bytes
+RacetrackCircuit_0 spawned a field of 20 cars spread across 0.80 of the track width
+```
+
+Track width stays at 1200 cm rather than scaling with the layout. Scaled properly it would be
+3.2 m, which is narrower than two of the 2.2 m cars side by side, so there would be no lateral
+spread to observe. This is stated as the harness convenience it is: the circuit is Spa's *shape* at
+21 % with a proportionally wide track, not a scale model of Spa.
+
+### The centreline is authored, and how
+
+`RacetrackLayouts::SpaCentreline` in `RacetrackCircuit.cpp` is 76 points read off the circuit's plan
+view, stored in arbitrary units. `GenerateTrackSpline` builds the spline from them, measures the
+resulting length, then rescales about the centroid so the lap lands on `AuthoredLayoutLapLength` —
+two passes, because the length of a Catmull-Rom spline through given points is not known before
+building it. Measured 150000.0 cm against 150000 requested.
+
+The points are mapped `(-Y, X)` rather than `(X, -Y)` so the circuit sits the same way up as the
+plan it was read from. The first attempt used the latter and produced a Spa rotated 90 degrees,
+which is only obvious once you look at it from directly above.
+
 ### Live Coding confirmed again on the plugin module
 
 Three `CompileLiveCoding` calls succeeded in this session, all patching
