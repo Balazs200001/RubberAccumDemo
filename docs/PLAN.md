@@ -481,8 +481,39 @@ concentrated band through every corner, on both layouts.
 
 Several values are demo tuning rather than results, and should be read that way: `GridSpacing` packs
 the field into a train instead of spreading it around the lap, `ElevationExaggeration` at 2.5
-overstates Spa's gradients by roughly double, and the observer placement and time-dilation controls
-exist to make the harness watchable. None of them affect what the surface system stores.
+overstates Spa's gradients by roughly double, and the observer, time-dilation and deposition
+controls exist to make the harness watchable. None of them affect what the surface system stores.
+
+**Deposition has its own keys rather than following time dilation, and the reason is the same one
+behind the swept-share fix.** Time compression already accelerates buildup correctly: more laps
+happen per real second, so more rubber lands per real second. Scaling deposition with dilation as
+well would count the compression twice and, worse, make **rubber per lap depend on playback speed**
+— a lap has to lay the same rubber whether you watch it at 1x or 20x. `.` and `,` move time, `]`
+and `[` move the rate, and they are independent.
+
+**Known defect, found by measuring rather than by looking: the field does not hold its grid
+spacing.** `RubberAccumDemo.Car.FieldHoldsItsSpacing` starts two drivers 1400 cm apart and ticks
+them through 3000 frames:
+
+```
+Two drivers on different lines and commitments started 1400 cm apart and ended 791 cm apart
+after 3000 ticks, a drift of -609 cm
+```
+
+Live, the gap between the first two cars measured about 13800 cm after roughly five minutes, far
+more than that test shows, so the drift is not a one-off transient.
+
+Speed is a function of position only, so two cars should hold station. They do not, and the
+probable cause is that speed is rate-limited by `FInterpConstantTo`: two cars at different points on
+the lap are accelerating and braking differently at any instant, and a rate limit makes the
+resulting speed-at-position depend on the approach rather than only on the position. Whether that
+merely oscillates or accumulates is **not established**, and the live figure suggests it
+accumulates.
+
+Not fixed. It does not affect the surface system — contacts are registered wherever the cars are —
+but it does mean the twenty cars stop reading as a race after a few minutes, and any future
+measurement that assumes a known field distribution cannot rely on it. The test is deliberately left
+asserting a loose bound so it records the behaviour rather than hiding it.
 
 **The time controls expose a phase C4 problem early, and it is not fixed.** At 20x dilation and
 100 fps a stroke is about 330 cm, which sits on the `sqrt(8 * R * CentimetresPerTexel)` bound of
