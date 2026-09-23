@@ -565,7 +565,7 @@ flat in stroke count. **Recorded here rather than discovered in C4. Not implemen
 | # | Task | Exit |
 |---|---|---|
 | R1 | `FSurfaceTrackRibbon` and the world to (distance, offset) mapping, with headless tests | Pure math, no rendering, no assets. A point on the centreline maps to offset 0; offset sign is consistent around both left and right hand corners; distance wraps on a closed loop; a point beyond the track edge is reported out-of-bounds rather than clamped |
-| R2 | Measure the conversion cost at 4 and at 80 contacts per frame | Number in `MEASUREMENTS.md`. **Bail-out gate, see below** |
+| R2 | Measure the conversion cost at 4 and at 80 contacts per frame | Number in `MEASUREMENTS.md`. **Bail-out gate, see below** — passed, re-taken on mains 2026-09-23 |
 | R3 | Buffer domain and paint path moved to track space, including the lap-seam split | Contacts land on the ribbon, and no stroke is smeared across the buffer at the seam — **met 2026-09-23** |
 | R4 | Read the painted stroke width back from the buffer | A texel profile, settling whether D1's "narrow" requirement is already violated — **met 2026-09-23** |
 | R5 | Receiving material samples by mesh UV, and a road carrying track-space UVs | Rubber appears on the road where the cars drive |
@@ -587,6 +587,35 @@ and a mains-power re-take is what turns that into a number.** Not implemented.
 
 A method rule follows for the rest of the project: **record the power state with every
 measurement.** No entry in `MEASUREMENTS.md` before this one does.
+
+### R2 re-taken on mains, 2026-09-23. The constant is now reliable and the question is answered.
+
+Six headless runs on mains, three with the test unchanged and three after adding spline-point
+candidates 128, 192 and 384. 36 of 36 tests pass in all six. Numbers in
+[MEASUREMENTS.md](MEASUREMENTS.md).
+
+- **The spread is gone.** Three mains runs agree to within 5 % where the battery runs spread by
+  2.42x. Harness complexity at 80 contacts is **0.1383 ms, 0.83 % of a 60 Hz frame**, against the
+  0.5053 ms recorded above.
+- **The crossover is measured, not interpolated.** The test now computes and prints it: 238, 233
+  and 230 spline points across the three runs, so **about 234**. A 7 km circuit at one point every
+  100 m costs 0.33 ms; at one point every 27 m it costs 1.09 ms. The sparse end of the plausible
+  range clears by a factor of three, the dense end crosses.
+- **The per-contact segment cache stays unimplemented, now with a written trigger.** Implement it
+  when a circuit exceeds about 230 centreline spline points, or when any world-space caller reaches
+  80 contacts per frame in a real scene. Neither holds: `ASplineFollowingCar` uses the track-space
+  overload and performs **zero** spline searches per frame, and repo-wide the world-space overload
+  is reached only from the Blueprint wrapper and three automation tests.
+- **The power-state caveat over the whole measurement file is narrowed by measurement.** The full
+  suite re-ran on mains, so the paint and decay passes were re-taken for free. They did not move.
+  Battery cost the game-thread search 2 to 3.7x and cost the GPU-timestamped passes nothing, which
+  is a mechanism rather than a coincidence. **The pre-2026-09-23 GPU figures did not need a
+  re-take; only the CPU wall-clock ones did.** The five-car real-scene entry is the one still open,
+  and R6 re-takes it.
+- **A conclusion recorded on 2026-09-22 was reversed.** The earlier entry called the editor run
+  optimistic and the headless runs "the numbers of record". The editor run matches mains to within
+  5 % at every complexity, so it was the only full-clock run of the three and the headless runs
+  were the throttled ones.
 
 **R4 closed a carried unknown and opened a smaller one.** A 20 cm contact patch stores exactly
 19.53 cm — 2 texels at the production density, 8 at four times it. D1's "narrow" requirement was
