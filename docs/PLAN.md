@@ -330,7 +330,7 @@ world, so placing several car instances in a level does not need each one wired 
 `ASurfaceVerificationRig` is **deleted**, along with `/Game/Maps/L_SurfaceVerification`, which
 contained nothing else once the rig was gone. The cars replaced its driving half and
 `BP_SurfaceRegionDisplay` replaced its display half.
-| C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line — **C++ complete 2026-09-23, exit not demonstrated until R5** |
+| C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line — **met 2026-09-23** |
 | C4 | Time compression with lap counter | 50 laps in about two minutes |
 | C5 | Fixed-camera observation mode | Repeatable identical load per run |
 
@@ -447,6 +447,49 @@ recognisably Spa but is not survey-accurate, and no corner radius matches the re
 twenty-car Spa run has not been profiled — the R6 figures are the oval at 3167 x 123, and Spa's
 buffer is roughly five times larger, which affects the decay pass and not the paint pass on the
 evidence of B4.
+
+### Corrected 2026-09-23 after watching it run: the line aims at the apex, not the centreline
+
+The model recorded above had a car scale its own baseline offset toward zero when cornering, so
+every driver converged on `alpha = 0`. Seen on screen that is plainly wrong. The centreline is not
+a racing line, and because all twenty cars aimed at the same place their paths pinched into a point
+at every corner entry rather than fanning into a band.
+
+Corrected: a car eases toward the **inside of the corner**, and which side that is comes from the
+sign of the local curvature rather than from anything authored. `CorneringProfile` is stored signed
+for that reason; `GetCorneringAmountAtDistance` returns its magnitude and
+`GetSignedCorneringAtDistance` returns the value. The target is
+`Lerp(BaselineAlpha, ApexAlpha * Sign(SignedCornering), Commitment * CorneringAmount)`.
+
+Measured, two cars on the same 0.60 baseline: the uncommitted one holds **0.600**, the committed one
+now reaches **-0.402** on the inside, where under the old model it reached 0.079 on the centreline.
+
+The constant lateral rate was also replaced by easing. A constant rate turns every change of target
+into a V in the painted path, which was the second half of what looked wrong.
+
+**The emergence argument is unchanged in form and is worth restating against the new model**, because
+"drive toward the apex" sounds more like an authored line than "drive toward the centre" did. It is
+not: the car reads only the curvature at its own position, the side falls out of that curvature's
+sign, and how far it commits is its own parameter. Nothing stores a line. What the design does not
+do, and should not be claimed to, is model outside-entry and wide-exit — that comes out of the
+bounded lateral rate as a side effect, not from intent.
+
+### C3's exit condition is met, with the caveat that its demo tuning is not its design
+
+*Traffic spreads across the line* is demonstrated: distinct bands on the straights converging into a
+concentrated band through every corner, on both layouts.
+
+Several values are demo tuning rather than results, and should be read that way: `GridSpacing` packs
+the field into a train instead of spreading it around the lap, `ElevationExaggeration` at 2.5
+overstates Spa's gradients by roughly double, and the observer placement and time-dilation controls
+exist to make the harness watchable. None of them affect what the surface system stores.
+
+**The time controls expose a phase C4 problem early, and it is not fixed.** At 20x dilation and
+100 fps a stroke is about 330 cm, which sits on the `sqrt(8 * R * CentimetresPerTexel)` bound of
+342 cm for a 15 m radius corner at Spa's scale. Below about 10x there is margin; above it, or at a
+lower frame rate, strokes in tight corners will visibly cut the corner. That is exactly the sagitta
+failure this plan predicted for C4, arriving through the demo controls rather than through C4
+itself. **Stroke subdivision remains C4's first task and is not started.**
 
 **Status 2026-09-22: C0 COMPLETE.** Eighty contacts cost 0.0890 to 0.1150 ms against a four-contact
 budget that was 0.2620 to 0.2820 ms, so the exit condition is met with room to spare — eighty
