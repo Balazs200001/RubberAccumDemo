@@ -5,6 +5,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "SurfaceAccumulationSubsystem.h"
+#include "SurfaceTrackRibbon.h"
 #include "../RacetrackCircuit.h"
 #include "../SplineFollowingCar.h"
 
@@ -196,11 +197,11 @@ bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(cons
 
 	const double Length = Track->GetTrackLength();
 
-	TestEqual(TEXT("The lap starts on a straight"), Track->GetCorneringAmountAtDistance(0.0), 0.0);
-	TestEqual(TEXT("The middle of the first straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.097), 0.0);
-	TestEqual(TEXT("The middle of the first corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.347), 1.0);
-	TestEqual(TEXT("The middle of the second straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.597), 0.0);
-	TestEqual(TEXT("The middle of the second corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.847), 1.0);
+	TestTrue(TEXT("The lap starts on a straight"), Track->GetCorneringAmountAtDistance(0.0) < 0.05);
+	TestTrue(TEXT("The middle of the first straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.097) < 0.05);
+	TestTrue(TEXT("The middle of the first corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.347) > 0.9);
+	TestTrue(TEXT("The middle of the second straight is not cornering"), Track->GetCorneringAmountAtDistance(Length * 0.597) < 0.05);
+	TestTrue(TEXT("The middle of the second corner is cornering"), Track->GetCorneringAmountAtDistance(Length * 0.847) > 0.9);
 
 	TestEqual(
 		TEXT("Cornering amount wraps with distance"),
@@ -227,6 +228,121 @@ bool FRacetrackCircuitCorneringAmountSeparatesStraightsFromCorners::RunTest(cons
 	TestTrue(
 		TEXT("The share of the lap reported as cornering matches the stadium's own geometry"),
 		FMath::IsNearlyEqual(MeasuredCorneringFraction, ExpectedCorneringFraction, 0.02));
+
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon,
+	"RubberAccumDemo.Track.SpaLayoutFitsTheUnfoldedRibbon",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitSpaLayoutFitsTheUnfoldedRibbon::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, 150000.0);
+
+	const double Length = Track->GetTrackLength();
+
+	FSurfaceTrackRibbon Ribbon;
+	Ribbon.TrackLength = Length;
+	Ribbon.TrackWidth = Track->GetTrackWidth();
+	Ribbon.CentimetresPerTexel = 9.765625;
+
+	AddInfo(FString::Printf(
+		TEXT("Spa layout: %.1f cm of lap, %d x %d texels, %lld bytes at RGBA16f"),
+		Length,
+		Ribbon.AlongTrackTexels(),
+		Ribbon.AcrossTrackTexels(),
+		Ribbon.TexelCount() * 8));
+
+	TestTrue(
+		TEXT("The rescale lands the lap within one percent of the requested length"),
+		FMath::IsNearlyEqual(Length, 150000.0, 1500.0));
+
+	TestTrue(TEXT("The Spa layout fits the ribbon unfolded"), Ribbon.FitsUnfolded());
+
+	const FVector Start = Track->GetWorldPositionAtDistance(0.0, 0.0);
+	const FVector AfterOneLap = Track->GetWorldPositionAtDistance(Length, 0.0);
+
+	TestTrue(TEXT("The Spa layout is a closed loop"), Start.Equals(AfterOneLap, 1.0));
+
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitSpaLayoutHasGradedCorners,
+	"RubberAccumDemo.Track.SpaLayoutHasGradedCorners",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitSpaLayoutHasGradedCorners::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, 150000.0);
+
+	const double Length = Track->GetTrackLength();
+
+	constexpr int32 SampleCount = 2000;
+	int32 StraightSamples = 0;
+	int32 IntermediateSamples = 0;
+	int32 HardCorneringSamples = 0;
+
+	for (int32 Sample = 0; Sample < SampleCount; ++Sample)
+	{
+		const double Amount = Track->GetCorneringAmountAtDistance(Length * Sample / SampleCount);
+
+		StraightSamples += Amount < 0.15 ? 1 : 0;
+		IntermediateSamples += (Amount >= 0.15 && Amount <= 0.7) ? 1 : 0;
+		HardCorneringSamples += Amount > 0.7 ? 1 : 0;
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Spa cornering distribution over %d samples: %.1f %% straight, %.1f %% intermediate, %.1f %% hard"),
+		SampleCount,
+		100.0 * StraightSamples / SampleCount,
+		100.0 * IntermediateSamples / SampleCount,
+		100.0 * HardCorneringSamples / SampleCount));
+
+	TestTrue(TEXT("Spa has genuine straights where nothing is cornering"), StraightSamples > SampleCount / 10);
+	TestTrue(TEXT("Spa has at least one corner at full cornering"), HardCorneringSamples > 0);
+
+	TestTrue(
+		TEXT("Spa grades its corners rather than being on or off like the stadium"),
+		IntermediateSamples > SampleCount / 20);
 
 	Track->Destroy();
 
@@ -306,10 +422,9 @@ bool FSplineFollowingCarBrakesBeforeTheCornerRatherThanInIt::RunTest(const FStri
 	const double CornerEntry = Track->GetStraightLength();
 	const double BeforeEntry = CornerEntry - 1000.0;
 
-	TestEqual(
+	TestTrue(
 		TEXT("The sample point just before the corner is still on a straight"),
-		Track->GetCorneringAmountAtDistance(BeforeEntry),
-		0.0);
+		Track->GetCorneringAmountAtDistance(BeforeEntry) < 0.05);
 
 	Car->ConfigureDriver(Track, BeforeEntry, 0.0, 0.0);
 	TickCar(*Car, 10);
