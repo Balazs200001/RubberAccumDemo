@@ -699,3 +699,37 @@ is what the deposition rate predicts — the runtime log states 63 % coverage at
 twenty cars. Raising `r.RacetrackSurface.DepositionScale` would have made this visible in seconds,
 and no MCP tool can set a console variable, which is the same gap recorded on 2026-09-22. Judging
 it needs a human in a play session pressing `]`.
+
+---
+
+## 2026-09-23 — Hazard: running the automation tests with the editor open can write actors into the open map
+
+Asset: `/Game/Maps/L_SpaHarness` (no net change; recorded as a warning, not as a setup step)
+Change: none. A change happened and was reverted.
+Why this is here: it will happen again to anyone who repeats the workflow.
+
+`FindRenderableWorld()` in `Source/RubberAccumDemo/Tests/RacetrackCircuitTests.cpp` returns the
+**editor** world, so every host test spawns its `ARacetrackCircuit` and `ASplineFollowingCar` into
+whatever level is currently open. Tests that fail on an early-return path skip their `Destroy()`
+calls, and the leaked actors then sit in the open level as ordinary unsaved changes. Closing the
+editor and saving writes them into the `.umap`.
+
+This happened during C6. `L_SpaHarness.umap` grew from 737340 to 993171 bytes, and a `-game` run
+of the map logged two circuits instead of one:
+
+```
+RacetrackCircuit_0  spawned a field of 20 cars   (Spa, 150000 cm, the real one)
+RacetrackCircuit_34 spawned a field of 20 cars   (stadium, 30921 cm, leaked from a test)
+```
+
+The leaked circuit called `ConfigureTrackRibbon` second, so it reconfigured the shared surface
+ribbon from Spa\x27s 150000 cm to the stadium default of 30921 cm. Recovered with
+`git checkout -- Content/Maps/L_SpaHarness.umap`, which restores the LFS content, and confirmed by
+re-running the map and seeing one circuit and a 150000 cm ribbon.
+
+The early returns in the tests added by C6 now tear down before returning. The older tests in that
+file still have the original pattern, so the hazard is reduced and not removed.
+
+**Run the automation tests with the editor closed.** The headless command in `CLAUDE.md` spawns
+into a throwaway world and cannot touch a saved map. If the tests must be run in the editor, check
+`git status` for a modified `.umap` afterwards and do not save the level on exit.
