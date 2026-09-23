@@ -333,6 +333,7 @@ contained nothing else once the rig was gone. The cars replaced its driving half
 | C3 | Per-position speed and slip curves, lateral offset per car | Traffic spreads across the line — **met 2026-09-23** |
 | C4 | Time compression with lap counter | 50 laps in about two minutes |
 | C5 | Fixed-camera observation mode | Repeatable identical load per run |
+| C6 | Shared racing line with per-corner variation. Added 2026-09-23, requested directly | A dominant line with distinguishable arcs around it in corners, reproducible from a seed |
 
 *Exit: press play, walk away, come back to a marked track.*
 
@@ -940,6 +941,100 @@ Reserved. No new features.
 - Public technical write-up
 - Fab listing, clean install verified into a fresh project
 - Fixed-camera timelapse of one braking zone evolving
+
+---
+
+## C6 — A shared racing line with per-corner variation
+
+Added 2026-09-23, outside the original phase C scope. Requested directly rather than planned, for
+the same reason the Spa layout was: what the buildup *looks like* is the thing the project is
+judged on, and the current traffic model produces the wrong shape for it.
+
+### What is wrong with the shape C3 produces
+
+C3 spreads cars across the track by baseline offset and converges them toward a single apex value
+in corners. That is backwards from a real field. Cars fan out **on the straights**, where a real
+field runs nose to tail on one line, and they converge to the **same** apex, where a real field
+takes visibly different arcs. The rubber that falls out of it is a wide band on the straights and a
+narrow one at the apex.
+
+What is wanted is the inverse: one dominant line everywhere, with the spread appearing **in the
+corners**, so the racing line is unmistakable and the variation around it is visible as separate
+arcs rather than as a smear.
+
+### The design
+
+Three changes, none of them large.
+
+1. **Collapse the baseline spread.** `DriverLateralSpread` shrinks so the field runs close to a
+   single line on the straights. It is not removed — see the emergence note below.
+2. **Seeded per-car randomness.** Each `ASplineFollowingCar` owns an `FRandomStream` seeded from
+   a circuit-level seed plus its own grid index. This is not optional: automation tests and every
+   figure in `MEASUREMENTS.md` depend on a run being reproducible, and an unseeded `FMath::Rand`
+   would make the harness non-deterministic and quietly invalidate the C3 tests.
+3. **One draw per corner, not per frame.** On a rising edge of `CorneringAmount` through an entry
+   threshold, the car draws a deviation `D` and holds it for the whole corner:
+
+   ```
+   ApexTarget = (ApexLateralOffsetAlpha + D) * Sign(SignedCornering)
+   ```
+
+   `D` is drawn from a **triangular** distribution — the sum of two uniform draws, halved — rather
+   than a uniform one. That is the whole trick for the requested look: a triangular distribution
+   has a mode at the apex value, so most laps land on or near the same line and the outliers are
+   genuinely outliers. A uniform draw would give an evenly smeared band with no dominant line in
+   it. The result is clamped so the deviated line stays inside the ribbon with margin.
+
+Per-frame noise is explicitly not the design. A value re-drawn every tick is jitter: the car
+wobbles and the deposit averages back to the mean, leaving one blurred band. Holding `D` for the
+corner is what makes a *different arc* rather than a noisy one.
+
+### The emergence problem, which is the real decision here
+
+The project's central claim is that the line is not authored. C3's defence is that it authors the
+policy, not the path: no number anywhere is "the racing line", and the band is where independent
+drivers happen to converge.
+
+**Collapsing the baseline spread to zero would break that defence.** Every car would target the
+same authored `ApexLateralOffsetAlpha`, and the line would literally be a constant in the header
+with noise around it. The band would be decoration on an authored path, and the honest description
+would have to change from *emergent* to *variation around a line I chose*.
+
+So the spread shrinks rather than vanishing, and `CorneringLineCommitment` keeps varying per
+driver. Cars still differ **systematically**, not only randomly, and the dominant line is still
+where independent policies converge — it is just a much tighter convergence than before. Setting
+`DriverLateralSpread` to 0 collapses this to the purely-authored version, which is a legitimate
+thing to want for a screenshot and an illegitimate thing to describe as emergent. One parameter,
+two claims, and the difference must be stated wherever the footage is used.
+
+### Two interactions to expect
+
+**The field-spacing drift gets more visible, not less.** Cars currently drift apart along the
+track; the lateral spread hides it because they are on separate lines anyway. Put them on one line
+and drifting cars close up on each other with nowhere to go, so the defect reads as cars
+intersecting rather than as an uneven grid. This may promote the drift fix from *known defect* to
+*prerequisite*.
+
+**The saturation timescale changes shape.** `ReportLapsToSaturation` assumes twenty cars cross one
+apex texel per lap, which stays roughly true. But the straights, currently fanned across many
+texels, now concentrate on a few — so the straights will saturate far faster than they do today and
+the 17-and-50-lap figures will describe the whole track rather than just the apex. Re-read the
+log line after the change rather than assuming it carries over.
+
+### Tests
+
+- **Determinism**: two runs with the same seed produce identical lateral offsets at the same
+  distances. Without this the rest of the harness is no longer reproducible.
+- **Distribution**: over many corner entries, the deviations have a mode near zero and a spread
+  inside the clamp. Asserting the *shape*, not a specific sequence.
+- **Held through the corner**: the deviation does not change between corner entry and exit.
+- The existing `DriversTakeDifferentLinesThroughACorner` will need revisiting — it asserts a
+  committed driver crosses to the inside from a wide baseline, and the baselines are about to stop
+  being wide.
+
+*Exit: twenty cars run visibly nose-to-tail on the straights and fan into distinguishable arcs
+through a corner, the same seed reproduces the same run, and the accumulated buffer shows one
+dominant line with separable arcs around it at a corner rather than a single smear.*
 
 ---
 
