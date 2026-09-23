@@ -866,3 +866,111 @@ three are recorded as unverified in `MEASUREMENTS.md`:
    predates C8 and C8 makes it about twice as deep. It should be looked for near 66 % of the lap.
 3. Whether a locked wheel reads as one dark mark among four. Press `]` a few times first — the
    deposition rate puts the apex at 63 % coverage in about 28 laps at 1x.
+
+---
+
+## 2026-09-23 — C9: the read path folds the ribbon into rows
+
+Three assets changed together, because the row count has to reach the shader for the fold to mean
+anything. Full reasoning in [PLAN.md](PLAN.md) under C9.
+
+### `/RacetrackSurface/Materials/MPC_RacetrackSurface`
+
+Asset: `/RacetrackSurface/Materials/MPC_RacetrackSurface`
+Change: modified — one scalar parameter added
+Why: the write side folds in C++ and the read side folds in HLSL, so exactly one number has to
+cross the boundary. Everything else the shader needs it reads off the bound texture through
+`TMTM_TexelSize`, which cannot disagree with the texture that is actually there.
+Made via: `ObjectTools.set_properties` on `ScalarParameters`, `AssetTools.save_assets`
+
+| Parameter | Default | Why that default |
+|---|---|---|
+| `AccumulationRowCount` | **0** | Matches the fail-loud default already used for `SaturationConstant` |
+
+The shader takes `max(Rows, 1.0)`, so an unpublished row count makes a folded ribbon read as though
+it were unfolded — which puts every mark at a quarter of its correct along-track position, four
+times over. That is deliberately not subtle. It is the same failure C8 found, where a configuration
+path never ran and nothing said so.
+
+`SaturationConstant` and `RegionWorldSize` were read back afterwards and are unchanged.
+
+**`ParameterId` could not be set through the tool** and the call warned about it. That turned out not
+to matter: `UMaterialExpressionCollectionParameter::PostEditChangeProperty` derives `ParameterId`
+from `ParameterName` whenever the node is edited (`MaterialExpressions.cpp:17169`), so setting the
+name is what fixes up the id. The name was set a second time on its own, after `Collection` was
+populated, to be sure that path ran. This matters because `PostLoad` goes the other way — it derives
+the *name* from the *id* (`MaterialExpressions.cpp:17156`) — so a wrong id would lose the binding
+silently on the next load.
+
+### `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+
+Asset: `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+Change: modified — one node added, one input added, the custom node's code replaced
+Why: the mesh UV is a ribbon coordinate, the buffer is now a folded atlas, and nothing in between
+was doing the conversion.
+Made via: `MaterialTools.add_expression` (`MaterialExpressionCollectionParameter`),
+`ObjectTools.set_properties` x3, `MaterialTools.recompile`, `AssetTools.save_assets`
+
+| Node | Purpose |
+|---|---|
+| `MaterialExpressionCollectionParameter_3` | Reads `AccumulationRowCount` from the collection |
+| `MaterialExpressionCustom_0` | Gained a fifth input, `Rows`; renamed to `BlurredFoldedExposure`; code replaced |
+
+**Additive and rewire only. No `delete_expression`**, which asserts and halts the editor on a
+MaterialFunction — recorded further up this file. The four existing inputs were re-supplied verbatim
+alongside the new one, because the tool refuses an array append whose existing elements have also
+changed, and all five were read back afterwards to confirm the original wiring survived.
+
+Three things in the new code worth defending:
+
+- **The tent is taken in ribbon space and every tap is folded separately.** A tap that steps past
+  the end of a row folds into the start of the next one, which is the surface physically next to it.
+  The blur therefore stops being a source of boundary artefacts and becomes correct across them.
+- **The shader does its own bilinear along the track.** At a row end the correct neighbour is in the
+  next row, which is nowhere near it in the atlas. Folding would otherwise *regress* something that
+  is currently right by accident: the render target's `AddressX` defaults to `TA_Wrap`
+  (`TextureDefines.h:498`), and on an unfolded ribbon wrapping past the end of the lap is the right
+  neighbour, because the lap is a loop. So the two neighbouring whole-lap texels are wrapped around
+  the lap, folded into the atlas separately, sampled with their U snapped to the texel centre, and
+  blended by hand. A bilinear sampler handed a UV at a texel centre returns that texel exactly, so
+  snapping gives an exact sample in X while leaving the sampler's bilinear in Y, which is wanted
+  inside a band. The shader therefore depends on neither the target's `Filter` nor its `AddressX`,
+  neither of which is set deliberately anywhere and neither of which is visible from the material.
+- **`RowWidth` is `round(1.0 / TexelSize.x)`, and the `round` is load bearing.** `TexelSize.x` is
+  the exact reciprocal of an integer atlas width, and its reciprocal in float32 comes back as
+  14400.00001 or 14399.99999 rather than 14400. Without the `round`, `floor(texel / RowWidth)`
+  lands on the wrong row at exactly the boundary, which is a one-texel error at every row seam.
+  With it, the row arithmetic is exact integer arithmetic.
+
+Across-track, `v` is clamped into the half-texel inset before folding, which reproduces clamp
+addressing inside the band. Without it, `v = 0` and `v = 1` sit exactly on the boundary between two
+rows' bands and a bilinear tap blends half of a neighbouring row's track edge.
+
+### `/Game/Materials/M_SurfaceAccumulationDebug`
+
+Asset: `/Game/Materials/M_SurfaceAccumulationDebug`
+Change: modified — recompiled and re-saved, graph untouched
+Why: it is the only material that calls the changed function, so recompiling it is what proves the
+new HLSL compiles at all. Its cached shader map changed as a result.
+Made via: `MaterialTools.recompile`, `AssetTools.save_assets`
+
+This material is also what closes the read path in
+`RubberAccumDemo.Surface.ReadPathReturnsTheMarkWhereItWasPainted`: a stroke is painted through the
+C++ path, the material is drawn into a small render target with
+`DrawMaterialToRenderTarget` — which supplies UV 0..1 across it
+(`KismetRenderingLibrary.cpp:220`) — and the result is read back. The mark has to come back at the
+ribbon coordinate it was put at. **That the material lives in `/Game` and not in the plugin means
+the plugin alone cannot test its own read path end to end**, which is worth knowing before anyone
+tries to move the test.
+
+### What was verified, and what was not
+
+Verified: that `MPC_RacetrackSurface` still carries its two original scalars alongside the new one;
+that all five custom-node inputs are wired to the expressions intended, by reading every one back
+after the edit; that `MF_SampleRacetrackSurface` and `M_SurfaceAccumulationDebug` both recompile
+without raising; that no shader compile failure appears in the log; and that `is_dirty` returns
+false for both plugin assets rather than trusting the save's return value.
+
+Not verified at the time of writing: that the folded read produces the right *picture*. The editor
+was running the pre-C9 C++ when these edits were made, so nothing had yet published a row count
+other than the collection's fail-loud 0. Nothing here has been looked at on screen.
