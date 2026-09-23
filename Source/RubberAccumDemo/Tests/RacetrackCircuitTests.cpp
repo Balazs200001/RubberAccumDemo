@@ -656,4 +656,63 @@ bool FSplineFollowingCarRegistersMoreSlipInACornerThanOnAStraight::RunTest(const
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSplineFollowingCarFieldHoldsItsSpacing,
+	"RubberAccumDemo.Car.FieldHoldsItsSpacing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSplineFollowingCarFieldHoldsItsSpacing::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+	ASplineFollowingCar* Leader = World->SpawnActor<ASplineFollowingCar>();
+	ASplineFollowingCar* Follower = World->SpawnActor<ASplineFollowingCar>();
+
+	if (Track == nullptr || Leader == nullptr || Follower == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit or the cars."));
+		return false;
+	}
+
+	constexpr double Spacing = 1400.0;
+
+	Leader->ConfigureDriver(Track, Spacing, 0.3, 0.8);
+	Follower->ConfigureDriver(Track, 0.0, -0.3, 0.2);
+
+	const double StartingGap = Leader->GetDistanceAlongTrack() - Follower->GetDistanceAlongTrack();
+
+	constexpr int32 LapTicks = 3000;
+
+	TickCar(*Leader, LapTicks);
+	TickCar(*Follower, LapTicks);
+
+	const double FinalGap = Leader->GetDistanceAlongTrack() - Follower->GetDistanceAlongTrack();
+
+	AddInfo(FString::Printf(
+		TEXT("Two drivers on different lines and commitments started %.0f cm apart and ended %.0f cm "
+			"apart after %d ticks, a drift of %.0f cm"),
+		StartingGap,
+		FinalGap,
+		LapTicks,
+		FinalGap - StartingGap));
+
+	TestTrue(
+		TEXT("Cars that differ only in line keep their grid spacing, so the field stays a train"),
+		FMath::Abs(FinalGap - StartingGap) < Spacing * 0.5);
+
+	Follower->Destroy();
+	Leader->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
 #endif
