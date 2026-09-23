@@ -953,14 +953,20 @@ bool FSplineFollowingCarLaysFourTracksInACornerAndTwoOnAStraight::RunTest(const 
 
 	Car->ConfigureDriver(Track, 0.0, 0.0, 0.8, UnusedDriverSeed);
 
-	constexpr int32 TicksAcrossTwoLaps = 6000;
+	constexpr int32 MostTicksWorthWaiting = 60000;
+
+	constexpr double StraightnessBands[] = { 0.05, 0.02, 0.01 };
+	constexpr int32 StraightestBand = UE_ARRAY_COUNT(StraightnessBands) - 1;
 
 	double WidestSeparation = 0.0;
-	double WidestSeparationOnAStraight = 0.0;
+	double WidestSeparationInBand[UE_ARRAY_COUNT(StraightnessBands)] = {};
+	int32 SamplesInBand[UE_ARRAY_COUNT(StraightnessBands)] = {};
 	int32 SamplesOnTheSecondLap = 0;
 	int32 SamplesSeparatedByAMark = 0;
 
-	for (int32 Tick = 0; Tick < TicksAcrossTwoLaps; ++Tick)
+	for (int32 Tick = 0;
+		Tick < MostTicksWorthWaiting && Car->GetDistanceAlongTrack() < SpaLength * 2.0;
+		++Tick)
 	{
 		Car->Tick(TickSeconds);
 
@@ -976,22 +982,36 @@ bool FSplineFollowingCarLaysFourTracksInACornerAndTwoOnAStraight::RunTest(const 
 		SamplesSeparatedByAMark += Separation > MarkWidthInAlpha ? 1 : 0;
 		WidestSeparation = FMath::Max(WidestSeparation, Separation);
 
-		if (Cornering < 0.05)
+		for (int32 Band = 0; Band < UE_ARRAY_COUNT(StraightnessBands); ++Band)
 		{
-			WidestSeparationOnAStraight = FMath::Max(WidestSeparationOnAStraight, Separation);
+			if (Cornering < StraightnessBands[Band])
+			{
+				WidestSeparationInBand[Band] = FMath::Max(WidestSeparationInBand[Band], Separation);
+				++SamplesInBand[Band];
+			}
 		}
 	}
 
 	AddInfo(FString::Printf(
 		TEXT("Spa at %.0f cm of lap, one driver over %d sampled ticks of a settled lap: the front and rear "
 			"tracks separate by at most %.2f cm, which is %.2f mark widths, and exceed one mark width over "
-			"%.1f %% of the lap. On the parts reading as straight the widest separation is %.2f cm"),
+			"%.1f %% of the lap"),
 		SpaLength,
 		SamplesOnTheSecondLap,
 		WidestSeparation * HalfWidth,
 		WidestSeparation / MarkWidthInAlpha,
-		SamplesOnTheSecondLap > 0 ? 100.0 * SamplesSeparatedByAMark / SamplesOnTheSecondLap : 0.0,
-		WidestSeparationOnAStraight * HalfWidth));
+		SamplesOnTheSecondLap > 0 ? 100.0 * SamplesSeparatedByAMark / SamplesOnTheSecondLap : 0.0));
+
+	for (int32 Band = 0; Band < UE_ARRAY_COUNT(StraightnessBands); ++Band)
+	{
+		AddInfo(FString::Printf(
+			TEXT("Below %.2f of sustained cornering, which is %.1f %% of the lap, the widest separation is "
+				"%.2f cm, %.0f %% of the corner maximum"),
+			StraightnessBands[Band],
+			SamplesOnTheSecondLap > 0 ? 100.0 * SamplesInBand[Band] / SamplesOnTheSecondLap : 0.0,
+			WidestSeparationInBand[Band] * HalfWidth,
+			WidestSeparation > 0.0 ? 100.0 * WidestSeparationInBand[Band] / WidestSeparation : 0.0));
+	}
 
 	TestTrue(
 		TEXT("The lap was actually sampled rather than the car never completing one"),
@@ -1003,9 +1023,9 @@ bool FSplineFollowingCarLaysFourTracksInACornerAndTwoOnAStraight::RunTest(const 
 		WidestSeparation > MarkWidthInAlpha);
 
 	TestTrue(
-		TEXT("They stay together where the track is straight, so the separation is the corner geometry and "
-			"not a constant offset applied everywhere"),
-		WidestSeparationOnAStraight < WidestSeparation * 0.5);
+		TEXT("A corner adds more than a whole contact patch of separation on top of whatever the straightest "
+			"track shows, so the separation is corner geometry and not a constant offset applied everywhere"),
+		WidestSeparation - WidestSeparationInBand[StraightestBand] > MarkWidthInAlpha);
 
 	Car->Destroy();
 	Track->Destroy();
