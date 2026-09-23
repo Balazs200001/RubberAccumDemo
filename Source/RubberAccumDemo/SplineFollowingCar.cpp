@@ -13,11 +13,16 @@ namespace
 	constexpr double DesiredCarLength = 220.0;
 	constexpr double DesiredCarWidth = 100.0;
 	constexpr double DesiredCarHeight = 60.0;
+
+	constexpr int32 BrakingSeedOffset = 1000003;
 }
 
 ASplineFollowingCar::ASplineFollowingCar()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	WheelPositions.SetNumZeroed(WheelCount);
+	PreviousWheelPositions.SetNumZeroed(WheelCount);
 
 	CarMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarMesh"));
 	SetRootComponent(CarMesh);
@@ -84,6 +89,13 @@ void ASplineFollowingCar::PlaceOnTrack()
 	bCommittedToACorner = false;
 	CornerDrawCount = 0;
 	DistanceLastCornering.Reset();
+
+	BrakingRandomStream.Initialize(DriverSeed + BrakingSeedOffset);
+	bBraking = false;
+	BrakingDrawCount = 0;
+	LockedWheel.Reset();
+	DistanceLastBraking.Reset();
+	bWheelHistoryValid = false;
 }
 
 double ASplineFollowingCar::DrawTriangularCornerDeviationAlpha()
@@ -119,6 +131,74 @@ void ASplineFollowingCar::UpdateCornerCommitment(double CorneringAmount)
 	bCommittedToACorner = true;
 	CornerDeviationAlpha = DrawTriangularCornerDeviationAlpha();
 	++CornerDrawCount;
+}
+
+void ASplineFollowingCar::UpdateBrakingCommitment(double BrakingAmount)
+{
+	if (BrakingAmount > BrakingExitAmount)
+	{
+		DistanceLastBraking = DistanceAlongTrack;
+	}
+
+	if (bBraking)
+	{
+		const double CoastingDistance = DistanceLastBraking.IsSet()
+			? DistanceAlongTrack - DistanceLastBraking.GetValue()
+			: 0.0;
+
+		if (CoastingDistance < SameBrakingEventSeparationCentimetres)
+		{
+			return;
+		}
+
+		bBraking = false;
+		LockedWheel.Reset();
+		return;
+	}
+
+	if (BrakingAmount < BrakingEntryAmount)
+	{
+		return;
+	}
+
+	bBraking = true;
+	++BrakingDrawCount;
+
+	const double LockupDraw = BrakingRandomStream.FRand();
+	const double SideDraw = BrakingRandomStream.FRand();
+
+	if (LockupDraw < LockupProbability)
+	{
+		LockedWheel = SideDraw < 0.5 ? ECarWheel::FrontLeft : ECarWheel::FrontRight;
+	}
+}
+
+void ASplineFollowingCar::PlaceWheelsFromPose(
+	const FVector& RearAxle,
+	const FVector& Heading,
+	const FVector& BodyRight)
+{
+	const FVector FrontAxle = RearAxle + Heading * Wheelbase;
+	const FVector HalfTrack = BodyRight * (WheelTrack * 0.5);
+
+	WheelPositions[static_cast<int32>(ECarWheel::FrontLeft)] = FrontAxle - HalfTrack;
+	WheelPositions[static_cast<int32>(ECarWheel::FrontRight)] = FrontAxle + HalfTrack;
+	WheelPositions[static_cast<int32>(ECarWheel::RearLeft)] = RearAxle - HalfTrack;
+	WheelPositions[static_cast<int32>(ECarWheel::RearRight)] = RearAxle + HalfTrack;
+}
+
+float ASplineFollowingCar::SlipAtWheel(int32 WheelIndex, float RollingSlipAmount) const
+{
+	const bool bLocked = LockedWheel.IsSet() && static_cast<int32>(LockedWheel.GetValue()) == WheelIndex;
+
+	return bLocked ? LockedWheelSlipAmount : RollingSlipAmount;
+}
+
+EAccumulationChannel ASplineFollowingCar::ChannelAtWheel(int32 WheelIndex) const
+{
+	const bool bLocked = LockedWheel.IsSet() && static_cast<int32>(LockedWheel.GetValue()) == WheelIndex;
+
+	return bLocked ? EAccumulationChannel::SkidMark : Channel;
 }
 
 void ASplineFollowingCar::BeginPlay()
@@ -166,6 +246,13 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 	const double TargetSpeed = StraightLineSpeedCentimetresPerSecond
 		* FMath::Lerp(1.0, CorneringSpeedFraction, CorneringAmount);
 
+	const double LargestSpeedDeficit =
+		StraightLineSpeedCentimetresPerSecond * (1.0 - CorneringSpeedFraction);
+
+	const double BrakingAmount = LargestSpeedDeficit > UE_DOUBLE_SMALL_NUMBER
+		? FMath::Clamp((SpeedCentimetresPerSecond - TargetSpeed) / LargestSpeedDeficit, 0.0, 1.0)
+		: 0.0;
+
 	SpeedCentimetresPerSecond = FMath::FInterpConstantTo(
 		SpeedCentimetresPerSecond,
 		TargetSpeed,
@@ -173,6 +260,7 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		SpeedChangeCentimetresPerSecondSquared);
 
 	UpdateCornerCommitment(CorneringAmount);
+	UpdateBrakingCommitment(BrakingAmount);
 
 	const double ApexTarget = FMath::Clamp(
 		(ApexLateralOffsetAlpha + CornerDeviationAlpha) * FMath::Sign(SignedCornering),
@@ -193,20 +281,41 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 
 	DistanceAlongTrack += SpeedCentimetresPerSecond * DeltaSeconds;
 
-	const FVector Position = Track->GetWorldPositionAtDistance(DistanceAlongTrack, LateralOffsetAlpha);
-	const FVector Direction = Track->GetWorldDirectionAtDistance(DistanceAlongTrack);
+	const FVector RearAxle = Track->GetWorldPositionAtDistance(DistanceAlongTrack, LateralOffsetAlpha);
+	const FVector Forward = Track->GetWorldDirectionAtDistance(DistanceAlongTrack);
+	const FVector Right = Track->GetWorldRightVectorAtDistance(DistanceAlongTrack);
+	const FVector Up = Track->GetWorldUpVectorAtDistance(DistanceAlongTrack);
 
-	SetActorLocation(Position);
-	SetActorRotation(Direction.Rotation());
+	const double LateralCentimetresPerSecond =
+		(LateralOffsetAlpha - PreviousLateralOffsetAlpha) / DeltaSeconds * Track->GetTrackWidth() * 0.5;
 
-	FSurfaceTrackContact Contact;
-	Contact.Coordinate.DistanceAlongCentreline = DistanceAlongTrack;
-	Contact.Coordinate.LateralOffsetAlpha = LateralOffsetAlpha;
-	Contact.CentimetresPerSecondAlongCentreline = SpeedCentimetresPerSecond;
-	Contact.LateralOffsetAlphaPerSecond = (LateralOffsetAlpha - PreviousLateralOffsetAlpha) / DeltaSeconds;
-	Contact.SlipAmount = FMath::Lerp(StraightSlipAmount, CorneringSlipAmount, static_cast<float>(CorneringAmount));
-	Contact.ContactWidth = ContactWidth;
-	Contact.Channel = Channel;
+	const FVector Velocity = Forward * SpeedCentimetresPerSecond + Right * LateralCentimetresPerSecond;
+	const FVector Heading = Velocity.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, Forward);
+	const FVector BodyRight = FVector::CrossProduct(Up, Heading).GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, Right);
 
-	Subsystem->RegisterSurfaceContactInTrackSpace(Contact);
+	PlaceWheelsFromPose(RearAxle, Heading, BodyRight);
+
+	SetActorLocation(RearAxle + Heading * (Wheelbase * 0.5));
+	SetActorRotation(Heading.Rotation());
+
+	const float RollingSlipAmount =
+		FMath::Lerp(StraightSlipAmount, CorneringSlipAmount, static_cast<float>(CorneringAmount));
+
+	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
+	{
+		const FVector WheelVelocity = bWheelHistoryValid
+			? (WheelPositions[Wheel] - PreviousWheelPositions[Wheel]) / DeltaSeconds
+			: Velocity;
+
+		Subsystem->RegisterSurfaceContact(
+			WheelPositions[Wheel],
+			WheelVelocity,
+			SlipAtWheel(Wheel, RollingSlipAmount),
+			ContactWidth,
+			ChannelAtWheel(Wheel));
+
+		PreviousWheelPositions[Wheel] = WheelPositions[Wheel];
+	}
+
+	bWheelHistoryValid = true;
 }

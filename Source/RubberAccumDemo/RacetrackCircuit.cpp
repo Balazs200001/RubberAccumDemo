@@ -370,31 +370,36 @@ void ARacetrackCircuit::ReportLapsToSaturation()
 
 	const double Spacing = GetAdjacentDriverSpacingCentimetres();
 	const double MarkWidth = Reference->GetContactWidth();
+	const double WheelsOverATexel = ASplineFollowingCar::WheelsSharingATrack;
 
 	const double CarsOverAStraightTexel = Spacing > UE_DOUBLE_SMALL_NUMBER
 		? FMath::Clamp(MarkWidth / Spacing, 1.0, static_cast<double>(CarCount))
 		: CarCount;
 
-	const double ApexPerLap = CarCount * ApexPerContact;
-	const double StraightPerLap = CarsOverAStraightTexel * StraightPerContact;
+	const double ApexPerLap = CarCount * WheelsOverATexel * ApexPerContact;
+	const double StraightPerLap = CarsOverAStraightTexel * WheelsOverATexel * StraightPerContact;
 
 	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("One cornering contact deposits %.6f exposure. With %d cars over one apex texel that is "
-			"%.4f per lap, so the apex reaches 63 %% coverage in about %.0f laps and 95 %% in about %.0f"),
+		TEXT("One cornering contact deposits %.6f exposure. With %d cars putting %.0f wheels each over one "
+			"apex texel that is %.4f per lap, so the apex reaches 63 %% coverage in about %.0f laps and 95 %% "
+			"in about %.0f. That assumes the whole field crosses one texel, so read it as an upper bound"),
 		ApexPerContact,
 		CarCount,
+		WheelsOverATexel,
 		ApexPerLap,
 		1.0 / (3.0 * ApexPerLap),
 		1.0 / ApexPerLap);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("One straight-line contact deposits %.6f. Baselines %.2f cm apart against a %.1f cm mark put "
-			"%.2f cars over one straight texel, that is %.6f per lap, so a straight reaches 63 %% in about "
-			"%.0f laps and 95 %% in about %.0f, a contrast of %.1f to 1 against the apex"),
+			"%.2f cars over one straight texel, each laying %.0f coincident wheels, that is %.6f per lap, so "
+			"a straight reaches 63 %% in about %.0f laps and 95 %% in about %.0f, a contrast of %.1f to 1 "
+			"against the apex"),
 		StraightPerContact,
 		Spacing,
 		MarkWidth,
 		CarsOverAStraightTexel,
+		WheelsOverATexel,
 		StraightPerLap,
 		1.0 / (3.0 * StraightPerLap),
 		1.0 / StraightPerLap,
@@ -786,6 +791,32 @@ FVector ARacetrackCircuit::GetWorldDirectionAtDistance(double DistanceAlongTrack
 	}
 
 	return Spline->GetDirectionAtDistanceAlongSpline(
+		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::World);
+}
+
+FVector ARacetrackCircuit::GetWorldRightVectorAtDistance(double DistanceAlongTrack) const
+{
+	const double Length = GetTrackLength();
+
+	if (Spline == nullptr || Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return GetActorRightVector();
+	}
+
+	return Spline->GetRightVectorAtDistanceAlongSpline(
+		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::World);
+}
+
+FVector ARacetrackCircuit::GetWorldUpVectorAtDistance(double DistanceAlongTrack) const
+{
+	const double Length = GetTrackLength();
+
+	if (Spline == nullptr || Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return GetActorUpVector();
+	}
+
+	return Spline->GetUpVectorAtDistanceAlongSpline(
 		static_cast<float>(WrapDistance(DistanceAlongTrack)), ESplineCoordinateSpace::World);
 }
 

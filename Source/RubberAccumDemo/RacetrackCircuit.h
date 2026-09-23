@@ -45,6 +45,10 @@ public:
 
 	FVector GetWorldDirectionAtDistance(double DistanceAlongTrack) const;
 
+	FVector GetWorldRightVectorAtDistance(double DistanceAlongTrack) const;
+
+	FVector GetWorldUpVectorAtDistance(double DistanceAlongTrack) const;
+
 	double GetCorneringAmountAtDistance(double DistanceAlongTrack) const;
 
 	double GetSignedCorneringAtDistance(double DistanceAlongTrack) const;

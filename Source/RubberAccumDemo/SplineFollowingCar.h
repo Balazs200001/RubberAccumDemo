@@ -9,12 +9,24 @@
 class ARacetrackCircuit;
 class UStaticMeshComponent;
 
+enum class ECarWheel : uint8
+{
+	FrontLeft,
+	FrontRight,
+	RearLeft,
+	RearRight
+};
+
 UCLASS()
 class ASplineFollowingCar : public AActor
 {
 	GENERATED_BODY()
 
 public:
+	static constexpr int32 WheelCount = 4;
+
+	static constexpr int32 WheelsSharingATrack = 2;
+
 	ASplineFollowingCar();
 
 	virtual void OnConstruction(const FTransform& Transform) override;
@@ -56,6 +68,41 @@ public:
 	float GetContactWidth() const
 	{
 		return ContactWidth;
+	}
+
+	double GetWheelbase() const
+	{
+		return Wheelbase;
+	}
+
+	double GetWheelTrack() const
+	{
+		return WheelTrack;
+	}
+
+	TOptional<ECarWheel> GetLockedWheel() const
+	{
+		return LockedWheel;
+	}
+
+	int32 GetBrakingDrawCount() const
+	{
+		return BrakingDrawCount;
+	}
+
+	bool IsBraking() const
+	{
+		return bBraking;
+	}
+
+	const TArray<FVector>& GetWheelPositions() const
+	{
+		return WheelPositions;
+	}
+
+	bool HasPlacedItsWheels() const
+	{
+		return bWheelHistoryValid;
 	}
 
 	double GetCornerDeviationAlpha() const
@@ -139,12 +186,41 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car")
 	EAccumulationChannel Channel = EAccumulationChannel::RubberBuildup;
 
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "1.0"))
+	double Wheelbase = 140.0;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "1.0"))
+	double WheelTrack = 80.0;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float LockedWheelSlipAmount = 1.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double LockupProbability = 0.15;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double BrakingEntryAmount = 0.25;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double BrakingExitAmount = 0.10;
+
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0"))
+	double SameBrakingEventSeparationCentimetres = 600.0;
+
 private:
 	void ResizeCarMesh();
 
 	void PlaceOnTrack();
 
 	void UpdateCornerCommitment(double CorneringAmount);
+
+	void UpdateBrakingCommitment(double BrakingAmount);
+
+	void PlaceWheelsFromPose(const FVector& RearAxle, const FVector& Heading, const FVector& BodyRight);
+
+	float SlipAtWheel(int32 WheelIndex, float RollingSlipAmount) const;
+
+	EAccumulationChannel ChannelAtWheel(int32 WheelIndex) const;
 
 	double DrawTriangularCornerDeviationAlpha();
 
@@ -166,4 +242,20 @@ private:
 	TOptional<double> DistanceLastCornering;
 
 	FRandomStream DriverRandomStream;
+
+	TArray<FVector> WheelPositions;
+
+	TArray<FVector> PreviousWheelPositions;
+
+	bool bWheelHistoryValid = false;
+
+	bool bBraking = false;
+
+	int32 BrakingDrawCount = 0;
+
+	TOptional<ECarWheel> LockedWheel;
+
+	TOptional<double> DistanceLastBraking;
+
+	FRandomStream BrakingRandomStream;
 };
