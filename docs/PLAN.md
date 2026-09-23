@@ -397,10 +397,56 @@ and still real thing: it authors the question, not the answer. What later phases
 time-integrated buildup through the saturating accumulator and the decay pass, which no car can
 see. Any write-up should make the weak claim, not the strong one.
 
-**Not verified.** Nothing has been seen on screen, so "traffic spreads" rests on two cars in a test
-holding 0.600 and 0.060 from the same baseline, not on a capture. The five map-placed cars lost
-their hand-set offsets when `LateralOffsetAlpha` was renamed, so until they are deleted the map runs
-ten cars, five of them stacked on the centreline.
+**Verified on screen 2026-09-23**, once R5 was met. The oval capture shows traffic fanning into
+distinct lines on the straights and converging into a single band through both corners, which is
+the design's central behaviour and was previously only a pair of numbers in a test. The five
+map-placed cars were deleted; the circuit's field is the only population now.
+
+### Added 2026-09-23, outside the original C3 scope: a Spa-shaped layout
+
+Requested directly rather than planned. `ARacetrackCircuit` gains an `ETrackLayout` selector, and
+`RacetrackLayouts::SpaCentreline` holds 76 points read off the circuit's plan view. The spline is
+built from them, measured, then rescaled about its centroid to hit `AuthoredLayoutLapLength`.
+`/Game/Maps/L_SpaHarness` runs it with twenty cars. Captured in
+[`spa-harness-twenty-cars-rubber-topdown.png`](../../2627-Y3A-PR-243663/assets/media/spa-harness-twenty-cars-rubber-topdown.png)
+and, at La Source, in
+[`spa-harness-la-source-rubber-closeup.png`](../../2627-Y3A-PR-243663/assets/media/spa-harness-la-source-rubber-closeup.png).
+
+**The lap is 1500 m, not a halved Spa, and the reason is the unfolded limit.** 16384 texels caps
+the lap at 1600 m at production density. Full Spa needs 71721, halved needs 35860, quarter needs
+17929 — none fit, and folding is not implemented. 1500 m is 21.4 % of Spa and gives
+**15361 x 123 texels, 15115224 bytes**, printed at runtime, against the 15360 x 123 and 15.1 MB
+this plan predicted for a 1500 m circuit before any of it was built.
+
+Track width stays 1200 cm rather than scaling to 3.2 m, because at true scale two cars would not
+fit side by side and there would be no lateral spread to observe. So this is Spa's *shape* at
+21 % with a proportionally wide track, not a scale model, and it should be described that way.
+
+**This forced C3's cornering signal to be generalised, and that is the interesting part.** The
+stadium knew its corners in closed form because it generated them from `StraightLength` and
+`CornerRadius`. An authored layout has no such parameters — the shape is data. So cornering is now
+a profile sampled from the spline at construction and normalised by the track's own tightest
+curvature.
+
+That reverses the choice recorded above, and the reversal is defensible on its own terms:
+
+- **The analytic test was right for a generated shape and is not available for an authored one.**
+  It was never a general solution, only the correct one for the case that existed.
+- **The stadium's closed-form answer becomes the oracle for the general implementation.** The
+  cornering-fraction test still measures 0.6110 against `2*pi*R / perimeter`, so the sampled
+  profile is checked against geometry the sampler knows nothing about. That is a stronger position
+  than the analytic version was ever in, because the analytic version could only be checked
+  against itself.
+- **Normalising by the track's own tightest curvature has no magic constant** and is self-scaling,
+  so it works at 1500 m or 7 km without retuning. On the stadium it still returns exactly 0 or 1;
+  on Spa it grades corners, which turns speed and slip into genuinely continuous curves rather
+  than the square wave the stadium produced.
+
+**Not verified.** The centreline points were read off a plan view by eye, so the shape is
+recognisably Spa but is not survey-accurate, and no corner radius matches the real circuit. The
+twenty-car Spa run has not been profiled — the R6 figures are the oval at 3167 x 123, and Spa's
+buffer is roughly five times larger, which affects the decay pass and not the paint pass on the
+evidence of B4.
 
 **Status 2026-09-22: C0 COMPLETE.** Eighty contacts cost 0.0890 to 0.1150 ms against a four-contact
 budget that was 0.2620 to 0.2820 ms, so the exit condition is met with room to spare — eighty
@@ -634,11 +680,29 @@ flat in stroke count. **Recorded here rather than discovered in C4. Not implemen
 | R2 | Measure the conversion cost at 4 and at 80 contacts per frame | Number in `MEASUREMENTS.md`. **Bail-out gate, see below** — passed, re-taken on mains 2026-09-23 |
 | R3 | Buffer domain and paint path moved to track space, including the lap-seam split | Contacts land on the ribbon, and no stroke is smeared across the buffer at the seam — **met 2026-09-23** |
 | R4 | Read the painted stroke width back from the buffer | A texel profile, settling whether D1's "narrow" requirement is already violated — **met 2026-09-23** |
-| R5 | Receiving material samples by mesh UV, and a road carrying track-space UVs | Rubber appears on the road where the cars drive |
+| R5 | Receiving material samples by mesh UV, and a road carrying track-space UVs | Rubber appears on the road where the cars drive — **met 2026-09-23** |
 | R6 | Re-take the real-scene measurement and compare against the five-car baseline | Numbers in `MEASUREMENTS.md` against median 0.0460 ms, p99 0.4450 ms, 1346 samples — **met 2026-09-23** |
 
-**Status 2026-09-23: R1 to R4 and R6 complete. R5 is the only task outstanding, and it is the one
-that needs the editor.** 41 of 41 automation tests pass headlessly. All three build paths pass.
+**Status 2026-09-23: PHASE R COMPLETE. R1 to R6 all met.**
+
+**R5 met.** `MF_SampleRacetrackSurface` samples by mesh UV, and rubber appears on the road where
+the cars drive. Captured in
+[`r5-c3-rubber-on-road-five-cars-oval.png`](../../2627-Y3A-PR-243663/assets/media/r5-c3-rubber-on-road-five-cars-oval.png).
+The five bands are separately identifiable, as C2 required, and the capture also shows C3 working:
+traffic fans into distinct lines on the straights and converges into one band through both corners.
+
+**The material edit was not the whole of R5.** With it done the road still rendered nothing,
+because `GenerateRoadMesh` wound its triangles inside out and every face pointed at the ground.
+Confirmed against `GenerateBoxMesh`'s top face in the engine rather than guessed, and fixed in
+`dd588db`. **The mesh had been wrong since it was written, committed and measured against.** It
+cost nothing numerically — the paint path never touches the mesh — but the only reason it survived
+is that this phase had been carrying "nothing has been seen on screen" as an accepted gap. The
+lesson is cheap to state and was expensive to learn: a render path that has never been looked at is
+not verified, however many tests pass around it.
+
+*Exit condition for the phase — "the same five cars lap and paint as they do today, on a ribbon
+sized from the centreline" — is demonstrated, with the memory figures printed at runtime rather
+than argued.*
 
 **R6 met 2026-09-23, and it took the twenty-car measurement with it.** Twenty cars in the live
 harness cost **0.0220 ms median against 0.0210 ms for five** — flat in stroke count, which is C0's
