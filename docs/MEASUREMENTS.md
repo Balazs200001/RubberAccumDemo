@@ -2130,3 +2130,130 @@ the longer lap, not the fetch count on its own.
 A scene that was GPU bound would show the doubled fetch cost plainly. This one cannot, and a reader
 should not take 1.8 % as evidence that manual bilinear is cheap in general — only that it is free
 in this scene.
+
+---
+
+## 2026-09-24 — C10: the decay pass at the production atlas, and the half-life calibration
+
+```
+Build:    Development, editor target, headless, editor closed
+Power:    MAINS. Win32_Battery BatteryStatus = 2
+Tests:    74 of 74 pass. Both build paths clean (editor target and RunUAT BuildPlugin)
+Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+          -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+```
+
+### The decay pass at 14400 x 1024, which PLAN.md had extrapolated 2.5 times too high
+
+`RacetrackSurface.Performance.DecayAtTheProductionAtlas`, 64 samples, a default-constructed
+`FSurfaceTrackRibbon`, which is the demo's own configuration: 180000 cm of lap at 800 cm wide,
+3.125 cm per texel, 57600 x 256 texels in 4 rows of 14400, allocating **14400 x 1024 for
+117964800 bytes**.
+
+| | Extrapolated in PLAN.md | **Measured** |
+|---|---|---|
+| Full-buffer decay, median | 0.845 ms | **0.3400 ms** |
+| Full-buffer decay, minimum | — | **0.2870 ms** |
+| Share of the 2.365 ms GPU frame | 36 % | **14 %** |
+
+**The extrapolation was linear in bytes touched and the pass is not.** B4's stated reading — *"decay
+cost tracks bytes touched"* — was taken across a 64-fold range of *square* buffers and does not hold
+from 33554432 bytes to 117964800. The real ratio is **3.52 times the bytes for 1.42 times the
+time**, so the pass is substantially sub-linear at this size. Recorded as a correction to B4's
+reading rather than a new one, because two points do not establish a curve: what is established is
+that the linear model overstates the cost at this size by 2.5x.
+
+**This weakens the cost half of the argument for not decaying every frame, and that should be said
+plainly.** 0.34 ms against a 4.725 ms frame is 7 %, which is expensive but not disqualifying. The
+argument that survives intact is the precision one below, which is not a matter of degree.
+
+### Why the pass runs on banked decay rather than every frame, in numbers
+
+`RacetrackSurface.Mapping.DecayStepSurvivesHalfFloatRounding`.
+
+The buffer is RGBA16f. A half float carries an 11-bit significand, so half an ulp is between `2^-12`
+and `2^-11` of the value: a multiply that moves a value by less than **4.883e-4** relative is not
+guaranteed to change any bit, and one below 2.441e-4 is guaranteed to change none.
+
+| | Relative change per application | Against the 4.883e-4 threshold |
+|---|---|---|
+| Decaying every frame at 60 Hz, 1x | 1.281e-5 | **38 times too small** |
+| One step at 256 steps per half-life | 2.704e-3 | **5.5 times the threshold** |
+
+So a per-frame decay pass at this half-life **costs 0.34 ms and changes nothing at all**, silently.
+Banking progress until one step has elapsed makes the retention a constant 0.997296 whatever the
+rate and whatever the frame rate, which is both representable and predictable in cost.
+
+`RacetrackSurface.Mapping.DecayRetentionIsIndependentOfFrameRate` measures the frame-rate
+independence directly: over 10 s at 1x, one banked step and 600 compounded frames give retentions
+differing by **1.115e-5, which is 44 times finer than the buffer can hold**.
+
+Cost that follows, at the measured 0.3400 ms: `Rate * 256 / HalfLifeSeconds` passes a second, so
+**0.0009 ms a frame at 1x and 60 Hz** on the fallback half-life, rising linearly with the rate.
+
+### Lap time, measured against the speed profile the half-life is derived from
+
+`RubberAccumDemo.Track.LapSecondsMatchATickedLap`, one car ticked at 1/60 s until it completes a lap.
+
+| Layout | Lap | Predicted by integrating the speed profile | Ticked | Error |
+|---|---|---|---|---|
+| Stadium | 30921 cm | 14.68 s | **15.83 s** | 7.3 % |
+| Spa | 180000 cm | 80.44 s | **87.05 s** | 7.6 % |
+
+The integration assumes a car is at its target speed everywhere and ignores the bounded braking and
+acceleration rates, so it runs consistently fast by about 7.5 % on both layouts. That is small
+enough for a calibration and the bias is stated rather than corrected.
+
+**This is what forced the half-life to be held in laps rather than in seconds.** At 56 laps the
+half-life is 822 s on the Stadium and 4505 s on Spa — **5.5 times apart** — so any single constant
+in seconds is wrong on one of the two layouts by that factor.
+
+### The half-life, derived from the measured deposit rather than chosen
+
+`RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction`, which already counted the
+busiest apex and straight texel, now also reports the equilibrium the configured half-life implies.
+
+A texel under a steady deposit approaches `E = D / lambda`. Writing the half-life in laps makes lap
+time cancel out of that entirely:
+
+```
+E = ApexExposurePerLap * HalfLifeInLaps / ln2
+```
+
+Asking the apex to settle at an exposure of 1.0, which is the 0.95 coverage `k = 3.0` was itself
+derived against, gives `HalfLifeInLaps = ln2 / 0.012471 = 55.6`, taken as **56 laps**.
+
+| | Exposure a lap | Equilibrium exposure | Equilibrium coverage |
+|---|---|---|---|
+| Busiest apex texel | 0.012471 | **1.0076** | **0.9513** |
+| Busiest straight texel | 0.001516 | 0.1224 | **0.3074** |
+| **Contrast** | 8.2 to 1 | 8.2 to 1 | **3.09 to 1** |
+
+**This is the first settled racing line this project has been able to state.** Every earlier figure
+described a transient that only ever got darker, which is why MEASUREMENTS.md had to record the line
+as *"most legible somewhere between"* two lap counts. With decay there is an equilibrium, and the
+apex-to-straight contrast becomes a property of the traffic rather than of how long the capture ran.
+
+**Provenance, which was not previously recorded and is a defect in this file.** The 0.012471,
+0.001516 and 8.2:1 figures in the C6 table above were measured on the **Stadium**, not on Spa.
+`CountedPassesOverATexelAgainstThePrediction` spawns a default `ARacetrackCircuit`, whose `Layout`
+defaults to `ETrackLayout::Stadium`; 21 of the 27 circuit-spawning host tests do the same. The
+"twenty cars over 12.67 laps" in that table is a 30921 cm lap, not the 180000 cm demo. The
+equilibrium arithmetic above is layout-independent by construction, so it is unaffected, but **the
+contrast figure itself has not been re-measured on the demo layout** and should not be quoted as a
+Spa number.
+
+### Not verified
+
+- **Nothing here has been seen on screen.** The editor was closed for the whole session and Unreal
+  MCP was unreachable, so no capture exists of the on-screen messages, of any single-channel view,
+  or of the surface fading. The `DebugChannelMask` material parameter does not exist yet either, so
+  the channel cycle currently logs and announces correctly and changes nothing visually.
+- **The 0.3400 ms decay figure is the pass in isolation**, timed the same way every other pass in
+  this file is, not the pass inside a live twenty-car frame.
+- **The equilibrium is arithmetic from a measured deposit rate, not an observed steady state.** No
+  run has been left going long enough to reach it.
+- **The half-life is calibrated against this demo's field.** A different car count or lateral spread
+  moves the apex deposit and therefore the equilibrium; the test asserts the coverage lands between
+  0.90 and 0.99 so that this fails loudly rather than drifting.
