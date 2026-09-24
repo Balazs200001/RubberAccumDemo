@@ -2260,3 +2260,71 @@ Spa number.
 - **The half-life is calibrated against this demo's field.** A different car count or lateral spread
   moves the apex deposit and therefore the equilibrium; the test asserts the coverage lands between
   0.90 and 0.99 so that this fails loudly rather than drifting.
+
+---
+
+## 2026-09-24 — C10.5: the capture, and two defects it found that tests did not
+
+```
+Build:    Development, editor target run as UnrealEditor.exe -game, windowed 1600x900
+Power:    MAINS
+Scene:    /Game/Maps/L_SpaHarness, twenty cars, Spa layout at 180000 cm
+Driven:   entirely from -ExecCmds, no keyboard. One process per still, killed after the grab
+Capture:  desktop grab of the client rect, no editor UI in frame
+```
+
+Six stills in [`assets/media/`](../../2627-Y3A-PR-243663/assets/media/): `c10-view-all-channels`,
+`c10-view-rubber-buildup`, `c10-view-skid-marks`, `c10-view-marbles-empty`, `c10-decay-off`,
+`c10-decay-on-20x`.
+
+**Every still was taken at `r.RacetrackSurface.DepositionScale 32` and `TimeDilation 20`, and that
+has to be read off the image, not into it.** At 32x the derived rate the apex reaches 63 % coverage
+in about a quarter of a lap instead of about eight, which is the only way a 70-second run has a
+surface worth photographing. The stills therefore show *what the channels look like*, not *how fast
+rubber arrives*. The rate figures of record are the ones in the C6 table above, taken at scale 1.
+
+| Still | What it shows |
+|---|---|
+| `c10-view-all-channels` | Red rubber along the line with yellow where skid overlaps it, which is what `Coverage` being a Vector3 has always meant |
+| `c10-view-rubber-buildup` | The same line in red alone |
+| `c10-view-skid-marks` | Discrete green lockup marks clustered in the braking zones, with the rubber gone. The first image in this project that shows the two channels are genuinely separate |
+| `c10-view-marbles-empty` | Black, with the caption naming the channel and saying nothing writes it before phase G |
+| `c10-decay-off` against `c10-decay-on-20x` | The same run with the rate at 0 and at 20. Decay narrows the band: the off-line wash fades and the apex holds |
+
+### Defect found by capturing: `-ExecCmds` splits on commas, not semicolons
+
+The first capture set applied only its first command. `ParseExecCommands::ParseExecCmds`
+(`ParseExecCommands.cpp:29`) breaks the string on `,` and treats `;` as ordinary text, so
+`-ExecCmds="A; B; C"` is one command named `A` with arguments `; B; C`. Every earlier use in this
+project passed a single command, so it had never surfaced. **Every `-ExecCmds` list in this file and
+in `EDITOR_SETUP.md` must use commas.**
+
+### Defect found by capturing: on-screen messages expire on the dilated clock
+
+The second capture set applied its commands and still showed no text. `DrawOnscreenDebugMessages`
+advances a message's age by `World->GetDeltaSeconds()` (`UnrealEngine.cpp:13543` and `:13569`), and
+`UWorld::Tick` writes the **dilated** delta into that (`LevelTick.cpp:1596`, `:1603`).
+
+So a message's lifetime is spent in track time, not in the operator's time:
+
+| Dilation | A six-second message lasts |
+|---|---|
+| 1x | 6.0 s |
+| 20x | **0.3 s** |
+
+**That is C10.1 failing at exactly the setting the demo is built around.** The phase exists so a
+viewer can tell what changed, and at the compression the demo runs at, every announcement flashed
+and vanished before it could be read. No test caught it because no test renders a viewport, and the
+first four captures did not catch it either — the first set failed for the comma reason and looked
+like the same symptom.
+
+Fixed by multiplying the requested duration by the current time dilation at post time, in both
+modules, so the figure means seconds the operator waits. The host reads dilation from its own world;
+the plugin's console-variable callbacks have no world context, so they take the effective dilation
+from the first Game or PIE world context. Verified on screen: at 20x the captions are present after
+70 real seconds, which is 1400 seconds of track time.
+
+**Not verified.** The dilation is read once, when the message is posted, so a message posted at 1x
+and then followed by a jump to 20x still expires twenty times too fast. That is the case where the
+operator is changing dilation, which re-posts its own message anyway, so it is recorded rather than
+fixed.
