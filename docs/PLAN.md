@@ -909,7 +909,7 @@ lines change, and what each one was should be readable next to what it became.
 |---|---|---|
 | F0 | Recover `BlurredFoldedExposure`'s HLSL out of the `.uasset` and into `EDITOR_SETUP.md` | The shader the query has to agree with exists as text somewhere. **Met 2026-09-24**, and it corrected two assumptions this phase was resting on |
 | F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel — **met 2026-09-24** |
-| F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | A query is answered every frame, with a bounded and reported age, and `FlushRenderingCommands` is never called on the query path |
+| F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | The ring resolves without a flush, reports the frame it answered for, and loses no submission — **met 2026-09-24**. "Answered every frame" waits on F4, which is what builds the per-frame loop |
 | F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
 | F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero |
 | F5 | Debug overlay drawing returned values in the world at the position they were sampled from | A wrong sample position is visible, not assumed absent |
@@ -1049,6 +1049,41 @@ would have to reimplement `PaintStrokes`' rotated-brush rasterisation and its sw
 against fp16 GPU arithmetic from fp32 CPU arithmetic — and at the demo atlas it is 85 to 170 MiB
 of duplicated state. It is not an afternoon at full fidelity. It is an afternoon at *coarse* grid
 fidelity, which is what the fallback actually is and what F7 should be read as deciding.
+
+### F2 met 2026-09-24, and the one test that failed was the useful one
+
+Four more tests, **96 of 96 passing headlessly**, both build paths clean. `FSurfaceQueryReadback`
+is a ring of `FRHIGPUTextureReadback`, submitted and drained inside one `ENQUEUE_RENDER_COMMAND`,
+with the resolved slots crossing back to the game thread through an `FCriticalSection`-guarded
+array on a `TSharedFromThis<..., ESPMode::ThreadSafe>`.
+
+**The value survives the round trip exactly.** The ring resolved slot 0 to **0.001801** in the skid
+channel, against **0.001801** read synchronously off the same gather target — identical, so the
+`Lock` row-pitch handling and the `FFloat16Color::GetFloats` conversion are both right.
+
+**`ReadbackDoesNotResolveInTheCallThatSubmitsIt` is the no-stall evidence.** A synchronous read
+would already have the values by the time `Submit` returns. It does not, and that is asserted
+rather than argued.
+
+**The failing test was worth more than the three that passed.** `ReadbackResolvesTheFrameItSubmitted`
+originally did `Submit` then `FlushRenderingCommands` twice and expected a value.
+It never resolved. The cause is not a bug: **`FlushRenderingCommands` waits for the render
+thread, and the fence waits for the GPU.** Flushing guarantees the copy has been *submitted*,
+never that it has *retired*. The neighbouring test resolved 13 of 24 submissions for exactly this
+reason — the later iterations gave the GPU time the earlier ones did not. The test now polls with
+a bounded retry and reports what it took: **2 drain attempts at roughly a millisecond each**, on
+an otherwise idle headless run. That is the first real latency figure in this phase and F6 takes
+it properly.
+
+**A drop figure that must not be quoted as a production number.** Sixteen submissions into a ring
+of two gave 2 accepted and 14 dropped. That is an artefact of submitting as fast as the render
+thread will accept them with no frame in between, so the GPU retires nothing. What it does
+demonstrate is the invariant the test actually asserts: **accepted plus dropped equals submitted**,
+so a ring that cannot keep up says so instead of losing work quietly. A full ring refuses, matching
+Nanite's `QueueReadback`, rather than overwriting a copy in flight.
+
+`r.RacetrackSurface.QueryReadbackRingDepth` is `ECVF_Default` so F6 can sweep it from a standalone
+command line, per the same reasoning that made `r.RacetrackSurface.TimePaint` reachable in R6.
 
 ### Decided: the readback is `FRHIGPUTextureReadback` on the immediate command list, no RDG
 
