@@ -911,7 +911,7 @@ lines change, and what each one was should be readable next to what it became.
 | F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel — **met 2026-09-24** |
 | F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | The ring resolves without a flush, reports the frame it answered for, and loses no submission — **met 2026-09-24**. "Answered every frame" waits on F4, which is what builds the per-frame loop |
 | F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
-| F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero |
+| F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero — **met 2026-09-24** |
 | F5 | Debug overlay drawing returned values in the world at the position they were sampled from | A wrong sample position is visible, not assumed absent |
 | F6 | Measured latency in frames, and query cost at 4 and at 80 points | The tolerance argued in the proposal demonstrated, or contradicted, on a real run |
 | F7 | Survives level load, hitches, actor destruction | Decides readback against the CPU grid, on evidence |
@@ -972,6 +972,76 @@ for a minute:
   because the texel-centre snap is exactly what makes the read exact in X, so a query between two
   texel centres cannot come back at the coordinate it was asked about. That is the snap working,
   not an error, and the tolerance is stated in the assertion message rather than hidden.
+
+### F4 met 2026-09-24, and finding it cost a day to a bug that was not in phase F at all
+
+**103 of 103 passing headlessly, no GPU crash, both build paths clean.** The query is handle-based
+as decided, returns all three channels as coverage, and resolves in **3 engine frames, 2 query
+frames, 0.05 s of dilated world time**. A mark reads **0.002637** coverage at the derived
+deposition rate and **0.652209** at 400x, so the saturation curve is being applied on the read side
+rather than raw exposure escaping.
+
+**The expensive part was a GPU device reset that had nothing to do with the query path.** Adding
+F4's tests made the whole suite die with `DXGI_ERROR_DEVICE_RESET` in a *later* test —
+`RubberAccumDemo.Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay` — roughly 25 seconds after it
+allocated the demo atlas. Aftermath reported no faulting address and `Adapter Reset: False`, so
+there was nothing to read off the dump.
+
+Ruled out, each by its own run, and each wrong:
+
+| Suspect | How it was killed |
+|---|---|
+| Memory or VRAM exhaustion | The F2 commit ran 96 of 96 clean, and the crashing run made only two buffer allocations |
+| Tests running in parallel | The log shows strict sequencing: every `Test Started` is followed by its own `Test Completed` |
+| The readback submit | Crashed with `Submit` disabled |
+| Zero-extent source UVs on the gather tiles | Crashed after giving every tap a one-texel UV span |
+| The gather target being released on reallocation | Crashed after giving it its own lifetime |
+| A one-pixel-high gather target | Crashed at eight pixels high |
+| Destroying in-flight readbacks in `Invalidate` | Crashed after leaving them alone |
+| The canvas gather itself | Crashed with the gather disabled entirely |
+| The tests' spin on `FlushRenderingCommands` | Crashed after the rewrite onto latent commands |
+
+**What actually found it was a two-test minimal repro**, which turned a twelve-minute suite into a
+one-minute experiment: one query test plus the one demo test reproduced it exactly. Cutting the
+query test down until only `ConfigureTrackRibbon` + one contact + `Tick` + `ResetSurface` remained
+still crashed — no query path at all. A throwaway probe using **only pre-F4 API** then reproduced
+it standing alone.
+
+**So it is a pre-existing bug in the plugin and phase F merely ordered the tests in a way that
+exposed it.** `USurfaceAccumulationBuffer::Allocate` released a render target that had just been
+painted into and immediately created a much larger one, without letting the GPU finish with the
+first. Nothing had hit it before because the only other test that reconfigures the world ribbon,
+`RubberAccumDemo.Surface.ReadPathReturnsTheMarkWhereItWasPainted`, sorts *after* the demo tests,
+while `RacetrackSurface.Query.*` sorts before them. One `FlushRenderingCommands` before the
+release fixes it, and it costs nothing at runtime because `Allocate` early-returns whenever the
+dimensions already match, so it only ever fires at configure time.
+
+**This is a real user-facing bug, not a test artefact.** Any caller who reconfigures the ribbon at
+runtime after painting — changing track, or growing the region — would have hit it.
+`RacetrackSurface.Accumulator.GrowingTheRibbonAfterPaintingStaysSafe` now covers the whole
+small-to-large transition in one self-contained test, so it cannot come back through a change in
+test ordering.
+
+**The method lesson, which is the transferable part.** Eight hypotheses were killed by measurement
+and every one of them was plausible. What ended it was not a better guess but shrinking the repro:
+the twelve-minute suite made each hypothesis cost ten minutes, and the two-test repro made it cost
+one. The earlier "the gather is innocent" and "the product code is innocent" readings were both
+briefly wrong because the experiments were confounded — the first by the spin-flush tests, the
+second because with no test file nothing ever acquired a handle, so the F4 path never ran at all.
+**An experiment that exonerates code which never executed proves nothing**, and that should have
+been noticed before it was reported.
+
+### Two more bugs found on the way, both fixed and neither in phase F's own design
+
+- **The readback ring survived `ResetSurface`.** An in-flight copy submitted before a reset landed
+  after it and was accepted, so a wiped surface could be answered with pre-wipe data. Fixed with an
+  epoch stamped on every submission and discarded on drain, wired into both `ResetSurface` and
+  `ConfigureTrackRibbon`. This is exactly the "a new CPU-side cache must be wired into
+  `ResetSurface` or it will silently disagree with the GPU" hazard.
+- **`FRHIGPUTextureReadback` reuses its staging texture**, and `RHIGPUReadback.cpp:139` documents
+  the assumption in a comment: "Assume for now that every enqueue happens on a texture of the same
+  format and size (when reused)." Growing the gather target as slot count rises violates it. The
+  subsystem now rebuilds the ring whenever the gather target's width changes.
 
 ### Decided: F1 is a canvas gather, not a compute pass
 
