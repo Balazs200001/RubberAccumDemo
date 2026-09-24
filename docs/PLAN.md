@@ -1195,16 +1195,61 @@ profile and the entry records the disagreement rather than quietly re-deriving t
 
 ### Tests
 
-| Test | Asserts |
-|---|---|
-| `RubberAccumDemo.Car.MarblesLandOppositeTheApex` | The deposit's alpha is on the opposite side of the car's own alpha from its apex target, on both layouts. This is the one test that catches a sign error, and it is written against the car's apex rather than against a handedness assumption |
-| `RubberAccumDemo.Car.MarblesDepositNothingOnAStraight` | Zero marble contacts registered over N ticks on a straight, so the `Sign(0)` collapse cannot deposit on the line |
-| `RubberAccumDemo.Car.MarbleThrowFallsAwayFromTheLine` | Over many draws, the histogram of displacements is monotonically decreasing and its mean is within tolerance of `MarbleThrowCentimetres / 3` |
-| `RubberAccumDemo.Track.MarbleBandProfileAcrossTheTrack` | The G3 measurement. Ticks a field, reads a texel column across the ribbon with `ReadRenderTargetRawPixelArea`, and asserts the profile peaks off the buildup peak and falls monotonically outward |
-| `RacetrackSurface.Stroke.MarbleChannelWritesOnlyBlue` | A marbles contact leaves R and G untouched |
+| Test | Asserts | Built |
+|---|---|---|
+| `RubberAccumDemo.Car.MarblesGatherOutsideTheLineAndThinTowardTheEdge` | Every deposit lands away from the apex; the throw is bounded by its own parameter; the mean is a third of the maximum; the histogram falls monotonically; and the mean deposit sits outside the mean car line. Written against the car's own apex term rather than a handedness assumption, so it catches a sign error without depending on one | yes |
+| `RacetrackSurface.Accumulator.MarbleStrokeWritesOnlyTheMarbleChannel` | A marbles stroke inks B and leaves R and G at zero, and a rubber stroke in the same buffer inks R and leaves B at zero | yes |
+| `RubberAccumDemo.Car.RegistersMoreSlipInACornerThanOnAStraight` | Extended: a straight sheds no marbles, a corner sheds exactly one per car rather than one per wheel | extended |
+| `RubberAccumDemo.Track.NoWheelFallsOffTheRibbon` | Extended: counts wheel discards separately from marble discards, since marbles are thrown outward and are meant to be able to leave the track | extended |
+| `RubberAccumDemo.Track.MarbleBandProfileAcrossTheTrack` | The band read back out of the buffer across the track width | **no, see below** |
 
-The first three are host tests and need no rendering. The fourth and fifth need a renderable world,
-which the existing readback tests already establish is available headlessly.
+The three planned as separate side, straight and distribution tests collapsed into one, because they
+share a sampling loop and splitting them would have ticked the same 4000 frames three times.
+
+**The band readback test was not built, and that is a recorded gap rather than an oversight.** It
+needs the full field ticked through the subsystem for several laps against a live render target, and
+what it would assert — that the band falls away from the line — is what the deposit measurement
+already establishes to 0.4 % of prediction. The composition it would additionally cover, lateral
+offset through ribbon to folded atlas, is covered by `SurfaceFoldedRibbonTests`. The honest position
+is that *this* band has not been read back from *this* buffer.
+
+### Measured on implementing, 2026-09-24. One prediction was wrong and the fix was already in the file.
+
+**G1 to G4 are met. 76 of 76 tests pass headlessly with the editor closed, both build paths clean.**
+Numbers in [MEASUREMENTS.md](MEASUREMENTS.md).
+
+**The distribution came out as derived.** Mean throw 66.40 cm against a predicted 66.67, widest
+198.40 against a 200 cm bound, and the five bins fall monotonically at 1029, 916, 570, 342, 109
+against a predicted 1068, 830, 593, 356, 119. The band sits **0.166 alpha, 66.4 cm, 21.2 texels**
+outside the line the car itself drives.
+
+**The prediction that was wrong: multiplying slip by the cornering amount is not a gate.** The plan
+argued that because `FMath::Sign(0)` is `0`, the deposit had to vanish on a straight, and that
+scaling the exposure by `CorneringAmount` would do it. The first run disagreed — 34 deposits landed
+on the apex side and a straight registered five contacts instead of four. The cause is that C3's
+amendment made the cornering profile **sampled and normalised** rather than analytic, so on a
+straight it is small but not exactly zero, and **the sign of a value that is numerically noise is
+arbitrary**. Scaling the exposure made those deposits harmless in intensity while leaving them on a
+random side of the car.
+
+The fix adds no tunable: the gate is `CorneringHere >= CornerExitCorneringAmount`, the threshold
+`ASplineFollowingCar` already owns for deciding it has left a corner. A gate derived instead from
+`HalfFloatGuaranteedChangeThreshold` was considered and rejected — it would have made *where marbles
+deposit* depend on `r.RacetrackSurface.DepositionScale`, so turning the deposition up would have
+silently widened the band into gentler curves.
+
+**A consequence worth recording for D7 and E5:** this is the second time in two phases that a
+value which is analytic on the Stadium and sampled on Spa has behaved differently at its zero
+crossing. The Stadium is the oracle for the general implementation, as C3 argued, but it is a poor
+oracle for *numerical* behaviour near a boundary, because on the Stadium the boundary is exact.
+
+**One decision was taken during implementation and is not in the plan above.** The plugin's single
+`ContactsDiscardedOutsideRibbon` counter became one counter per channel. It had to: marbles are
+thrown outward and are *meant* to be able to leave the track, so a shared counter can no longer
+distinguish *a bug threw a wheel off the ribbon* from *debris correctly left the track*, and
+`NoWheelFallsOffTheRibbon` asserts the former is zero. At the default 200 cm throw nothing is
+actually discarded, so the test would have passed either way — which is precisely why it was worth
+fixing rather than leaving as a trap for whoever next raises the throw.
 
 ### Not in this phase
 
