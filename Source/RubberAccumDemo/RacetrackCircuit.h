@@ -149,6 +149,8 @@ public:
 
 	void ReportSurfaceCoverage();
 
+	void ApplyMarbleThrow(double Centimetres);
+
 	void ApplyTimeDilation(float Dilation);
 
 	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);

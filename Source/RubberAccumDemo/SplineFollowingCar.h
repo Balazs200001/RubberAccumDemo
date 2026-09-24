@@ -141,6 +141,11 @@ public:
 		return MarbleThrowCentimetres;
 	}
 
+	void SetMarbleThrowCentimetres(double Centimetres)
+	{
+		MarbleThrowCentimetres = FMath::Max(Centimetres, 0.0);
+	}
+
 protected:
 	UPROPERTY(EditInstanceOnly, Category = "Spline Following Car")
 	TObjectPtr<ARacetrackCircuit> Track;
@@ -224,7 +229,7 @@ protected:
 	double SameBrakingEventSeparationCentimetres = 600.0;
 
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Marbles", meta = (ClampMin = "0.0"))
-	double MarbleThrowCentimetres = 200.0;
+	double MarbleThrowCentimetres = 400.0;
 
 private:
 	void ResizeCarMesh();
