@@ -339,8 +339,10 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 	SetActorLocation(RearAxle + Heading * (Wheelbase * 0.5));
 	SetActorRotation(Heading.Rotation());
 
-	const float RollingSlipAmount =
-		FMath::Lerp(StraightSlipAmount, CorneringSlipAmount, static_cast<float>(CorneringAmount));
+	const float RollingSlipAmount = FMath::Lerp(
+		StraightSlipAmount,
+		CorneringSlipAmount,
+		static_cast<float>(FMath::Abs(SignedCornering)));
 
 	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
 	{
