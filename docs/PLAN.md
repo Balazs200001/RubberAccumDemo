@@ -935,14 +935,287 @@ marbles go, and reading the field is phase F. Doing G first means either buildin
 it or deriving placement from what the car already knows. That is the first decision G has to take
 and it bears directly on the emergence claim, so it is not a detail.
 
+*Resolved 2026-09-24 below: neither. The field read is rejected and the car's own position is used,
+but not as a fallback — it is the better input, because the buffer is only an image of where traffic
+ran and the car holds that fact exactly.*
+
+### Tasks, revised 2026-09-24
+
+The G1 to G4 above were written before C10 existed and before the ribbon was folded. Three of the
+four change. They are rewritten rather than replaced, and what each one was is recorded against it.
+
 | # | Task | Exit |
 |---|---|---|
-| G1 | Cellular-noise clumping, threshold onset rather than linear | Clumps, not a gradient |
-| G2 | Placement offset from travel path, density driven by buildup in adjacent cells | Band on the outside of corners, no authored line |
-| G3 | Clearing when cars drive through | Repeated passes open a path |
-| G4 | Channel wired into the query path | Per-wheel readout changes as a car crosses the band |
+| G1 | Marble deposition on the car: one contact per car per tick, displaced outward, gated by cornering. *Was "cellular-noise clumping"; clumping moved to G5 by the D-C decision* | The B channel is non-zero after a lap, and zero on a lap with no corners |
+| G2 | The displacement law: direction from the sign of local curvature, magnitude from a falling draw. *Was "density driven by buildup in adjacent cells"; superseded by D-A* | Deposits land on the opposite side to the car's own apex target, every time, on both layouts |
+| G3 | Measure where the band lands across the track width, by readback | A texel profile across the ribbon showing a monotonic fall from the line outward, in `MEASUREMENTS.md` |
+| G4 | Marbles visible in the channel view | The marbles view is no longer black. Free: the existing debug material already drives `Coverage.B` to emissive |
+| G5 | Scattered dots in the host debug material, denser and individually bigger toward maximum | Dots, not a flat wash, with both count and radius rising with density. **Needs the editor** |
+| G6 | Clearing when cars drive through | Repeated passes open a path. *Unblocked 2026-09-24, see below. Not started* |
+| G7 | Channel wired into the query path | Per-wheel readout changes as a car crosses the band. **Belongs to F and moves there** |
 
-*Exit: correct spatial distribution as flat texture variation, plus a working readout.*
+*Exit: marbles accumulate off the racing line, denser nearer the line than at the edge, and the
+distribution is a measured profile rather than an impression.*
+
+### Decided: marbles are displaced deposits, not a field read (D-A)
+
+**G2's original premise is rejected.** Reading the buildup in adjacent cells to decide where marbles
+go is worse than the alternative on three counts, and only the first is about phase F not existing
+yet.
+
+1. **It cannot be done in the frame that needs it.** The decision has to be taken on the game thread
+   at contact-registration time. The buildup lives in the render target the same pass is about to
+   write. Sampling a target inside the draw that writes it is a read/write hazard, not merely
+   expensive, and the alternative — `ReadRenderTargetRawPixelArea` plus `FlushRenderingCommands`,
+   which is what the test suite uses — is a full game-thread stall on a 117 MB target.
+2. **It is a proxy for something already in hand.** Buildup in adjacent cells is an estimate of
+   *where traffic ran*. `ASplineFollowingCar` knows where it ran exactly, this tick, to double
+   precision, for free. Reading it back off the GPU recovers a blurred, quantised, one-frame-late
+   copy of a number the caller is holding.
+3. **It would not have strengthened the emergence claim, which is the only reason it was in the
+   plan.** Deriving marble position from the buffer sounds more emergent than deriving it from the
+   car. It is not: the buffer's contents are themselves nothing but the accumulated record of where
+   those same cars drove. The claim would be the same claim with a GPU round trip in the middle.
+
+**What is decided instead.** A car deposits marbles at its own track-space position, displaced
+laterally away from the apex it is turning toward. Nothing stores or looks up a line.
+
+**The honest claim, and it is narrower than it first looks.** Borrowing the framing C3 and C6
+already set:
+
+> The line the marbles gather around is not chosen by any number in this code. How far they scatter
+> from it is.
+
+Unpacked, because the oral assessment will not accept the one-liner on its own:
+
+- **Emergent:** *where the band is*, around the lap and across the width. The deposit is anchored to
+  `LateralOffsetAlpha`, which is C3's and C6's result — a per-driver line, a triangular corner
+  deviation, a bounded lateral rate. Change the field and the band moves. Two circuits with
+  identical corners but different traffic get different bands.
+- **Not emergent, and must not be claimed as such:** *the shape of the falloff*. The displacement is
+  drawn from an authored distribution, and by the law of large numbers the accumulated profile
+  converges deterministically to exactly that distribution. It is a per-texel formula realised by
+  sampling rather than written in closed form. Calling it emergent because it is stochastic would be
+  the overclaim C6's honesty section exists to prevent — C6's racing line emerges from *diversity
+  across drivers*, which is a different mechanism from *resampling one fixed curve*.
+- **Also not emergent:** the side. It is the sign of the local curvature.
+
+**Rejected: deriving the side from geometry independently.** The deposit uses
+`-FMath::Sign(SignedCornering)`, which is the negation of the exact term
+`ASplineFollowingCar::Tick` already uses to build `ApexTarget` (`SplineFollowingCar.cpp:266`). That
+matters for a reason beyond brevity: **the geometric meaning of a positive `SignedCornering` is
+asserted nowhere in the source** — no comment, no log string, no test. Any independent derivation of
+"which side is outside" would rest on an unverified handedness assumption about
+`USplineComponent::GetRightVectorAtDistanceAlongSpline`. Mirroring the car's own apex term is
+correct *whatever* the convention turns out to be, because the apex is the inside by construction.
+This is the one place in G where the cheap option is also the rigorous one.
+
+### Decided: the write is the existing track-space contact at a displaced offset (D-B)
+
+No new plugin API. `RegisterSurfaceContactInTrackSpace` with `Channel = EAccumulationChannel::Marbles`.
+
+**Track space rather than world space, which reverses C8's choice for this one call.** C8 decided
+the wheels register through the world-space boundary and that decision stands unchanged for the
+wheels. It does not carry to the marble deposit:
+
+| C8's reason for world space | Whether it applies to the marble deposit |
+|---|---|
+| Exercises the engine-agnostic boundary the brief is about | No. The four wheel contacts already exercise it 80 times a frame. A fifth call exercises nothing new |
+| Offtracking falls out of rigid-body placement | No. A displaced debris position is not a rigid-body point |
+| Wheel velocity from the previous world position is exact and free | No. The deposit's along-track rate is `SpeedCentimetresPerSecond`, which the car holds exactly |
+| Cost: one spline search per contact | Yes, and it is the deciding term. R2's written trigger — *"when any world-space caller reaches 80 contacts per frame in a real scene"* — is already tripped at exactly 80. Twenty more searches per frame buys nothing |
+
+Phase R's own stated reason for keeping both overloads was *"having both paths in use keeps both
+tested"*. That still holds with the wheels on one and the deposit on the other.
+
+**One deposit per car, not one per wheel.** The four wheels are 80 cm apart, which is 25.6 texels.
+The scatter is 200 cm wide, which is 64. Four deposits would be four samples of the same
+distribution at origins that differ by less than half its width — that is a deposition-rate
+multiplier wearing a physical costume, and the deposition rate is already a console variable. It
+would also double the frame's contact count from 80 to 160.
+
+**`LateralOffsetAlphaPerSecond` is set to zero on the deposit, and this is not a detail.**
+`BuildStrokes` back-derives a stroke's start alpha from that rate (`SurfaceAccumulationSubsystem.cpp:459`).
+The displacement is redrawn every tick, so the *implied* lateral rate between consecutive deposits is
+enormous — a 0.5 alpha jump in 10 ms is 50 alpha per second — and the stroke would be painted as a
+lateral smear from the previous draw to the new one, filling the whole band solid every tick instead
+of scattering within it. Zeroing it says the correct thing physically too: debris lands where it
+lands, it does not sweep sideways as it settles.
+
+**Rejected: clamping the displaced offset to keep it on the track.** Two of the three designs
+considered during planning clamped the offset into the remaining room before the track edge. That
+is wrong for this brief specifically: clamping piles every out-of-range draw onto the boundary texel
+and produces **a stripe at the kerb**, which is the one outcome the goal rules out by name. A
+deposit whose displaced alpha leaves `[-1, 1]` is instead discarded by the plugin's existing
+`ContainsLateralOffset` check and counted in `ContactsDiscardedOutsideRibbon`. That is physically
+right — debris that goes past the edge is on the run-off, not on the track — and it contributes to
+the falloff instead of fighting it.
+
+### Decided: smooth density in the buffer, granularity at read time (D-C)
+
+The buffer stores a scalar density per texel. Clumps are produced by the material when it is read.
+
+1. **The brief's deliverable is a query API a vehicle reads.** F1 already averages a contact patch
+   rather than one texel. Stored clumps would make `QuerySurfaceState` return a value depending on
+   whether the sample fell on a clump or between two, and F1's patch average would then filter that
+   noise straight back out. The clumps would cost storage and deliver nothing to the only consumer
+   the brief cares about.
+2. **Decay is multiplicative over the whole target, and that is the wrong operator on clumps.**
+   Stored clumps decaying get *dimmer*; they do not get *fewer*. Debris being swept away should
+   thin out, not fade in place. A smooth density decaying is exactly right.
+3. **Writing clumps needs an onset threshold, which the paint path cannot express.** Same family as
+   D7's max write.
+4. **Presentation-side clumping is resolution-independent.** It can make dots both more numerous and
+   individually larger, which stored clumps cannot do above one clump per 3.125 cm texel.
+
+**The honest limit:** this is a product decision, not a correctness one. A host that wanted the
+query to return clump geometry rather than clump density would have to store clumps, and this design
+forecloses that. It is the right trade for *this* brief and would be the wrong one for a brief about
+debris physics.
+
+### Decided: the dots go in the host debug material (D-D)
+
+C10.2's reasoning holds unchanged and the test it set is worth restating: *is this parameter
+meaningful to a host that is not this demo?* A scattered-blue-dot renderer is not. It is a debug
+read of a density, and a shipping host would render marbles with H1's parallax-occlusion material,
+not with dots. So the dots go in `/Game/Materials/M_SurfaceAccumulationDebug` and
+`MF_SampleRacetrackSurface` is not touched, which also keeps clear of the asset where
+`MaterialTools.delete_expression` is known to halt the editor.
+
+**The node design, with the engine behaviour checked rather than assumed.**
+
+| Need | Node | Why |
+|---|---|---|
+| A stable per-cell random number to decide whether a cell carries a dot at all | `VectorNoise` with `VNF_CellnoiseALU` | Documented `MaterialExpressionVectorNoise.h:15-19` as *"Random color for each unit cell in 3D space. RGB output range 0 to 1"*. This is the only one of the five that is a normalised per-cell random |
+| A dot shape whose radius is controllable | `VectorNoise` with `VNF_VoronoiALU`, **alpha output** | Documented `MaterialExpressionVectorNoise.h:40-46`: *"A = distance to closest point"*. Distance-to-seed is a radial field, so thresholding it is a disc |
+| Cells anchored to the road, isotropic, correct across the fold | `AbsoluteWorldPosition` as the noise `Position` | The ribbon UV is anisotropic — U spans 450 m per row, V spans 8 m — so feeding UV gives ellipses, and it would need `CentimetresPerTexel` published to the collection. World position needs nothing published and is round by construction |
+
+Dot presence is `CellNoise.R < Density` and dot radius rises with `Density`, so both the count and
+the individual size increase toward maximum, which is the two-axis behaviour the goal asks for.
+
+**Recorded because one of the three planning designs got it wrong:** `VNF_VoronoiALU`'s **RGB** is
+the *position* of the cell's seed point, not a per-cell random value. Comparing it against a coverage
+scalar does not give a stable per-cell threshold. The RGB/alpha split is the whole reason two noise
+taps are needed rather than one.
+
+### Decided: one decay rate in G, and per-channel rates turn out to be free (D-E)
+
+**G lives with the shared half-life.** Not because per-channel decay is hard — it is not, see below —
+but because G does not need it. With deposition under G's control, a faster marble half-life and a
+higher marble deposition rate reach the *same steady state*; they differ only in the transient.
+Building a per-channel rate here would be constructing E5's machinery under G's name and would
+preempt the decision E5 has to take on its own terms.
+
+**The finding that changes E5's cost, recorded here because it was measured here.**
+`SE_BLEND_Modulate` is `TStaticBlendState<CW_RGB, BO_Add, BF_DestColor, BF_Zero>`
+(`BatchedElements.cpp:490`), so `Dst = Src * Dst` **per channel**, RGB only, alpha untouched.
+`ApplyDecay` already draws exactly this as a full-target quad with colour
+`(Retention, Retention, Retention, 1)`. Changing that one `FLinearColor` to
+`(RetentionR, RetentionG, RetentionB, 1)` gives three independent half-lives **in the pass that
+already runs, at no extra cost**. E5 was priced assuming this needed either three passes or a new
+render path. It needs neither.
+
+**The honest limit, which is about the physics and not the plumbing.** Time-decay is standing in for
+sweeping, and it is the wrong mechanism for it. Marbles are removed by cars driving through them,
+not by elapsed time, and a uniform decay removes marbles from the empty outside of the track at
+exactly the same rate as from where cars actually run — which is backwards. The right removal is G6,
+and until G6 exists the marble field's equilibrium should be described as *what a uniform fade
+produces*, never as *what sweeping produces*.
+
+### G6 is unblocked, against what this plan previously recorded
+
+The trap carried into this phase said clearing cannot be done because the canvas offers no negative
+write. That is true of *additive* and it is false in general. `SE_BLEND_Modulate` above is
+per-channel, so a small quad drawn over the wheel footprint with colour `(1, 1, k)` multiplies the
+marble channel by `k` in that footprint and **leaves rubber and skid exactly as they were**. The
+proof that the path works is not an argument — `ApplyDecay` is that draw, at full-target size, and
+it is measured at 0.3340 ms.
+
+This does not rescue D7. D7 needs `max`, which `Src * Dst` cannot express. It does suggest a route
+D7 has not considered: modulate-to-zero followed by an additive write is *assignment* on a single
+channel, which is D7's "refresh rather than accumulate" without a max blend. Two batches, not two
+draws per stroke. **Recorded against D7, not acted on here.**
+
+**G6 is nonetheless not implemented in this pass**, and the reason is scope rather than difficulty:
+the request was for marbles that accumulate off the line and can be seen. Adding a sweep changes the
+steady state that G3 is about to measure, so doing both at once confounds the only measurement the
+phase has. It is the next task in the phase and it is now cheap.
+
+### The arithmetic, predicted before the run
+
+Stated in advance so the G3 readback either confirms it or contradicts it. Demo layout defaults:
+180000 cm lap, 800 cm wide, 3.125 cm per texel, 20 cars. One alpha unit is 400 cm, which is 128
+texels. `ContactWidth` is 20 cm, which is 6.4 texels.
+
+- **Throw distance `MarbleThrowCentimetres` = 200.0**, which is 0.5 alpha and 64 texels. A quarter of
+  the track width: wide enough to read as a band rather than a line, narrow enough to leave the
+  inside of the corner clean.
+- **Displacement draw is `MarbleThrowCentimetres * min(u1, u2)`.** The minimum of two uniforms has
+  density `2(1 - x)`, a linear fall from the line to zero at full throw. This is C6's two-draw idiom
+  with the mode moved to the near end — C6 uses `u1 + u2 - 1` for a mode at the centre. Mean throw
+  66.7 cm, median 58.6 cm.
+- **Deposit exposure.** `MarbleSlip = RollingSlip * CorneringAmount`, through the existing
+  `SlipToExposure`. The second factor is what makes a straight deposit nothing, and it is required
+  rather than cosmetic: `FMath::Sign(0)` returns `0` (`GenericPlatformMath.h:937-940`), so on a
+  straight the displacement direction collapses and an ungated deposit would land **on the racing
+  line**. In a full corner `RollingSlip` is `CorneringSlipAmount` = 0.50, so exposure is
+  `0.50 * 0.002 * Scale` = `0.001 * Scale`.
+- **Per-lap gain at the near edge of the band.** Each along-track texel column is crossed once per
+  car per lap. A 6.4-texel stroke covers a texel at displacement `x` with probability
+  `(W/D) * 2(1 - x/D)`; at `W/D = 0.1` that is 0.2 at the line and 0 at full throw. Twenty cars give
+  `20 * 0.2 * 0.001 * Scale` = **0.004 exposure per lap** at the near edge.
+- **Against the measured rubber rate.** The apex settles at 0.9513 coverage, which is exposure
+  1.0075, at a 56-lap half-life — so rubber's gain at the apex is `1.0075 * (1 - 2^(-1/56))` =
+  **0.01238 exposure per lap**. Marbles therefore build at **32 % of the rubber rate at the apex**.
+- **Predicted marble equilibrium** at the same half-life: `0.004 / 0.01229` = 0.3255 exposure, which
+  is **0.623 coverage** at the near edge of the band, falling linearly in exposure to zero at
+  200 cm. That sits between the apex's 0.9513 and the straight's 0.3074, so the band should be
+  plainly visible in the all-channels view and not merely in the isolated one.
+
+**Every figure above is a prediction.** The one that is most likely to be wrong is the per-lap
+coverage probability, because it assumes deposits tile the lap exactly once per car and ignores that
+`CorneringAmount` is graded on Spa rather than binary as it is on the Stadium. G3 measures the
+profile and the entry records the disagreement rather than quietly re-deriving the prediction.
+
+### Traps found while planning, recorded before they cost anything
+
+- **`AppendStroke` does not clamp lateral offset, and an out-of-range alpha lands in the wrong
+  atlas row.** `NormalisedAcrossTrack(-1.5)` is `-0.25`, and `RibbonToAtlasInRow` maps that to
+  `(Row - 0.25) / Rows`, which is inside the *previous* row's band. Today nothing reaches it because
+  `RegisterSurfaceContactInTrackSpace` rejects `|alpha| > 1` on entry and the cars' lateral rate is
+  small. The marble deposit keeps it unreachable by zeroing `LateralOffsetAlphaPerSecond`, so start
+  and end alpha are equal and the entry check covers both. **Pre-existing, not introduced by G, and
+  not fixed by G.**
+- **Gating deposition on `bCommittedToACorner` would leak marbles onto the straight.**
+  `UpdateCornerCommitment` (`SplineFollowingCar.cpp:109-134`) holds the flag latched for
+  `SameCornerSeparationCentimetres` = 600 cm *after* cornering has stopped. The gate is live
+  `CorneringAmount`, which has no latch.
+- **Live Coding cannot take the new `UPROPERTY`.** `MarbleThrowCentimetres` is new reflection, so the
+  editor must be closed and `Build.bat` run for real.
+
+### Tests
+
+| Test | Asserts |
+|---|---|
+| `RubberAccumDemo.Car.MarblesLandOppositeTheApex` | The deposit's alpha is on the opposite side of the car's own alpha from its apex target, on both layouts. This is the one test that catches a sign error, and it is written against the car's apex rather than against a handedness assumption |
+| `RubberAccumDemo.Car.MarblesDepositNothingOnAStraight` | Zero marble contacts registered over N ticks on a straight, so the `Sign(0)` collapse cannot deposit on the line |
+| `RubberAccumDemo.Car.MarbleThrowFallsAwayFromTheLine` | Over many draws, the histogram of displacements is monotonically decreasing and its mean is within tolerance of `MarbleThrowCentimetres / 3` |
+| `RubberAccumDemo.Track.MarbleBandProfileAcrossTheTrack` | The G3 measurement. Ticks a field, reads a texel column across the ribbon with `ReadRenderTargetRawPixelArea`, and asserts the profile peaks off the buildup peak and falls monotonically outward |
+| `RacetrackSurface.Stroke.MarbleChannelWritesOnlyBlue` | A marbles contact leaves R and G untouched |
+
+The first three are host tests and need no rendering. The fourth and fifth need a renderable world,
+which the existing readback tests already establish is available headlessly.
+
+### Not in this phase
+
+- **G5's material edit**, until the editor is open. Until then marbles render as flat blue, because
+  `M_SurfaceAccumulationDebug` already drives `Coverage` into `MP_EmissiveColor` and B is part of
+  `Coverage`. The C10.2 degradation pattern repeats exactly: the C++ is correct and the asset
+  catches up.
+- **G6**, per the section above.
+- **G7**, which moves to phase F where the query path is built.
+- **Per-channel decay**, which moves to E5 with its cost corrected downward.
+- **The per-contact segment cache.** G adds no world-space contacts, so R2's trigger is not moved.
 
 ## Phase H — Marble volume, hardening, demo map
 
