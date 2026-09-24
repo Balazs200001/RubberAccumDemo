@@ -1040,3 +1040,60 @@ was checked directly and holds fifteen actors — the template lighting and sky,
 lists every actor in the level in one call, and a second `ARacetrackCircuit` or any
 `ASplineFollowingCar` is the real signature of the leak. The file size now tracks the road mesh and
 will move whenever the lap length or the segment length does.
+
+---
+
+## 2026-09-24 — C10.2: the debug material masks the sampled coverage by channel
+
+One asset changed. Full reasoning in [PLAN.md](PLAN.md) under C10.2.
+
+### `/Game/Materials/M_SurfaceAccumulationDebug`
+
+Asset: `/Game/Materials/M_SurfaceAccumulationDebug`
+Change: modified — three nodes added, one output rewired
+Why: `Coverage` is a Vector3 whose R, G and B are buildup, skid and marbles, so the view was already
+colour coded but could not show one channel alone. A mask multiplied in before the emissive output
+isolates one channel without touching the plugin's function.
+Made via: `MaterialTools.add_expression` x3, `ObjectTools.set_properties` x2,
+`MaterialTools.connect_expressions` x3, `MaterialTools.connect_to_output`,
+`MaterialTools.recompile`, `AssetTools.save_assets`
+
+| Node | Purpose |
+|---|---|
+| `MaterialExpressionVectorParameter_0` | `DebugChannelMask`, default `(1,1,1,1)`, group `Surface Debug` |
+| `MaterialExpressionComponentMask_0` | R, G, B on, A off — the parameter's float4 down to the float3 `Coverage` is |
+| `MaterialExpressionMultiply_0` | `A` = `MaterialFunctionCall_0.Coverage`, `B` = the masked parameter |
+
+`MP_EmissiveColor` now reads `MaterialExpressionMultiply_0` instead of the function call's `Coverage`
+output directly. The function call node and its four output pins are untouched.
+
+**Additive and rewire only. No `delete_expression`.** The graph went from two nodes to five and
+nothing was removed, so the call that asserts and halts the editor on a MaterialFunction was never
+reached. Read back after recompiling: `MP_EmissiveColor` takes `Multiply_0`, `Multiply_0.A` takes
+`MaterialFunctionCall_0.Coverage`, `Multiply_0.B` takes `ComponentMask_0`, the parameter is named
+`DebugChannelMask` with default `(1,1,1,1)`, and the mask is `R,G,B` true and `A` false.
+
+**The default is `(1,1,1,1)` and that is the load-bearing choice.** A multiply by one is the
+identity, so an unset or absent parameter means *show everything* rather than *show nothing*, and
+the all-channels view is provably the image every capture before C10 was taken through rather than
+merely one that ought to match. It is the opposite of the fail-loud default `SaturationConstant` and
+`AccumulationRowCount` use, deliberately: those guard a configuration path that must run, whereas
+this one has to degrade to the existing behaviour when the host does not drive it.
+
+**Why here and not in `MF_SampleRacetrackSurface`.** The function is the seam a host integrates
+against and it already offers `Coverage` plus `Buildup`, `Skid` and `Marbles` as separate outputs.
+Which of those a host shows, and whether it cycles between them, is that host's business. A
+debug-view selector inside the function would hand a parameter that means nothing outside this demo
+to every future integrator. `M_SurfaceAccumulationDebug` lives in `/Game`, is host content, and
+exists for exactly this.
+
+**Why a mask and not a branch over the four outputs.** Three added nodes against five, one sample
+rather than four, no per-pixel comparison, and the identity property above. An `If` chain would
+produce the same image for the three single-channel views but would route the all-channels view
+through three comparisons rather than leaving it arithmetically unchanged.
+
+The C++ that drives it, `ARacetrackCircuit::ApplyDebugViewToRoad`, was committed before this asset
+existed and worked without it:
+`UMaterialInstanceDynamic::SetVectorParameterValue` writes into the instance's own parameter array
+and does not validate the name against the parent, so the cycle logged and announced correctly while
+the image did not change. That was the intended degradation, not an accident.
