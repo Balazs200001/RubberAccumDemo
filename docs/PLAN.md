@@ -896,7 +896,34 @@ persistence on the line against off it.*
 
 ## Phase F — Query path
 
-The half of the project that turns accumulation from an effect into a mechanic.
+The half of the project that turns accumulation from an effect into a mechanic. Everything built so
+far writes the surface; F is what lets a vehicle system read it back and do something with it.
+
+**Expanded 2026-09-24 before implementing, from the seven-line sketch below.** The original table is
+kept verbatim under [F as originally sketched](#f-as-originally-sketched) because three of its seven
+lines change, and what each one was should be readable next to what it became.
+
+### Tasks, revised 2026-09-24
+
+| # | Task | Exit |
+|---|---|---|
+| F0 | Recover `BlurredFoldedExposure`'s HLSL out of the `.uasset` and into `EDITOR_SETUP.md` | The shader the query has to agree with exists as text somewhere. **Needs the editor.** Not a blocker for F1 to F8 |
+| F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel |
+| F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | A query is answered every frame, with a bounded and reported age, and `FlushRenderingCommands` is never called on the query path |
+| F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
+| F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero |
+| F5 | Debug overlay drawing returned values in the world at the position they were sampled from | A wrong sample position is visible, not assumed absent |
+| F6 | Measured latency in frames, and query cost at 4 and at 80 points | The tolerance argued in the proposal demonstrated, or contradicted, on a real run |
+| F7 | Survives level load, hitches, actor destruction | Decides readback against the CPU grid, on evidence |
+| F8 | Per-wheel readout in the harness. *Absorbed from G7 on 2026-09-24* | The readout changes as a car crosses the marble band |
+
+*Fallback: the CPU grid, roughly an afternoon, public API unchanged. Taken only if F7 fails.*
+
+*Exit: the query returns correct values and the debug overlay agrees with what is drawn.*
+
+### F as originally sketched
+
+Kept because the revised table above reverses three of these and the reversals have to be arguable.
 
 | # | Task | Exit |
 |---|---|---|
@@ -908,9 +935,399 @@ The half of the project that turns accumulation from an effect into a mechanic.
 | F6 | Measured latency in frames, and query cost at 4 and at 80 contact points | Tolerance argued in the proposal demonstrated |
 | F7 | Survives level load, hitches, actor destruction | Decides readback vs grid |
 
-*Fallback: the CPU grid, roughly an afternoon, public API unchanged. Taken only if F7 fails.*
+### Decided: F1 is a canvas gather, not a compute pass
 
-*Exit: the query returns correct values and the debug overlay agrees with what is drawn.*
+The plan said "gather compute pass" and the proposal says "a compute pass samples the targets at
+those positions". Priced against the engine source, that is the more expensive of two options that
+produce the same number, and the cheaper one is machinery this plugin already runs every frame.
+
+A compute pass means, all of it new to this plugin: a `Shaders/` directory, a `.usf`, a
+`FGlobalShader` subclass with `DECLARE_`/`IMPLEMENT_GLOBAL_SHADER`, an
+`AddShaderSourceDirectoryMapping` call in the currently-empty `StartupModule`
+(`ShaderCore.h:1654`, `RENDERCORE_API`, called from `StartupModule` by `LensDistortion.cpp:19-23`
+and `OpenCVLensDistortionModule.cpp:18-23`, both Runtime plugin modules, so the pattern is right),
+a private `Projects` dependency for `IPluginManager`, and an `ENQUEUE_RENDER_COMMAND` ->
+`FRDGBuilder` -> `FComputeShaderUtils::AddPass` -> `Execute()` chain.
+
+The canvas gather instead reuses `PaintStrokes` exactly. Confirmed in the 5.8 source rather than
+assumed:
+
+- **A render target can be the *source* of a canvas draw while another is the destination.**
+  `UCanvas::K2_DrawTexture` (`Canvas.cpp:2174`) resolves its texture through
+  `GetTextureForCanvasItem` (`Canvas.cpp:123`), which returns `RenderTexture->GetResource()`
+  whenever it exists and is not a proxy. `FTextureRenderTargetResource` derives from `FTexture`
+  (`TextureResource.h:102,362`) and never overrides `IsProxy()`. Nothing guards against it.
+- **Source UVs are a per-draw argument.** `FCanvasTileItem`'s constructor takes `UV0`/`UV1` as two
+  `FVector2D` corners (`CanvasItem.h:143`) and `Draw` writes them straight onto the quad's vertices
+  (`CanvasItem.cpp:419-491`). `K2_DrawTexture`'s `CoordinatePosition`/`CoordinateSize` are exactly
+  those, and the paint path already passes them (as 0,0 and 1,1).
+- **Weighted taps sum exactly.** `SE_BLEND_Additive` resolves to
+  `TStaticBlendState<CW_RGB, BO_Add, BF_One, BF_One>` (`BatchedElements.cpp:486-487`), true
+  `Src + Dst` on RGB. Nine 1x1 tiles per query point, each tinted by its tent coefficient, sum into
+  one destination texel. `CW_RGB` is what R4 already found: alpha takes no part, which here is
+  wanted, because all three channels are gathered at once and alpha is unused.
+- **They batch.** `FCanvas::GetBatchedElements` (`Canvas.cpp:656-687`) reuses the last batch when
+  texture and blend mode match, and both are constant across a gather. The plugin's own
+  `FScopedCanvasFlushDeferral` already collapses such a loop into one flush.
+
+Three sharp edges, all of which the source names and all of which get a test:
+
+- **Destination format.** `UTextureRenderTarget2D::GetDisplayGamma` (`TextureRenderTarget2D.cpp:704`)
+  returns 1.0 only for `PF_FloatRGB`/`PF_FloatRGBA`. Any other destination format silently bakes a
+  2.2 curve into the batched-element pixel shader (`Canvas.cpp:470,504`) and corrupts the exposure
+  values. The gather target is `RTF_RGBA16f`, matching the accumulation buffer.
+- **The destination is not auto-cleared** after the first draw to it, and an additive sum into a
+  dirty target is nonsense. Every gather clears first.
+- **Filtering is not a per-draw switch.** `BatchedElements.cpp:1441` binds the source resource's own
+  `SamplerStateRHI`, baked at `InitRHI` time from `Owner->Filter`. So the gather does not get to
+  choose, and must not depend on the choice. It does not: **each tap's source UV rect is centred on
+  the wanted texel's centre**, and a bilinear sampler handed a texel-centre UV returns that texel
+  exactly. That is the same argument C9 already makes for the shader's U-snapping
+  (`EDITOR_SETUP.md`, "a bilinear sampler handed a UV at a texel centre returns that texel
+  exactly"), so the trick is already load-bearing elsewhere in this project and is not new risk.
+
+**Rejected: the compute pass.** Not because it is slow — at these sizes neither is measurable
+against the 0.3340 ms decay pass already in the frame — but on three counts. It is the larger
+amount of new engine surface at the point in the project with the least slack, and PLAN.md named
+the game-thread/render-thread split as the least familiar part of the engine on 2026-09-21. It
+**adds a third copy of the fold-and-tent arithmetic** — C++ write, material HLSL read, and now
+compute HLSL read — against C9's standing risk that the existing two silently disagree; the canvas
+gather adds none, because it folds in the same `FSurfaceTrackRibbon::RibbonToAtlasInRow` the write
+path calls. And Live Coding's behaviour with a brand-new `IMPLEMENT_GLOBAL_SHADER` could not be
+established from the 5.8 source either way — every `FShaderType` self-registers into a global
+intrusive list in its constructor (`Shader.h:1270,1565`), which is the pattern Live Coding is
+unreliable with, so the honest position is that it might cost an editor restart per shader-class
+edit and nobody knows.
+
+**This is C0's decision applied a second time, and the symmetry is the argument.** C0 rejected a
+hand-rolled RHI path because the canvas already batched correctly. D7 later recorded that the same
+rejection does *not* carry over to a `max` blend, because there the canvas genuinely cannot express
+the operation. A weighted gather is in the first category, not the second: additive blend,
+per-tile colour, arbitrary source UVs, all already used by this plugin today.
+
+**Rejected: the CPU shadow**, other than as the F7 fallback. A mirror that stayed in agreement
+would have to reimplement `PaintStrokes`' rotated-brush rasterisation and its swept-share split,
+`SweepStrokes`' rotated-rect modulate, and `ApplyDecay`'s whole-buffer multiply, bit-for-bit,
+against fp16 GPU arithmetic from fp32 CPU arithmetic — and at the demo atlas it is 85 to 170 MiB
+of duplicated state. It is not an afternoon at full fidelity. It is an afternoon at *coarse* grid
+fidelity, which is what the fallback actually is and what F7 should be read as deciding.
+
+### Decided: the readback is `FRHIGPUTextureReadback` on the immediate command list, no RDG
+
+`RHIGPUReadback.h:3-7` states the class's own purpose: "asynchronous GPU memory updates and
+readbacks with minimal stalls and no RHI thread flushes". It is the only mechanism in the tree that
+avoids the flush. Everything else — `FRenderTarget::ReadLinearColorPixels`
+(`UnrealClient.cpp:129-150`), `ReadSurfaceFloatData`, and therefore
+`ReadRenderTargetRawPixelArea` which reaches `ReadLinearColorPixels` at
+`KismetRenderingLibrary.cpp:349` — ends in a game-thread `FlushRenderingCommands` plus an RHI-thread
+`ImmediateFlush`, and on D3D12 a `SubmitAndBlockUntilGPUIdle`. Its own header calls it
+"Incredibly inefficient and slow operation!".
+
+**No `FRDGBuilder`.** `EnqueueCopy` takes a plain `FRHICommandList&` (`RHIGPUReadback.h:158`), and
+`FRHICommandListImmediate` derives from it, so the whole thing fits inside one
+`ENQUEUE_RENDER_COMMAND` with no render-graph dependency at all. `AddEnqueueCopyPass`
+(`RenderGraphUtils.cpp:829`) is only a wrapper that declares
+`RDG_TEXTURE_ACCESS(Texture, ERHIAccess::CopySrc)` and calls the same function.
+
+**That access declaration is the one thing the wrapper does that must be done by hand.**
+`EnqueueCopy` transitions the *staging* texture and not the source (`RHIGPUReadback.cpp:105-208`).
+So the gather target is transitioned `SRVMask -> CopySrc` before the copy and `CopySrc -> SRVMask`
+after it, which is exactly what `TextureRenderTargetCube.cpp:393-406` does around a render target
+copy and what `UnrealClient.cpp:120` does before a read. Omitting it is the kind of bug that works
+on one RHI and validates as an error on another.
+
+**Ring depth starts at 4 and is then measured, not chosen.** Four is what every in-engine consumer
+uses independently — Nanite (`NaniteStreamingManager.cpp:531`), Lumen surface-cache feedback
+(`LumenSurfaceCacheFeedback.h:51`), distance-field streaming (`ScenePrivate.h:930`) — and no shared
+engine constant ties them together, so it is convention rather than a derived number. F6 measures
+the actual frame latency and records whether 4 was right, too many or too few.
+
+**`IsReady()` is polled, never waited on.** `FRHIGPUFence::Poll`'s own header comment
+(`RHIResources.h:2407-2418`) says "Do not call poll in a loop to block until completion... If it
+returns false, continue to do useful work and recheck later, ideally on the following frame."
+Locking early does not assert or return garbage — `RHIMapStagingSurface_RenderThread`
+(`RHICommandList.cpp:2432`) flushes the RHI thread for you — which is worse, because it is a stall
+that no test would notice.
+
+**`Lock`/`Unlock` are render-thread-only**: both call `FRHICommandListImmediate::Get()`
+(`RHIGPUReadback.cpp:217,243`), which is `check(IsInRenderingThread())` (`RHICommandList.h:5310`).
+So the poll-lock-copy-unlock happens inside the render command and the results cross back to the
+game thread through a lock-guarded array on a thread-safe shared pointer. That shared pointer is
+also what makes F7's actor-destruction and level-load cases safe: the render thread holds a
+reference, so a subsystem torn down mid-flight cannot leave a render command writing into freed
+memory.
+
+### Decided: `FSurfaceStateSample` carries all three channels, and returns coverage
+
+The struct has one `Amount` and there are three channels. The proposal commits to
+`FSurfaceStateSample QuerySurfaceState(const FVector& WorldPosition, EAccumulationChannel Channel) const;`
+— a channel per call. **That signature is changed, and the reason is a fact about the
+implementation rather than a preference.**
+
+**The gather is per position, not per channel.** One tap reads RGBA and therefore reads rubber,
+skid and marbles together at no extra cost; `SE_BLEND_Additive`'s `CW_RGB` writes all three. A
+per-channel API makes a caller that wants rubber *and* marbles — which is the interesting case, one
+raising grip and one lowering it — pay three gathers and three readback slots for information one
+gather already produced. `Status` and `SecondsSinceResolved` are properties of the sample, not of
+the channel, so returning three `FSurfaceStateSample`s triplicates them for no gain.
+
+So:
+
+```
+USTRUCT(BlueprintType)
+struct FSurfaceStateSample
+{
+    float RubberBuildup;
+    float SkidMark;
+    float Marbles;
+    ESurfaceSampleStatus Status;
+    float SecondsSinceResolved;
+    bool IsUsable() const;
+    float GetChannel(EAccumulationChannel) const;
+};
+```
+
+`Amount` is removed rather than kept alongside. It has never been read by anything — A1 built the
+struct and nothing has used it since — so nothing breaks, and leaving a fourth float that means
+"one of the other three, but which" is the kind of thing that is wrong for a year.
+
+This follows `FHitResult`: one heterogeneous struct filled by one query. The per-channel
+convenience is a thin `BlueprintPure` wrapper returning a single float, which is the same split the
+engine itself runs between `UPrimitiveComponent::GetMaterial(int32)` and
+`UMeshComponent::GetMaterials()` over identical data.
+
+**The brief does not decide this, and it is worth being accurate about that.** The brief never uses
+the words "API", "reusability", "engine-agnostic" or "documentation of the public interface" — those
+are this project's own commitments, not the assessment's. What the brief does ask for is
+"appropriate architecture, readability, maintainability, and C++ practices" (p.8) and, in the
+proposal criteria, "opportunities for investigation and engineering decision-making" (p.5). An
+explicit, defended, engine-idiomatic choice serves that; the shape itself is mine to argue.
+
+**Coverage, not exposure.** The query converts through
+`RacetrackSurfaceMapping::ExposureToCoverage`, which B already recorded as "what phase F calls
+directly". Coverage is bounded 0 to 1 and is the quantity a grip model wants; exposure is unbounded
+and is a storage detail. Raw exposure is not also exposed: the mapping is monotonic and invertible,
+so nothing is lost that a caller could not recover, and a second accessor is surface for nothing.
+
+**The averaging happens on exposure and the conversion happens after it**, matching the material
+exactly — the 2026-09-23 blur entry records that "averaging after the curve would be averaging
+saturated values, which is not a quantity that means anything." The canvas gather sums exposure
+because that is what the buffer holds; `ExposureToCoverage` runs once per query on the CPU after
+readback. The two paths therefore agree by construction rather than by care.
+
+### Decided: the tent spans the contact patch, and that is not what the material does
+
+F1's exit condition is "averages a contact patch, not one texel". At 3.125 cm per texel a 20 cm
+patch is 6.40 texels, so a 3x3 tent at one-texel spacing — which is what
+`MF_SampleRacetrackSurface` does — spans 9.4 cm and does **not** meet it.
+
+So the query's tap spacing is derived from a `ContactPatchWidth` argument, defaulting to 20 cm to
+match `FSurfaceContact::ContactWidth`'s default, giving taps at ±3.2 texels. The kernel stays a 3x3
+tent (`1 2 1 / 2 4 2 / 1 2 1`, over 16) because nine taps is what nine tile draws cost and a wider
+kernel is not obviously better.
+
+**This means the query and the material deliberately do not compute the same number**, and F5's
+overlay check has to be read accordingly. The material blurs by one texel to stop the road looking
+blocky at close range; the query averages over a contact patch because that is the physical
+quantity a tyre integrates. They agree in the interior of a uniform region and differ at a sharp
+edge, by design. **F5 therefore demonstrates agreement on a flat region and states the edge case
+rather than testing it**, which is the honest version of that check.
+
+The query does **not** read the material's `SurfaceBlurTexels` parameter. C9's rule is that exactly
+one number crosses the C++/HLSL boundary, and it is already spent on `AccumulationRowCount`. The
+consequence, stated so it is not discovered: **changing `SurfaceBlurTexels` in the material moves
+what is on screen and does not move what the query returns.** It is a display knob.
+
+### Decided: F3 is an unresolved-contact overlay, not a per-actor cache
+
+The proposal's 45 ms axle case argues an actor's own contacts must not wait for the readback: "at a
+2.5 metre wheelbase the rear wheels arrive 45 milliseconds after the front, under three frames. So
+an actor's own contacts are written straight into its local cache and readback supplies everything
+else."
+
+A per-actor cache needs the plugin to know what an actor is, which means caller identity in the
+API. **The plugin already holds the strictly better thing.** Every contact passes through
+`RegisterSurfaceContact`, so the subsystem knows every contact registered in the last few frames
+whether or not the caller owns it. Keeping a small ring of recent contacts in track space and
+adding, at query time, the exposure that those contacts deposited within a patch width of the query
+point covers the caller's own wheels *and* the car alongside it, needs no identity, and keeps the
+API position-in/state-out.
+
+Double-counting is what makes this non-trivial and it is exactly trackable. Each gather is stamped
+with the frame it was submitted on, and a resolved readback carries that stamp back. The overlay
+sums only contacts registered **after** the resolved snapshot's frame. Once the readback catches
+up, those contacts leave the ring in the same frame the GPU result starts including them.
+
+**Rejected: the per-actor cache**, on the API boundary. **Rejected: doing nothing here and letting
+the caller cache**, because the caller cannot — it does not know the readback latency, which is the
+number the cache window has to be.
+
+This is the most novel piece in the phase and therefore the cut point. F3 is separable: without it
+the query is simply staler, F4 still returns correct values, and the exit condition still holds. If
+F overruns, F3 comes out before anything else.
+
+### The proposal's latency argument is nearly right and its reason is wrong
+
+Recorded because F6 is supposed to demonstrate it and would otherwise demonstrate the wrong claim.
+
+The proposal says the two-to-three frame delay "does not matter here, because the field at a fixed
+position changes on the timescale of laps". That argues about a *fixed* position. A wheel is not at
+a fixed position: at 55 m/s, three frames at 60 Hz is **2.75 m of travel**, so the value that
+arrives describes where the wheel *was*, not where it is.
+
+The argument still holds, for a different reason, and this is the one F6 should test. What selects
+grip is overwhelmingly the **lateral** coordinate — on the line or off it — and lateral position is
+what barely moves in three frames: at C3's bounded lateral rate a car crosses a fraction of a texel
+laterally in that time. Along-track, 2.75 m is about 88 texels, but the field varies along-track on
+the scale of a braking zone, tens of metres. So the error is small because the field is smooth in
+the direction the wheel is moving fastest, not because the wheel is stationary.
+
+That reframing is also what makes the whole design defensible, so F6 should measure the thing the
+claim now rests on: **how much the returned coverage differs between the position submitted and the
+position the wheel actually occupies when the answer lands.** That is a number, and it is a better
+one than "the delay is three frames".
+
+### Decided: the query is handle-based, because the asynchrony is real
+
+A signature of the form `QuerySurfaceState(WorldPosition)` implies the answer is about the position
+in the argument. With a deferred gather it cannot be, and pretending otherwise is the failure the
+overlay in F5 exists to catch.
+
+So a caller acquires a handle once, and each frame submits a position and receives the last
+resolved sample for that handle:
+
+```
+FSurfaceQueryHandle AcquireSurfaceQuery();
+void ReleaseSurfaceQuery(FSurfaceQueryHandle Handle);
+FSurfaceStateSample QuerySurfaceState(FSurfaceQueryHandle Handle, const FVector& WorldPosition);
+```
+
+The handle is an index plus a generation counter. The generation is what makes a stale handle — one
+held by an actor destroyed and its slot recycled — return `NotYetResolved` instead of silently
+reading another wheel's grip. That is directly F7's actor-destruction case, and a bare index would
+alias.
+
+**Rejected: caller-chosen integer ids.** Two independent users of the plugin would collide.
+**Rejected: hashing the submitted position to a slot.** The position moves, which is the entire
+problem.
+
+A track-space overload is added beside it, as phase R did for the write path, so a caller already
+holding `(distance, alpha)` skips `FindInputKeyClosestToWorldLocation` entirely. R2 measured that
+search at 0.1383 ms for 80 conversions and put its 1 ms crossover at about 234 spline points; 80
+wheels querying in world space every frame is exactly the "any world-space caller reaches 80
+contacts per frame in a real scene" trigger R2 wrote for the per-contact segment cache. **F6 must
+check whether F trips R2's own trigger**, and if it does, that is a finding, not a surprise.
+
+### Decided: staleness is measured on `GetTimeSeconds`, the dilated clock that stops with the world
+
+Four candidates, all confirmed in `World.h:2010-2025` with their accessors at `4681-4705`:
+`TimeSeconds` (dilated, pauses), `UnpausedTimeSeconds` (dilated, does not pause), `RealTimeSeconds`
+(undilated, does not pause), `AudioTimeSeconds` (undilated, pauses).
+
+`RealTimeSeconds` and `FApp`/`FPlatformTime` are ruled out outright, and this is the C10 bug class:
+at 20x dilation an undilated staleness reads twenty times wrong against a caller whose own tick
+delta is dilated. `UTickableWorldSubsystem::Tick`'s `DeltaTime` is the dilated, clamped value —
+`LevelTick.cpp:1602-1603` overwrites `DeltaSeconds` with the dilated `GameDeltaSeconds` before
+`1821` passes it to `FTickableGameObject::TickObjects`, and `World.h:4522` says so outright:
+"Delta seconds is already dilated and clamped." The plugin's decay already runs on it.
+
+`TimeSeconds` over `UnpausedTimeSeconds` because **the subsystem does not tick while the world is
+paused at all**: `FTickableGameObject::IsTickableWhenPaused` defaults false (`Tickable.h:171-174`)
+and `UTickableWorldSubsystem` does not override it. So under pause nothing is deposited, nothing
+decays, no car moves and no readback resolves. A sample is exactly as fresh after the pause as
+before it, and `TimeSeconds` says so while `UnpausedTimeSeconds` would report a ten-second pause as
+ten seconds of staleness that nothing happened during. Every other clock in this system is the
+dilated world clock; this one matches.
+
+### What a caller does with each status, because it is API and has to be written down
+
+- **`Valid`** — the three coverages are usable and `SecondsSinceResolved` says how old they are.
+- **`NotYetResolved`** — no gather has come back for this handle yet, or the handle is stale. **Not
+  zero.** A caller must hold its previous grip value rather than snapping to clean tarmac, and the
+  overlay draws these differently from a genuine zero so the difference is visible on screen.
+- **`OutsideRegion`** — the position is off the ribbon, from `WorldToTrack` returning
+  `BeyondTrackEdge` or `NoCentreline`. This one *is* legitimately clean tarmac: there is no stored
+  state off the track and a caller should treat it as unmodified grip.
+
+**The query must never allocate the buffer.** `EnsureBuffer`/`GetOrCreateAccumulationTarget` will
+lazily allocate up to 118 MB purely from being called, and
+`RacetrackSurface.Decay.NeverAllocatesABufferOfItsOwn` exists because that has already been a
+hazard once. With no buffer the answer is `NotYetResolved`.
+
+### Traps carried into this phase
+
+- **The G-phase configuration-path bug has the same shape available here.**
+  `ARacetrackCircuit::CorneringProfile` was not a `UPROPERTY`, was built only in `OnConstruction`,
+  and `OnConstruction` does not re-run for a map-loaded actor in PIE — `ULevel::IncrementalUpdateComponents`
+  reruns it only inside `#if WITH_EDITOR` and only when `!bHasRerunConstructionScripts`
+  (`Level.cpp:1908-1924`), and a non-`UPROPERTY` is not carried by duplication either. The readback
+  ring is non-reflected runtime state and could fail identically. Two things stop it: it lives on
+  the subsystem, which is created fresh per world with `Initialize` always called, and its absence
+  is loud — a query with no ring logs `UE_LOG(..., Error, ...)`, matching the only loud-failure
+  mechanism this plugin currently uses (`SurfaceAccumulationSubsystem.cpp:332`,
+  `SurfaceAccumulationBuffer.cpp:196`; the tree contains no `check` or `ensure` at all).
+- **Test in PIE, not only headless.** `PostInitializeComponents` is gameplay-only and does not fire
+  in the bare editor world that `FindRenderableWorld` picks up in a headless run, so the headless
+  suite cannot exercise it. That is precisely why the G bug survived a day.
+- **Do not trust the harness over the screen.** Four confident explanations of the invisible
+  channels were all wrong and all reasoned from a passing test. F1's round-trip test lands before
+  anything is built on top of it.
+- **Live Coding cannot take new `UPROPERTY` members or new reflection**, and F4 changes
+  `FSurfaceStateSample`'s members. Editor closed for that build.
+- **`Build.bat` fails while the editor is open**; `BuildPlugin` still works.
+- **Do not run the automation tests with the editor open.** It has leaked actors into the open map.
+- **No `-nullrhi`.** It crashes 5.8 before any test runs.
+- **`-ExecCmds` splits on commas**, and fires at frame 1 only.
+- **`MaterialTools.delete_expression` asserts and halts the editor on a MaterialFunction.**
+- **`ReadRenderTargetRawPixelArea`'s last two arguments are counts**, and `bNormalize = false` is
+  the only path that preserves float precision on `PF_FloatRGBA`.
+
+### Tests
+
+New group `RacetrackSurface.Query.*`, following the existing
+`IMPLEMENT_SIMPLE_AUTOMATION_TEST(..., "RacetrackSurface.<Group>.<Name>", ...)` convention, joining
+the 11 groups and 49 plugin tests already there.
+
+| Test | What it pins |
+|---|---|
+| `GatherReturnsThePaintedMark` | Paint at a known ribbon coordinate, gather there, compare against `ReadRenderTargetRawPixelArea` of the same texels. This is C9's round-trip guard applied to the gather |
+| `GatherAveragesOverTheContactPatch` | A one-texel mark returns a smaller value than a patch-wide one, by the ratio the tent predicts. F1's exit condition |
+| `GatherIsolatesChannels` | A marbles-only gather leaves rubber and skid at zero, as `SurfaceMarbleChannelTests` does for the write side |
+| `GatherFoldsRowsLikeTheWritePath` | On a multi-row ribbon, a query half a lap away does not read the mark. The failure the C9 fold exists to prevent |
+| `QueryWithoutABufferDoesNotAllocateOne` | Mirrors `Decay.NeverAllocatesABufferOfItsOwn` |
+| `StaleHandleDoesNotReadAnotherSlot` | Release a handle, acquire a new one, confirm the old one returns `NotYetResolved`. F7's actor-destruction case |
+| `OutsideTheRibbonIsNotZero` | `OutsideRegion` and a genuine zero are distinguishable |
+| `UnresolvedContactsAreNotDoubleCounted` | F3: a contact appears once, whether it comes from the overlay or the readback |
+| `QueryCostAndLatency` | F6, in the shape of `SurfaceTrackSpaceTimingTests`: `SampleGpuWork` for the gather, `SampleCpuWork` for the marshalling, at 4 and 80 points, plus frames-to-resolve |
+
+### What has to happen in the editor, and what does not
+
+F1 to F4 and F6 to F8 are C++ and headless. **F0 and F5 need the editor**, and F0 needs MCP:
+
+- **F0** reads `MF_SampleRacetrackSurface`'s Custom node back out of the `.uasset`. Read-only, no
+  asset is modified, so it does not need the "ask before changing assets" gate — but it does need
+  the editor running.
+- **F5**'s debug draw is `DrawDebug*` from C++ with no asset involved, but judging that the numbers
+  land in the right place on screen is a look, not a test.
+
+**`BlurredFoldedExposure`'s HLSL is not recorded anywhere.** The C9 entry in `EDITOR_SETUP.md`
+describes it in prose — the 3x3 tent, the per-tap fold, the hand-rolled along-track bilinear,
+`RowWidth = round(1.0 / TexelSize.x)`, the half-texel inset on `v` — but does not quote it, unlike
+the G5 marble-dot node which is quoted verbatim twice and says why. So the read-path shader exists
+only inside a binary asset. C9 already named keeping the C++ and the HLSL in step as the standing
+risk of this project; F makes that risk concrete, because F1 writes a second reader. **That is what
+F0 is for, and it should happen at the next editor session whatever else is going on.**
+
+### Not in this phase
+
+- **A compute gather**, rejected above. If F6 shows the canvas gather costs more than the decay
+  pass it already sits beside, that is the trigger to revisit — and not before.
+- **Raw exposure on the public API.** Coverage only.
+- **Reading `SurfaceBlurTexels` into the query.** Recorded as a known, stated divergence instead.
+- **The per-contact segment cache.** F6 checks whether the world-space query trips R2's written
+  trigger; implementing it is R2's task, not F's.
+- **Any grip model.** The brief's boundary and this project's: the plugin reports surface state and
+  the vehicle system decides what to do with it. F8 draws a number; it does not change a tyre.
 
 ## Phase G — Marble distribution and marble query
 
