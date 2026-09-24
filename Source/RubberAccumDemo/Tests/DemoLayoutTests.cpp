@@ -321,8 +321,11 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 		MarbleContactsRegistered > 0);
 
 	TestTrue(
-		TEXT("Marble contacts survive registration rather than being discarded outside the ribbon"),
-		MarblesDiscarded == 0);
+		TEXT("Almost every marble contact lands on the track. A few leaving it is correct rather than a "
+			"fault: the throw is not clamped to the track edge, because clamping would pile the whole "
+			"tail of the distribution onto the boundary texel and make the stripe at the kerb this phase "
+			"exists to avoid"),
+		MarblesDiscarded * 100 < MarbleContactsRegistered);
 
 	TestTrue(
 		TEXT("Marble contacts become painted strokes rather than being dropped in stroke construction"),
@@ -544,7 +547,13 @@ bool FDemoLayoutChannelsAtSteadyStateUnderDecay::RunTest(const FString& Paramete
 
 	const int32 AcrossTexels = Ribbon.AcrossTrackTexels();
 
+	constexpr int32 BandCount = 16;
+
 	float Peak[AccumulationChannelCount] = {};
+	double RubberPerBand[BandCount] = {};
+	double MarblesPerBand[BandCount] = {};
+
+	int32 CorneringProbes = 0;
 
 	for (int32 Probe = 0; Probe < ProbeCount; ++Probe)
 	{
@@ -559,13 +568,74 @@ bool FDemoLayoutChannelsAtSteadyStateUnderDecay::RunTest(const FString& Paramete
 		const TArray<FLinearColor> Band = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
 			World, Painted, Column, RowIndex * AcrossTexels, 1, AcrossTexels, false);
 
-		for (const FLinearColor& Texel : Band)
+		const double SignedCornering =
+			Track->GetSignedCorneringAtDistance(AlongTrack * Track->GetTrackLength());
+
+		const bool bApexOnTheNegativeSide = SignedCornering < 0.0;
+		const bool bInACorner = FMath::Abs(SignedCornering) > 0.5;
+
+		CorneringProbes += bInACorner ? 1 : 0;
+
+		for (int32 Texel = 0; Texel < Band.Num(); ++Texel)
 		{
-			Peak[0] = FMath::Max(Peak[0], Texel.R);
-			Peak[1] = FMath::Max(Peak[1], Texel.G);
-			Peak[2] = FMath::Max(Peak[2], Texel.B);
+			Peak[0] = FMath::Max(Peak[0], Band[Texel].R);
+			Peak[1] = FMath::Max(Peak[1], Band[Texel].G);
+			Peak[2] = FMath::Max(Peak[2], Band[Texel].B);
+
+			if (!bInACorner)
+			{
+				continue;
+			}
+
+			const int32 TowardTheApex = bApexOnTheNegativeSide ? Band.Num() - 1 - Texel : Texel;
+
+			const int32 BandIndex =
+				FMath::Clamp(TowardTheApex * BandCount / FMath::Max(Band.Num(), 1), 0, BandCount - 1);
+
+			RubberPerBand[BandIndex] += Band[Texel].R;
+			MarblesPerBand[BandIndex] += Band[Texel].B;
 		}
 	}
+
+	FString AcrossReport;
+	int32 RubberPeakBand = 0;
+	int32 MarblePeakBand = 0;
+
+	for (int32 Index = 0; Index < BandCount; ++Index)
+	{
+		RubberPeakBand = RubberPerBand[Index] > RubberPerBand[RubberPeakBand] ? Index : RubberPeakBand;
+		MarblePeakBand = MarblesPerBand[Index] > MarblesPerBand[MarblePeakBand] ? Index : MarblePeakBand;
+
+		AcrossReport += FString::Printf(
+			TEXT("\n  %4.0f to %4.0f cm from the outside edge: rubber %8.2f, marbles %8.2f"),
+			Index * Ribbon.TrackWidth / BandCount,
+			(Index + 1) * Ribbon.TrackWidth / BandCount,
+			RubberPerBand[Index],
+			MarblesPerBand[Index]);
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Across-track profile over the %d of %d probe columns that are in a corner, folded by the "
+			"sign of the local curvature so left and right handers superimpose. Band 0 is the outside of "
+			"the corner, band %d the inside:%s"),
+		CorneringProbes,
+		ProbeCount,
+		BandCount - 1,
+		*AcrossReport));
+
+	AddInfo(FString::Printf(
+		TEXT("Rubber peaks in band %d and marbles in band %d, a separation of %d sixteenths, which is "
+			"%.0f cm on this %.0f cm track"),
+		RubberPeakBand,
+		MarblePeakBand,
+		FMath::Abs(RubberPeakBand - MarblePeakBand),
+		FMath::Abs(RubberPeakBand - MarblePeakBand) * Ribbon.TrackWidth / BandCount,
+		Ribbon.TrackWidth));
+
+	TestTrue(
+		TEXT("The marble band does not peak where the rubber does, because traffic sweeps the line it "
+			"drives on and leaves marbles only where it does not"),
+		MarblePeakBand != RubberPeakBand);
 
 	AddInfo(FString::Printf(
 		TEXT("Steady state under decay. Half-life %.0f s of track time at rate 16, so a time constant of "
