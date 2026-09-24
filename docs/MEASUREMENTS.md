@@ -2440,3 +2440,158 @@ depend on the deposition scale — which a gate derived from the half-float floo
   that figure is arithmetic rather than an observation.
 - **One car, not twenty.** The distribution is per-car and does not change with field size, but the
   band's *width once twenty cars on twenty different lines contribute* has not been measured.
+
+---
+
+## 2026-09-24 — G, second pass: the cornering profile, and three defects it was hiding
+
+```
+Build:    Development, editor target, UnrealEditor-Cmd.exe headless with the editor closed
+Power:    MAINS
+Scene:    ARacetrackCircuit, Spa layout, 180000 cm lap, 800 cm wide, 3.125 cm/texel, 4 rows, 20 cars
+Driven:   RubberAccumDemo.Demo.* automation tests, and one standalone -game run of L_SpaHarness
+```
+
+Everything in the previous G entry was measured through a test harness. This entry exists because
+**the harness and the screen disagreed, and the harness was wrong.**
+
+### The measurement that found it, taken in the live game rather than in a test
+
+`RacetrackDemo.SurfaceReport`, a new console command that reads the accumulation buffer back over
+48 columns and reports peak coverage per channel, run twice in a Play-In-Editor session:
+
+```
+Peak coverage: rubber 0.0822, skid 0.0000, marbles 0.0000 ... Debug view is all three channels
+               with mask (R=1.000000,G=1.000000,B=1.000000,A=1.000000)
+Peak coverage: rubber 0.0899, skid 0.0000, marbles 0.0000
+```
+
+**Exactly zero, not small.** Four hypotheses had been offered before this and all four were wrong;
+every one was reasoned from the test harness. The first live read settled it in one command. The
+cause and its four symptoms are in [PLAN.md](PLAN.md): `CorneringProfile` is not a `UPROPERTY` and
+`OnConstruction` does not re-run for a map-loaded actor in PIE, so the profile was empty and
+`GetSignedCorneringAtDistance` returned zero everywhere.
+
+**Method note worth keeping.** Standalone `-game` runs `OnConstruction`, so every timing and
+contrast figure in this file before today was taken on the working path and none of them is
+invalidated. The broken path was Play-In-Editor only, which nothing automated exercises.
+
+After the fix, from a real `-game` run of `/Game/Maps/L_SpaHarness`:
+
+```
+RacetrackCircuit_0 sampled 1200 cornering points over 180000 cm, tightest curvature 0.00197596
+per cm, normalised against the 75th percentile at 0.00023151
+```
+
+Tightest radius **5.06 m**, normalisation radius **43 m**, so anything tighter than 43 m clamps.
+
+### Slip against the cornering at the car's own position, one lap of the demo layout
+
+`RubberAccumDemo.Demo.SlipSeparatesStraightsFromCornersOnTheDemoLayout`, one car, 5223 ticks at
+1/60 s. Deposition read off the contacts the car actually registered, not recomputed.
+
+Cornering at the car by percentile of lap time: p10 **0.057**, p25 0.133, p50 **0.484**, p75
+**1.000**, p90 1.000, p99 1.000. A quarter of the lap is clamped at maximum by construction.
+
+| Cornering bucket | Ticks | Mean slip before | Mean slip after |
+|---|---|---|---|
+| 0.0-0.1 | 1121 | **0.1805** | **0.0750** |
+| 0.1-0.2 | 531 | 0.2539 | 0.1164 |
+| 0.2-0.3 | 452 | 0.3124 | 0.1634 |
+| 0.3-0.4 | 335 | 0.3283 | 0.2049 |
+| 0.4-0.5 | 197 | 0.3575 | 0.2507 |
+| 0.5-0.6 | 159 | 0.3747 | 0.2964 |
+| 0.6-0.7 | 183 | 0.4134 | 0.3441 |
+| 0.7-0.8 | 217 | 0.4330 | 0.3882 |
+| 0.8-0.9 | 237 | 0.4643 | 0.4327 |
+| 0.9-1.0 | 1791 | 0.4981 | 0.4969 |
+| **Realised contrast** | | **2.76 to 1** | **6.63 to 1** |
+
+The model's own range is 0.05 to 0.50, which is 10 to 1. Before the fix the straightest tenth of
+the lap started a third of the way up that range, because deposition read a cornering value that
+included 25 m of braking lookahead.
+
+### Stroke geometry under time compression
+
+`RubberAccumDemo.Demo.StrokesDoNotSmearAcrossTheTrackUnderCompressedTime`, 300 sampled ticks each.
+A 20 cm contact patch is 6.40 texels; the track is 256 texels wide.
+
+| | Longest stroke | Widest lateral span | Against mark width |
+|---|---|---|---|
+| Real time, 0.0167 s | 50.0 cm | 5.22 texels | 0.8x |
+| Compressed 20x, **before** | 999.6 cm | **97.45 texels** | **15.2x** |
+| Compressed 20x, **after** | 999.6 cm | **9.74 texels** | **1.5x** |
+
+Stroke *length* is unchanged and is not a defect: the ribbon is unrolled, so a car holding its line
+through a corner is a straight line in track space. Only the lateral term needed bounding.
+
+Furthest a painted stroke endpoint reaches across the track, against a field whose widest wheel
+sits at alpha **0.7749**: real time **0.7819** (1.4 cm of overshoot), compressed **0.8589**
+(33.6 cm). **Zero endpoints past the track edge at either rate.**
+
+### Every channel at steady state under the demo's own decay
+
+`RubberAccumDemo.Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay`. Deposition 16 with decay 16
+reaches the same equilibrium as the demo's 2 and 2 eight times sooner, because equilibrium is
+proportional to scale over rate. Half-life 4505 s of track time, so a 282 s time constant; ticked
+2500 times at 0.3333 s, which is 833 s, about **3.0 time constants**.
+
+| Channel | Peak exposure | Peak coverage |
+|---|---|---|
+| Buildup | 0.876953 | **0.9280** |
+| Skid | 0.146729 | **0.3561** |
+| Marbles, before sweeping | 0.303223 | 0.5973 |
+| Marbles, after sweeping | 0.169434 | **0.3985** |
+
+Sweeping costs the marble channel its peak because the deposits it removes are the ones that landed
+on the racing line. That is the mechanism working, not a loss.
+
+### Where the marble band actually lands, which is the measurement phase G owed
+
+Across-track profile at steady state, summed over the 42 of 96 probe columns that are in a corner,
+**folded by the sign of the local curvature so left and right handers superimpose**. Band 0 is the
+outside of the corner.
+
+| From the outside edge | Rubber | Marbles |
+|---|---|---|
+| 0-50 cm | 0.00 | 0.09 |
+| 50-100 | 0.00 | 1.42 |
+| 100-150 | 0.00 | 6.34 |
+| 150-200 | 0.00 | 12.62 |
+| 200-250 | 0.52 | 20.02 |
+| 250-300 | 1.90 | 27.74 |
+| **300-350** | 6.78 | **35.04** |
+| 350-400 | 44.46 | 33.97 |
+| 400-450 | 221.11 | 5.95 |
+| 450-500 | 279.25 | 4.16 |
+| **500-550** | **306.86** | 2.18 |
+| 550-600 | 172.96 | 0.80 |
+| 600-650 | 73.76 | 0.24 |
+| 650-700 | 17.26 | 0.02 |
+| 700-750 | 1.01 | 0.01 |
+| 750-800 | 0.00 | 0.00 |
+
+**The two peaks are 200 cm apart and nothing in the code reserves that gap.** Marbles peak
+immediately outside where rubber begins, collapse by a factor of six under the racing line, and
+thin monotonically to the outside edge. The clean line is produced by traffic sweeping what it
+drives over.
+
+**The first version of this measurement was wrong and is worth recording as a method note.** It
+summed across the whole lap without folding, so left and right handers mirrored each other and both
+channels appeared to peak near the centreline, 50 cm apart. The shape only became visible once the
+fold was applied. An unfolded average over a circuit that turns both ways measures nothing.
+
+### Not verified
+
+- **Nothing in this entry was looked at on screen by the author of it.** The band profile, the
+  contrast and the smear are all readbacks and contact counts. What the surface looks like is the
+  user's call and was judged separately.
+- **The sweep pass is not timed.** It is a second full canvas pass of roughly 80 modulate quads per
+  frame, and it has no number in this file. `r.RacetrackSurface.TimePaint` brackets `PaintStrokes`
+  only, so timing the sweep needs the same treatment extending to it.
+- **One car, one lap, for the slip table.** The distribution is per-car and does not change with
+  field size, but no twenty-car figure exists.
+- **The 33.6 cm of invented lateral reach at 20x is bounded, not removed.** The exact fix is
+  recorded against C4 and not taken.
+- **Everything here is the Spa demo layout.** The Stadium figures elsewhere in this file are still
+  Stadium figures and the two should not be compared.
