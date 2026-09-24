@@ -1208,3 +1208,57 @@ assert and halt the editor — nothing in this change deletes anything anywhere.
   is now `AppendVector(Coverage.rg, MarbleDots)`. Rubber and skid are bit-identical, but the blue
   channel of the all-channels view is now a dot mask rather than a smooth coverage — so captures
   taken before this change are still comparable in R and G and are **not** comparable in B.
+
+---
+
+## 2026-09-24 — G5 corrected: the dot mapping made a real marble field invisible
+
+**Asset changed:** `/Game/Materials/M_SurfaceAccumulationDebug`, the `MarbleDots` Custom node's
+`Code` only. No nodes added, removed or rewired. Saved.
+
+**Why, measured rather than judged by eye.**
+`RubberAccumDemo.Demo.MarblesReachTheBufferOnTheFoldedLayout` read the marble channel back off the
+real 14401 x 1024 four-row atlas and found **0.064880 exposure, 0.1769 coverage** — a genuine
+marble field, 31 % of rubber's 0.5777 on the same run. Nothing was visible on screen.
+
+The first mapping was `Radius = saturate(Density * 2 - CellRandom.r) * MaxRadius`. At a density of
+0.1769 that lights only cells whose random draw is under 0.354, about a third of them, each with a
+radius under 0.15 cell units. That is roughly **2 % of the surface in 1.8 cm specks** — invisible,
+while a flat colour at the same density would have read clearly.
+
+The single-threshold form was chosen on 2026-09-24 because it produced both required behaviours
+from one expression. It does, but only across the wrong range: it needs a density near 0.5 before
+most cells carry a dot, and the measured working range is **0.1 to 0.3**.
+
+### The corrected HLSL, recorded verbatim
+
+```hlsl
+float Lit = step(CellRandom.r, saturate(Density * 2.5));
+float Radius = MaxRadius * (0.4 + 0.6 * saturate(Density * 1.5)) * Lit;
+float Edge = max(Radius * 0.45, 1e-4);
+return Radius <= 1e-4 ? 0.0 : (1.0 - smoothstep(Radius - Edge, Radius, Voronoi.a));
+```
+
+Inputs and output are unchanged: `Density`, `CellRandom`, `Voronoi`, `MaxRadius`, `CMOT_Float1`.
+
+Presence and size are separated again, which is what the original plan called for before the
+single-threshold form replaced it:
+
+- **Presence** is `CellRandom.r < saturate(Density * 2.5)`, so the share of cells carrying a dot
+  reaches 100 % at a density of 0.4 rather than 0.5.
+- **Size** is `0.4 + 0.6 * saturate(Density * 1.5)`, so a lit cell always gets at least 40 % of the
+  maximum radius. A dot that exists is visible; it then grows to full by a density of 0.67.
+
+At the measured 0.1769 that is **44 % of cells at 56 % of maximum radius**, about 5.6 cm across in
+a 12 cm cell, against 35 % of cells at 1.8 cm before.
+
+**The lesson is worth keeping separate from the fix.** The first mapping was not wrong in form; it
+was calibrated against a density range nobody had measured yet. The measurement existed one commit
+later and contradicted it. Presentation curves for a quantity this project generates should be set
+after reading the quantity back, not before.
+
+### Not verified
+
+- **Not seen on screen.** The graph compiles and the asset is saved; whether 44 % of cells at 5.6 cm
+  reads as marbles rather than as noise is a judgement, and `MarbleDotCellCentimetres` and
+  `MarbleDotMaxRadius` remain instance parameters for exactly that reason.
