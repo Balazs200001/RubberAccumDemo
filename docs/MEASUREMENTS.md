@@ -2153,13 +2153,13 @@ Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
 
 | | Extrapolated in PLAN.md | **Measured** |
 |---|---|---|
-| Full-buffer decay, median | 0.845 ms | **0.3400 ms** |
+| Full-buffer decay, median | 0.845 ms | **0.3340 ms** |
 | Full-buffer decay, minimum | — | **0.2870 ms** |
 | Share of the 2.365 ms GPU frame | 36 % | **14 %** |
 
 **The extrapolation was linear in bytes touched and the pass is not.** B4's stated reading — *"decay
 cost tracks bytes touched"* — was taken across a 64-fold range of *square* buffers and does not hold
-from 33554432 bytes to 117964800. The real ratio is **3.52 times the bytes for 1.42 times the
+from 33554432 bytes to 117964800. The real ratio is **3.52 times the bytes for 1.39 times the
 time**, so the pass is substantially sub-linear at this size. Recorded as a correction to B4's
 reading rather than a new one, because two points do not establish a curve: what is established is
 that the linear model overstates the cost at this size by 2.5x.
@@ -2189,8 +2189,10 @@ rate and whatever the frame rate, which is both representable and predictable in
 independence directly: over 10 s at 1x, one banked step and 600 compounded frames give retentions
 differing by **1.115e-5, which is 44 times finer than the buffer can hold**.
 
-Cost that follows, at the measured 0.3400 ms: `Rate * 256 / HalfLifeSeconds` passes a second, so
-**0.0009 ms a frame at 1x and 60 Hz** on the fallback half-life, rising linearly with the rate.
+Cost that follows, at the measured 0.3340 ms and the 900 s fallback half-life:
+`Rate * 256 / HalfLifeSeconds` is 0.2844 passes a second at 1x, so 0.0950 ms a second and
+**0.0016 ms a frame at 60 Hz**, rising linearly with the rate. At 20x it is 1.9001 ms a second.
+All four figures are printed by the test rather than worked out here.
 
 ### Lap time, measured against the speed profile the half-life is derived from
 
@@ -2238,7 +2240,8 @@ apex-to-straight contrast becomes a property of the traffic rather than of how l
 **Provenance, which was not previously recorded and is a defect in this file.** The 0.012471,
 0.001516 and 8.2:1 figures in the C6 table above were measured on the **Stadium**, not on Spa.
 `CountedPassesOverATexelAgainstThePrediction` spawns a default `ARacetrackCircuit`, whose `Layout`
-defaults to `ETrackLayout::Stadium`; 21 of the 27 circuit-spawning host tests do the same. The
+defaults to `ETrackLayout::Stadium`. **17 of the 23 host tests that spawn a circuit never call
+`SetLayout`**, so they run the oval; only 6 do, and the host module defines 26 tests in total. The
 "twenty cars over 12.67 laps" in that table is a 30921 cm lap, not the 180000 cm demo. The
 equilibrium arithmetic above is layout-independent by construction, so it is unaffected, but **the
 contrast figure itself has not been re-measured on the demo layout** and should not be quoted as a
@@ -2250,7 +2253,7 @@ Spa number.
   MCP was unreachable, so no capture exists of the on-screen messages, of any single-channel view,
   or of the surface fading. The `DebugChannelMask` material parameter does not exist yet either, so
   the channel cycle currently logs and announces correctly and changes nothing visually.
-- **The 0.3400 ms decay figure is the pass in isolation**, timed the same way every other pass in
+- **The 0.3340 ms decay figure is the pass in isolation**, timed the same way every other pass in
   this file is, not the pass inside a live twenty-car frame.
 - **The equilibrium is arithmetic from a measured deposit rate, not an observed steady state.** No
   run has been left going long enough to reach it.

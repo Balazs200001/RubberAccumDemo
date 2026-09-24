@@ -2491,9 +2491,9 @@ C10.0 to C10.4 are done. **74 of 74 tests pass headlessly with the editor closed
 are clean.** C10.2's C++ is done and its material edit is not; C10.5 has not happened. Full numbers
 in [MEASUREMENTS.md](MEASUREMENTS.md); what follows is only where this section was wrong.
 
-**The decay pass costs 0.3400 ms at 14400 x 1024, not the 0.845 ms extrapolated above.** B4's
+**The decay pass costs 0.3340 ms at 14400 x 1024, not the 0.845 ms extrapolated above.** B4's
 "decay cost tracks bytes touched" does not hold from 33554432 to 117964800 bytes: 3.52 times the
-bytes cost 1.42 times the time. **That weakens the cost half of the case for not decaying every
+bytes cost 1.39 times the time. **That weakens the cost half of the case for not decaying every
 frame and it should not be restated as written.** 0.34 ms is 7 % of a 4.725 ms frame — expensive,
 not disqualifying. What survives untouched is the precision argument, which is not a matter of
 degree: a per-frame pass at 60 Hz moves a texel by 1.281e-5, **38 times below the 4.883e-4 that a
@@ -2539,8 +2539,8 @@ duplicating that machinery to assert against it would have been worse.
 **A provenance defect in `MEASUREMENTS.md` was found on the way and is recorded, not fixed.** The
 8.2:1 contrast, the 0.012471 apex figure and the laps-to-63 % counts were all measured on the
 **Stadium**, and the table does not say so. `CountedPassesOverATexelAgainstThePrediction` spawns a
-default circuit, and `Layout` defaults to `Stadium`; 21 of 27 circuit-spawning host tests do the
-same. The equilibrium arithmetic is layout-independent so it is unaffected, but **re-measuring the
+default circuit, and `Layout` defaults to `Stadium`; **17 of the 23 host tests that spawn a circuit
+never call `SetLayout`**, so they run the oval. The equilibrium arithmetic is layout-independent so it is unaffected, but **re-measuring the
 contrast on the demo layout is owed** and is not part of C10.
 
 **Still outstanding, and both need the editor.** C10.2's `DebugChannelMask` parameter does not exist
