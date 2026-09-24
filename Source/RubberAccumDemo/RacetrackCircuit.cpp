@@ -35,21 +35,26 @@ namespace RacetrackCircuitDisplay
 	TAutoConsoleVariable<float> CVarMessageSeconds(
 		TEXT("RacetrackDemo.MessageSeconds"),
 		6.0f,
-		TEXT("How long an on-screen control message stays up. Six seconds suits someone watching the "
-			"demo live. Raise it for a still capture, where the surface needs laps to build and the "
-			"caption has to outlast them."),
+		TEXT("How long an on-screen control message stays up, in seconds the operator actually waits. ")
+		TEXT("The engine expires these messages on the dilated clock, so the figure is multiplied by ")
+		TEXT("the current time dilation before it is handed over. Raise it for a still capture, where ")
+		TEXT("the surface needs laps to build and the caption has to outlast them."),
 		ECVF_Default);
 
-	void AnnounceOnScreen(FName MessageName, const FString& Text)
+	void AnnounceOnScreen(const UObject* WorldContext, FName MessageName, const FString& Text)
 	{
-		if (GEngine != nullptr)
+		if (GEngine == nullptr)
 		{
-			GEngine->AddOnScreenDebugMessage(
-				static_cast<uint64>(GetTypeHash(MessageName)),
-				CVarMessageSeconds.GetValueOnGameThread(),
-				FColor::White,
-				Text);
+			return;
 		}
+
+		const float Dilation = FMath::Max(UGameplayStatics::GetGlobalTimeDilation(WorldContext), UE_SMALL_NUMBER);
+
+		GEngine->AddOnScreenDebugMessage(
+			static_cast<uint64>(GetTypeHash(MessageName)),
+			CVarMessageSeconds.GetValueOnGameThread() * Dilation,
+			FColor::White,
+			Text);
 	}
 }
 
@@ -234,6 +239,7 @@ void ARacetrackCircuit::SetFieldPaused(bool bPaused)
 		bPaused ? TEXT("release them") : TEXT("freeze them"));
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
 		TEXT("RubberAccumDemo.FieldPaused"),
 		FString::Printf(
 			TEXT("Field %s, %d cars"),
@@ -352,6 +358,7 @@ void ARacetrackCircuit::BindTimeControls()
 		DecayHalfLifeInLaps * GetLapSeconds());
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
 		TEXT("RubberAccumDemo.Controls"),
 		TEXT("P field   . , time   ] [ deposition   ' ; decay   C channel"));
 }
@@ -404,6 +411,7 @@ void ARacetrackCircuit::ApplyTimeDilation(float Dilation)
 	UE_LOG(LogRacetrackSurface, Log, TEXT("Time dilation now %.2fx"), Clamped);
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
 		TEXT("RubberAccumDemo.TimeDilation"),
 		FString::Printf(TEXT("Time dilation now %.2fx"), Clamped));
 }
@@ -534,6 +542,7 @@ void ARacetrackCircuit::SetDebugView(ESurfaceDebugView View)
 		*DebugViewChannelMask(DebugView).ToString());
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
 		TEXT("RubberAccumDemo.DebugView"),
 		FString::Printf(TEXT("Surface view: %s"), DebugViewName(DebugView)));
 }
