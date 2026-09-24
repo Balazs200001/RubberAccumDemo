@@ -414,6 +414,69 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDemoLayoutCorneringProfileSurvivesRuntimeInitialisation,
+	"RubberAccumDemo.Demo.CorneringProfileSurvivesRuntimeInitialisation",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDemoLayoutCorneringProfileSurvivesRuntimeInitialisation::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindDemoWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, DemoLapLength);
+
+	const int32 AfterConstruction = Track->GetCorneringSampleCount();
+
+	Track->PostInitializeComponents();
+
+	const int32 AfterRuntimeInitialisation = Track->GetCorneringSampleCount();
+
+	double WidestCornering = 0.0;
+
+	for (int32 Sample = 0; Sample < 512; ++Sample)
+	{
+		WidestCornering = FMath::Max(
+			WidestCornering,
+			Track->GetCorneringAmountAtDistance(Track->GetTrackLength() * Sample / 512.0));
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Cornering samples after construction: %d. After PostInitializeComponents, which is the only "
+			"initialisation a map-loaded actor gets: %d. Widest cornering found around the lap: %.4f"),
+		AfterConstruction,
+		AfterRuntimeInitialisation,
+		WidestCornering));
+
+	TestTrue(
+		TEXT("PostInitializeComponents leaves a usable cornering profile. CorneringProfile is not a "
+			"UPROPERTY, so it does not survive into a play session and OnConstruction does not re-run for "
+			"a map-loaded actor. Without a runtime rebuild GetSignedCorneringAtDistance returns zero "
+			"everywhere, which silently flattens slip, stops every car braking and deposits no marbles"),
+		AfterRuntimeInitialisation > 0);
+
+	TestTrue(
+		TEXT("The rebuilt profile finds real corners rather than a flat zero"),
+		WidestCornering > 0.9);
+
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDemoLayoutChannelsAtSteadyStateUnderDecay,
 	"RubberAccumDemo.Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
