@@ -907,7 +907,7 @@ lines change, and what each one was should be readable next to what it became.
 
 | # | Task | Exit |
 |---|---|---|
-| F0 | Recover `BlurredFoldedExposure`'s HLSL out of the `.uasset` and into `EDITOR_SETUP.md` | The shader the query has to agree with exists as text somewhere. **Needs the editor.** Not a blocker for F1 to F8 |
+| F0 | Recover `BlurredFoldedExposure`'s HLSL out of the `.uasset` and into `EDITOR_SETUP.md` | The shader the query has to agree with exists as text somewhere. **Met 2026-09-24**, and it corrected two assumptions this phase was resting on |
 | F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel |
 | F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | A query is answered every frame, with a bounded and reported age, and `FlushRenderingCommands` is never called on the query path |
 | F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
@@ -1130,13 +1130,35 @@ kernel is not obviously better.
 overlay check has to be read accordingly. The material blurs by one texel to stop the road looking
 blocky at close range; the query averages over a contact patch because that is the physical
 quantity a tyre integrates. They agree in the interior of a uniform region and differ at a sharp
-edge, by design. **F5 therefore demonstrates agreement on a flat region and states the edge case
-rather than testing it**, which is the honest version of that check.
+edge, by design.
 
 The query does **not** read the material's `SurfaceBlurTexels` parameter. C9's rule is that exactly
 one number crosses the C++/HLSL boundary, and it is already spent on `AccumulationRowCount`. The
 consequence, stated so it is not discovered: **changing `SurfaceBlurTexels` in the material moves
 what is on screen and does not move what the query returns.** It is a display knob.
+
+#### Amended 2026-09-24 by F0, which makes F5 a much stronger check than this section assumed
+
+The above was written from the prose description of `BlurredFoldedExposure`. Reading the actual
+HLSL back out of the asset — now quoted in [EDITOR_SETUP.md](EDITOR_SETUP.md) — shows the shader's
+`Radius` input scales the tap **spacing**, not the weights, and its weights are
+`(x==0?2:1) * (y==0?2:1)`, the same separable `[1 2 1] ⊗ [1 2 1]` this plan specified for the query.
+
+So the display read and the query read are **the same kernel at two radii**, not two different
+kernels. That changes F5's exit condition for the better: rather than demonstrating agreement on a
+flat region and arguing the edge case away, **F5 sets `SurfaceBlurTexels` to the contact patch
+width and demands exact agreement**, then restores it. A forced-equality check catches a wrong
+sample position, a wrong fold and a wrong weight; an approximate-agreement check catches only the
+first.
+
+**And one trap for F1, which would not have been caught by a test written against itself.** The
+shader's lap length is `RowTotal * RowWidth` — rows times *atlas width* — which on the demo ribbon
+is 4 x 14401 = 57604 texels, while `FSurfaceTrackRibbon::AlongTrackTexels()` returns 57601. The
+three-texel difference is padding from `TexelsPerRow()`'s `DivideAndRoundUp`. The C++ paint path
+already normalises through `RibbonToAtlasInRow` on the same `RowCount` convention, so write and
+read agree today and the effective texel size is a consistent 0.005 % off the configured one.
+**The C++ gather must use the same convention and must not reach for `AlongTrackTexels()`**, which
+is the obvious-looking accessor and is the wrong one here.
 
 ### Decided: F3 is an unresolved-contact overlay, not a per-actor cache
 
@@ -1291,6 +1313,7 @@ the 11 groups and 49 plugin tests already there.
 | Test | What it pins |
 |---|---|
 | `GatherReturnsThePaintedMark` | Paint at a known ribbon coordinate, gather there, compare against `ReadRenderTargetRawPixelArea` of the same texels. This is C9's round-trip guard applied to the gather |
+| `GatherAgreesWithTheShaderAtTheSameRadius` | With `SurfaceBlurTexels` set to the query's patch width, the gather and `DrawMaterialToRenderTarget` through `MF_SampleRacetrackSurface` return the same number. The forced-equality check F0 made possible. Lives in the host module, because the debug material does |
 | `GatherAveragesOverTheContactPatch` | A one-texel mark returns a smaller value than a patch-wide one, by the ratio the tent predicts. F1's exit condition |
 | `GatherIsolatesChannels` | A marbles-only gather leaves rubber and skid at zero, as `SurfaceMarbleChannelTests` does for the write side |
 | `GatherFoldsRowsLikeTheWritePath` | On a multi-row ribbon, a query half a lap away does not read the mark. The failure the C9 fold exists to prevent |
