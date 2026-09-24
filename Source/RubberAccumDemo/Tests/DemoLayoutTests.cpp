@@ -387,6 +387,152 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDemoLayoutSlipSeparatesStraightsFromCorners,
+	"RubberAccumDemo.Demo.SlipSeparatesStraightsFromCornersOnTheDemoLayout",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDemoLayoutSlipSeparatesStraightsFromCorners::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindDemoWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("No USurfaceAccumulationSubsystem available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, DemoLapLength);
+
+	ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+
+	if (Car == nullptr)
+	{
+		AddError(TEXT("Failed to spawn a car."));
+		Track->Destroy();
+		return false;
+	}
+
+	Car->ConfigureDriver(Track, 0.0, 0.0, Track->GetDriverLineCommitment(0), 0);
+
+	constexpr int32 BinCount = 10;
+
+	double SlipTotalPerBin[BinCount] = {};
+	int32 SamplesPerBin[BinCount] = {};
+
+	TArray<double> CorneringSamples;
+	const double Length = Track->GetTrackLength();
+
+	int32 Ticks = 0;
+
+	while (Car->GetDistanceAlongTrack() < Length && Ticks < 20000)
+	{
+		const double CorneringHere = Track->GetCorneringAmountAtDistance(Car->GetDistanceAlongTrack());
+
+		Subsystem->ResetSurface();
+		Car->Tick(RealTimeTick);
+
+		double WidestSlip = 0.0;
+
+		for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
+		{
+			if (Contact.Channel != EAccumulationChannel::Marbles)
+			{
+				WidestSlip = FMath::Max(WidestSlip, static_cast<double>(Contact.SlipAmount));
+			}
+		}
+
+		const int32 Bin = FMath::Clamp(FMath::FloorToInt32(CorneringHere * BinCount), 0, BinCount - 1);
+
+		SlipTotalPerBin[Bin] += WidestSlip;
+		++SamplesPerBin[Bin];
+		CorneringSamples.Add(CorneringHere);
+
+		++Ticks;
+	}
+
+	CorneringSamples.Sort();
+
+	const auto Percentile = [&CorneringSamples](double Fraction)
+	{
+		const int32 Index = FMath::Clamp(
+			FMath::FloorToInt32(Fraction * CorneringSamples.Num()), 0, CorneringSamples.Num() - 1);
+
+		return CorneringSamples.Num() > 0 ? CorneringSamples[Index] : 0.0;
+	};
+
+	AddInfo(FString::Printf(
+		TEXT("One lap of the demo layout in %d ticks. Cornering amount at the car, by percentile of lap "
+			"time: p10 %.3f, p25 %.3f, p50 %.3f, p75 %.3f, p90 %.3f, p99 %.3f"),
+		Ticks,
+		Percentile(0.10), Percentile(0.25), Percentile(0.50),
+		Percentile(0.75), Percentile(0.90), Percentile(0.99)));
+
+	FString BinReport;
+
+	for (int32 Bin = 0; Bin < BinCount; ++Bin)
+	{
+		const double MeanSlip = SamplesPerBin[Bin] > 0 ? SlipTotalPerBin[Bin] / SamplesPerBin[Bin] : 0.0;
+
+		BinReport += FString::Printf(
+			TEXT("\n  cornering %.1f-%.1f: %5d ticks, mean deposited slip %.4f"),
+			Bin / static_cast<double>(BinCount),
+			(Bin + 1) / static_cast<double>(BinCount),
+			SamplesPerBin[Bin],
+			MeanSlip);
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Slip the car actually registered, bucketed by the cornering at its own position:%s"),
+		*BinReport));
+
+	const double StraightSlip = SamplesPerBin[0] > 0 ? SlipTotalPerBin[0] / SamplesPerBin[0] : 0.0;
+	const double CornerSlip =
+		SamplesPerBin[BinCount - 1] > 0 ? SlipTotalPerBin[BinCount - 1] / SamplesPerBin[BinCount - 1] : 0.0;
+
+	AddInfo(FString::Printf(
+		TEXT("Least-cornering bucket deposits %.4f slip against %.4f in the most-cornering bucket, a ratio "
+			"of %.2f to 1. The model's own range is %.2f to %.2f, which is %.2f to 1."),
+		StraightSlip,
+		CornerSlip,
+		StraightSlip > UE_DOUBLE_SMALL_NUMBER ? CornerSlip / StraightSlip : 0.0,
+		Car->GetStraightSlipAmount(),
+		Car->GetCorneringSlipAmount(),
+		Car->GetCorneringSlipAmount() / FMath::Max(Car->GetStraightSlipAmount(), UE_SMALL_NUMBER)));
+
+	TestTrue(
+		TEXT("Some of the lap is genuinely straight, meaning the cornering profile reports near zero "
+			"rather than reading gentle spline wobble as cornering"),
+		Percentile(0.10) < 0.1);
+
+	TestTrue(
+		TEXT("The slip a car deposits on the straightest part of the lap is close to its own "
+			"StraightSlipAmount rather than inflated toward the cornering value"),
+		StraightSlip < Car->GetStraightSlipAmount() * 2.0);
+
+	Subsystem->ResetSurface();
+	Car->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDemoLayoutStrokesDoNotSmearUnderCompressedTime,
 	"RubberAccumDemo.Demo.StrokesDoNotSmearAcrossTheTrackUnderCompressedTime",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
