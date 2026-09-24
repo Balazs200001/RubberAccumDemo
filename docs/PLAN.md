@@ -912,10 +912,10 @@ lines change, and what each one was should be readable next to what it became.
 | F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | The ring resolves without a flush, reports the frame it answered for, and loses no submission — **met 2026-09-24**. "Answered every frame" waits on F4, which is what builds the per-frame loop |
 | F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
 | F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero — **met 2026-09-24** |
-| F5 | Debug overlay drawing returned values in the world at the position they were sampled from | A wrong sample position is visible, not assumed absent |
-| F6 | Measured latency in frames, and query cost at 4 and at 80 points | The tolerance argued in the proposal demonstrated, or contradicted, on a real run |
+| F5 | Debug overlay: three coloured bars per tyre, drawn under the leading car's four wheels. *Narrowed 2026-09-24, see below* | A wrong sample position is visible, not assumed absent, and the three channels are legible per wheel |
+| F6 | Measured latency in frames, and query cost at 4 and at 80 points. **4 is the design target, 80 is the stress case** | The tolerance argued in the proposal demonstrated, or contradicted, on a real run |
 | F7 | Survives level load, hitches, actor destruction | Decides readback against the CPU grid, on evidence |
-| F8 | Per-wheel readout in the harness. *Absorbed from G7 on 2026-09-24* | The readout changes as a car crosses the marble band |
+| F8 | Per-wheel readout in the harness. *Absorbed from G7 on 2026-09-24, then merged into F5 the same day* | The readout changes as a car crosses the marble band |
 
 *Fallback: the CPU grid, roughly an afternoon, public API unchanged. Taken only if F7 fails.*
 
@@ -1042,6 +1042,39 @@ been noticed before it was reported.
   the assumption in a comment: "Assume for now that every enqueue happens on a texture of the same
   format and size (when reused)." Growing the gather target as slot count rises violates it. The
   subsystem now rebuilds the ring whenever the gather target's width changes.
+
+### Decided 2026-09-24, requested directly: the demo reads one car, not the field
+
+**A real game only ever queries the car the player is driving.** The other twenty cars write the
+surface and never read it. That was implicit and is now stated, because it changes what F5, F6 and
+F8 are.
+
+The demo therefore reads **four wheels of the leading car** and draws, under each tyre, **three
+bars in the channel colours with their values** — red for rubber buildup, green for skid, blue for
+marbles. That is the whole overlay.
+
+**This collapses F5 and F8 into one piece of work.** F8 asked for a per-wheel readout that changes
+as a car crosses the marble band; F5 asked for an overlay that makes a wrong sample position
+visible. Four wheels with three labelled bars each is both, and there is no reason to build them
+separately.
+
+**It also retires F6's biggest open question before it is measured.** R2 wrote the trigger for the
+per-contact segment cache as "any world-space caller reaching 80 contacts per frame in a real
+scene", and twenty cars with four wheels each is exactly 80. **Reading one car makes it four.** At
+the 0.1383 ms that R2 measured for 80 world-space conversions, four costs about 0.007 ms, so the
+trigger is not approached and the segment cache stays unimplemented for a reason rather than by
+omission. F6 still measures 80 as the stress case, because the API permits it and the number is
+worth having, but 80 is no longer the design target and should not be described as one.
+
+**Four handles live on the circuit, not on the car.** The circuit acquires four query handles once
+and feeds them the current leader's four wheel positions each frame. Handles are not bound to an
+actor, so a change of leader is just a change of submitted position — no acquire, no release, no
+handle churn, and nothing to get wrong when a car is destroyed.
+
+**The demo queries in world space deliberately**, even though the cars themselves hold
+`(distance, alpha)` and could use the track-space overload for free. The world-space entry point
+is the one a plugin user will call, so the demo should exercise it. Four spline searches a frame is
+the price and it is negligible.
 
 ### Decided: F1 is a canvas gather, not a compute pass
 
