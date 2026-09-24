@@ -2356,17 +2356,21 @@ frame for a change no single frame can show. *This is an extrapolation from a sq
 14:1 folded atlas and is not a measurement. Taking it is the first task below.*
 
 **Precision, which is the sharper constraint.** The target is RGBA16f. A half float carries an
-11-bit significand, so the spacing between representable values is between `2^-11` and `2^-10` of the
-value, and round-to-nearest discards any multiply that moves a value by less than half of that,
-`2.441e-4` relative. At a half-life of about 1500 s, one frame at 60 Hz has a retention of
-`1 - 7.3e-6` — **33 times below the threshold, so it rounds back to the same bits and the decay pass
-does nothing at all, every frame, while still costing 0.845 ms.** Silently.
+11-bit significand, so one unit in the last place is between `2^-11` and `2^-10` of the value, and
+round-to-nearest discards any multiply moving a value by less than half of that. Half an ulp is
+between `2^-12` and `2^-11` relative depending on where in the binade the value sits, so
+**`2^-11 = 4.883e-4` is the perturbation that is guaranteed to change every value**, and anything
+below `2^-12 = 2.441e-4` is guaranteed to change none. At a half-life of about 1500 s, one frame at
+60 Hz has a retention of `1 - 7.7e-6` — **63 times below even the easy threshold, so it rounds back
+to the same bits and the decay pass does nothing at all, every frame, while still costing 0.845 ms.**
+Silently.
 
 A fixed interval in seconds does not fix this, and that is why the sketch's phrasing is replaced. At
-1x and a 1500 s half-life, one second of retention is `1 - 4.4e-4`, under one unit in the last place
-at the coarse end of the range — still erratic. An interval short enough to look continuous at 20x is
-too short to resolve at 1x, and one long enough to resolve at 1x visibly stair-steps at 20x. **No
-single interval in seconds works across the rate range.**
+1x and a 1500 s half-life, one second of retention is `1 - 4.62e-4`, which is *below* the `4.883e-4`
+that guarantees a change — so a one-second interval at 1x moves some texels and rounds away on
+others, depending on where each value happens to sit. An interval short enough to look continuous at
+20x is too short to resolve at 1x, and one long enough to resolve at 1x visibly stair-steps at 20x.
+**No single interval in seconds works across the rate range.**
 
 So the interval is expressed in decay rather than in time. The subsystem banks dimensionless progress
 and applies a pass when it crosses one step:
@@ -2378,8 +2382,9 @@ Retention   = 2^(-Progress)      then Progress = 0
 ```
 
 At a default of 256 steps per half-life the retention per application is `2^(-1/256) = 0.997296`, a
-move of `2.70e-3`, which is between 2.8 and 5.5 units in the last place everywhere in the normal
-range. **The retention factor is then a constant, independent of rate and of frame rate** — every
+move of `2.70e-3`, which clears the `4.883e-4` guaranteed-change threshold by 5.5 times and is
+between 2.8 and 5.5 units in the last place everywhere in the normal range. **The retention factor
+is then a constant, independent of rate and of frame rate** — every
 application does the same amount of work, and only how often it runs changes. That makes the cost
 model trivial: `Rate * StepsPerHalfLife / H` passes per dilated second, so 0.162 per second at 1x
 against 3.24 at 20x, or **0.0023 ms per frame at 1x and 60 Hz**.
@@ -2453,8 +2458,8 @@ Added:
   call at all.** Asserted by the buffer contents being bit-identical, since the call itself is not
   observable from outside.
 - The retention at one step is resolvable in half-float precision: `1 - 2^(-1/StepsPerHalfLife)`
-  exceeds the `2.441e-4` round-to-nearest threshold with margin. This is the assertion that fails
-  if anyone later raises `StepsPerHalfLife` past the point where decay silently stops working.
+  exceeds the `2^-11` guaranteed-change threshold with margin. This is the assertion that fails if
+  anyone later raises `StepsPerHalfLife` past the point where decay silently stops working.
 - Progress accumulates and the pass fires the expected number of times over a known span at a known
   rate, and the product of the retentions it applied equals the closed-form retention over that span.
 - The debug view cycles All, Rubber, Skid, Marbles and wraps, and each view's mask is the one
@@ -2479,6 +2484,68 @@ defaulting the rate to 0.
 *Exit: a recording of the demo shows, on screen, every change the operator makes; the channels can be
 inspected one at a time; decay runs at a rate that is exactly frame-rate independent, and taking it
 to zero provably does not run the pass at all, so the C9 figures stand.*
+
+### Measured on implementing, 2026-09-24. One prediction was 2.5 times out and one decision moved modules.
+
+C10.0 to C10.4 are done. **74 of 74 tests pass headlessly with the editor closed and both build paths
+are clean.** C10.2's C++ is done and its material edit is not; C10.5 has not happened. Full numbers
+in [MEASUREMENTS.md](MEASUREMENTS.md); what follows is only where this section was wrong.
+
+**The decay pass costs 0.3400 ms at 14400 x 1024, not the 0.845 ms extrapolated above.** B4's
+"decay cost tracks bytes touched" does not hold from 33554432 to 117964800 bytes: 3.52 times the
+bytes cost 1.42 times the time. **That weakens the cost half of the case for not decaying every
+frame and it should not be restated as written.** 0.34 ms is 7 % of a 4.725 ms frame — expensive,
+not disqualifying. What survives untouched is the precision argument, which is not a matter of
+degree: a per-frame pass at 60 Hz moves a texel by 1.281e-5, **38 times below the 4.883e-4 that a
+half float is guaranteed to notice**, so it would cost its full price and change nothing at all.
+Measured, not argued.
+
+**The half-life moved out of the plugin and is held in laps, not seconds.** The section above put
+`DecayHalfLifeSeconds` in `SurfaceAccumulationMapping.h` beside `SaturationConstant`. That is wrong,
+and measuring lap time is what showed it: **56 laps is 822 s on the Stadium and 4505 s on Spa**, so
+no single constant in seconds is right for both layouts, and the demo would either never build a
+line on one or erase it on the other.
+
+The fix is better than the original and is the correct ownership:
+
+- The plugin keeps the mechanism and a `FallbackDecayHalfLifeSeconds` that is only ever used by a
+  host that configures nothing.
+- `USurfaceAccumulationSubsystem::SetDecayHalfLifeSeconds` is the one new exported setter, called
+  from `ARacetrackCircuit::PublishTrackRibbon` beside the ribbon it already publishes.
+- `ARacetrackCircuit` owns `DecayHalfLifeInLaps` and derives seconds from `GetLapSeconds()`, which
+  integrates its own cornering profile against the car's speed parameters.
+
+**And the equilibrium justifies it rather than merely permitting it.** A texel under a steady
+deposit settles at `E = ApexExposurePerLap * HalfLifeInLaps / ln2` — **lap time cancels out
+entirely**. Expressed in laps the calibration is a property of the traffic and transfers between
+layouts unchanged; expressed in seconds it does not. 56 laps is `ln2 / 0.012471` from the measured
+apex deposit, and it settles the apex at **0.9513 coverage against the straight's 0.3074, an
+equilibrium contrast of 3.09 to 1**.
+
+**`GetLapSeconds` runs 7.5 % fast on both layouts** because it assumes a car is at its target speed
+everywhere and ignores the bounded braking and acceleration rates. Stated rather than corrected: the
+bias is consistent, it is a calibration input, and the test asserts the prediction against a ticked
+lap within 15 %.
+
+**The zero-rate claim got stronger than planned.** The Tests section above proposed asserting
+bit-identical buffer contents, because the absence of a call is not observable from outside. A
+`GetDecayPassCount()` accessor makes it directly observable instead, so the test asserts **zero
+passes over a simulated hour** rather than inferring it. One accessor for a much clearer assertion.
+
+**"Rewritten: none" did not survive.** `RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction`
+gained the equilibrium assertions, because it is where the measured apex deposit already lives and
+duplicating that machinery to assert against it would have been worse.
+
+**A provenance defect in `MEASUREMENTS.md` was found on the way and is recorded, not fixed.** The
+8.2:1 contrast, the 0.012471 apex figure and the laps-to-63 % counts were all measured on the
+**Stadium**, and the table does not say so. `CountedPassesOverATexelAgainstThePrediction` spawns a
+default circuit, and `Layout` defaults to `Stadium`; 21 of 27 circuit-spawning host tests do the
+same. The equilibrium arithmetic is layout-independent so it is unaffected, but **re-measuring the
+contrast on the demo layout is owed** and is not part of C10.
+
+**Still outstanding, and both need the editor.** C10.2's `DebugChannelMask` parameter does not exist
+in `M_SurfaceAccumulationDebug`, so the cycle logs and announces correctly and the image does not
+change. C10.5's capture has not been taken. Unreal MCP was unreachable for this whole session.
 
 ---
 
