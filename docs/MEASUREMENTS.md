@@ -2328,3 +2328,115 @@ from the first Game or PIE world context. Verified on screen: at 20x the caption
 and then followed by a jump to 20x still expires twenty times too fast. That is the case where the
 operator is changing dilation, which re-posts its own message anyway, so it is recorded rather than
 fixed.
+
+---
+
+## 2026-09-24 — G: where the marble band lands, measured at the deposit
+
+```
+Build:    Development, editor target, UnrealEditor-Cmd.exe headless with the editor closed
+Power:    MAINS
+Scene:    default ARacetrackCircuit, Stadium layout, 30850 cm lap, 800 cm wide, one car
+Driven:   RubberAccumDemo.Car.MarblesGatherOutsideTheLineAndThinTowardTheEdge, 4000 ticks at 1/60 s
+Deposit:  r.RacetrackSurface.DepositionScale at its default of 1.0
+```
+
+The phase-G requirement was *where the marble band actually lands across the track width, measured
+rather than looked at*. It is measured **at the deposit**, in centimetres and in lateral offset
+alpha, not at the texel. Why that is the right place, and what it does not cover, is under *Not
+verified* below.
+
+### The throw distribution against the prediction
+
+`PLAN.md` predicted, before any of this ran, that drawing the throw as
+`MarbleThrowCentimetres * min(u1, u2)` gives a density of `2(1 - x)` — a linear fall from the
+racing line outward — with a mean at a third of the maximum.
+
+| Quantity | Predicted | Measured |
+|---|---|---|
+| Mean throw | 66.67 cm | **66.40 cm** |
+| Widest throw | ≤ 200 cm | **198.40 cm** |
+| Deposits landing on the apex side | 0 | **0** |
+
+Binned into fifths of the throw, nearest the racing line first, over 2966 deposits:
+
+| Fifth | 0-40 cm | 40-80 cm | 80-120 cm | 120-160 cm | 160-200 cm |
+|---|---|---|---|---|---|
+| Predicted | 1068 | 830 | 593 | 356 | 119 |
+| **Measured** | **1029** | **916** | **570** | **342** | **109** |
+
+Monotonically falling, which is the band reading as *a gradient away from the line* rather than as
+a stripe at the kerb. The second bin is about 10 % over prediction and the first about 4 % under;
+the samples are not independent, because consecutive ticks share a car whose own line and speed are
+correlated, so the bin counts are not binomial and no significance should be read into that.
+
+### Where that puts the band across the track
+
+Signed so that positive is away from the apex, over the same 2966 deposits:
+
+| | Mean lateral offset alpha |
+|---|---|
+| The car's own line | -0.3263 |
+| The marble deposit | **-0.1603** |
+
+A separation of **0.166 alpha, which is 66.4 cm on this 800 cm track, or 21.2 texels** at 3.125 cm
+per texel. The band sits outside the line the car drives, by construction and now by measurement.
+
+### Deposit rate
+
+2966 deposits over 4000 ticks is **74.2 % of ticks**, against the Stadium's **61.10 %** *distance*
+share of cornering. Those disagree and should: the car corners at `CorneringSpeedFraction` 0.55, so
+it spends 11.4 s of a 15.4 s lap in the corners and only 4.0 s on the straights, which is 74.0 %.
+The deposit rate follows time, not distance, and the two figures agree to 0.2 %.
+
+### The channel is genuinely isolated
+
+`RacetrackSurface.Accumulator.MarbleStrokeWritesOnlyTheMarbleChannel`, one marbles stroke and one
+rubber stroke painted into the same 512-square RGBA16f buffer and read back with
+`ReadRenderTargetRawPixelArea(..., bNormalize = false)`:
+
+| Stroke | R | G | B |
+|---|---|---|---|
+| Marbles | 0.0000 | 0.0000 | **0.9692** |
+| Rubber buildup | **0.9692** | 0.0000 | 0.0000 |
+
+This is the first non-zero value the B channel has ever carried in this project.
+
+### The gate changed during implementation, and the reason is a measurement
+
+`PLAN.md` predicted that multiplying the deposit's slip by the cornering amount would be enough to
+stop a straight depositing anything, because `FMath::Sign(0)` returns `0`
+(`GenericPlatformMath.h:937-940`) and a zero throw direction would put marbles on the racing line.
+
+**That was wrong, and the first run said so:** 34 of the first sample's deposits landed on the apex
+side, and a straight registered 5 contacts rather than 4. The cause is that the cornering profile is
+*sampled from the spline and normalised* (the C3 amendment), so on a straight it is small but not
+exactly zero — and the *sign* of a value that is numerically noise is arbitrary. The multiply made
+those deposits harmless in exposure terms while leaving them on a random side of the car.
+
+Fixed by gating on `CorneringHere >= CornerExitCorneringAmount`, which is **the threshold the car
+already owns** for deciding it is no longer in a corner. No new tunable, and behaviour does not
+depend on the deposition scale — which a gate derived from the half-float floor would have done.
+
+### Not verified
+
+- **The band was measured at the deposit, not at the texel.** No test reads the marble band back out
+  of the accumulation buffer across the track width. The composition that would need checking —
+  lateral offset to ribbon to folded atlas — is already covered by `SurfaceFoldedRibbonTests`, and
+  the channel isolation is covered above, but *this band* has not been read back from *this buffer*.
+  The planned `MarbleBandProfileAcrossTheTrack` test was not built: it needs the full field ticked
+  through the subsystem for several laps against a live render target, and it would assert the shape
+  that the deposit measurement above already establishes.
+- **Nothing has been seen on screen.** The editor was closed for the whole session and Unreal MCP
+  was unreachable. Marbles should render as flat blue through the existing debug material with no
+  asset change, because `Coverage` is a Vector3 and B is part of it, but that is an inference from
+  the graph recorded in `EDITOR_SETUP.md`, not an observation.
+- **The Stadium, not the demo layout.** This entry spawns a default circuit, which is the oval, for
+  the same reason 17 of the 23 host tests do. The throw distribution is layout-independent by
+  construction; the 74.2 % deposit rate is not, because Spa's cornering is graded rather than
+  binary, and it has not been measured there.
+- **No equilibrium.** Decay defaults to 0 and was off throughout. `PLAN.md` predicts the band peaks
+  at 0.623 coverage at the shared half-life; no run has been left going long enough to reach it, and
+  that figure is arithmetic rather than an observation.
+- **One car, not twenty.** The distribution is per-car and does not change with field size, but the
+  band's *width once twenty cars on twenty different lines contribute* has not been measured.
