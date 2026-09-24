@@ -2492,6 +2492,38 @@ Added:
 Rewritten: none. Nothing existing asserts a model this phase changes, which is itself the point of
 defaulting the rate to 0.
 
+### Corrected 2026-09-24 after trying the keys: both decay keys were wrong, for two different reasons
+
+C10.1 shipped decay on `'` and `;`. **Neither worked**, and the two faults are worth separating
+because only one of them is the kind a careful reading would have caught.
+
+**`;` collided with an engine default.** `BaseInput.ini:54` binds `Semicolon` to
+`ToggleDebugCamera`. `DebugExecBindings` are dispatched separately from an actor's `InputComponent`,
+so both fired: the debug camera toggled *and* the handler ran. The debug camera then took and
+released input focus on alternate presses, which is why the message appeared every second time and
+looked intermittent rather than wrong.
+
+**`'` was never delivered at all.** `EKeys::Apostrophe` is a registered key with the display string
+`'` (`InputCoreTypes.cpp:666`), so it compiles and reads correctly at the call site, but the string
+`Apostrophe` appears **nowhere under `Runtime/ApplicationCore/`** — the Windows layer never produces
+that key event. Pressing it produced no log line of any kind, which is the observation that settles
+it. *The registration and the absence are verified; the platform key-map path was not traced, so the
+mechanism is inferred rather than proven.*
+
+**Remapped to `M` faster and `N` slower**, checked against `BaseInput.ini`'s `DebugExecBindings` and
+against the project's own bindings before choosing. The confidence that they are delivered is not a
+grep: `P` and `C` are bound by this same code and demonstrably work, and plain letter keys go
+through the same path.
+
+**The rule this leaves.** A key is not chosen by picking a plausible `EKeys::` entry. It is checked
+against `Engine/Config/BaseInput.ini` for a `DebugExecBindings` collision, and against something
+already known to be delivered on this platform. `EKeys::` compiling proves neither.
+
+**Decay itself was never broken**, and the distinction matters for the record: the console path
+drove it end to end for the C10.5 captures, and `c10-decay-off` against `c10-decay-on-20x` is the
+same run at rate 0 and rate 20. The rate simply never left 0, because the key that raises it was
+dead and the key that lowers it already returns 0 from 0.
+
 ### Traps carried into this phase
 
 - **New `UPROPERTY` members and new reflection do not survive Live Coding.** This phase adds a stored
@@ -2502,6 +2534,9 @@ defaulting the rate to 0.
   its own step, its own approval and its own `EDITOR_SETUP.md` entry.
 - **Additive material edits only.** `MaterialTools.delete_expression` halts the editor. The mask is
   three added nodes plus one rewired destination pin.
+- **A key binding is not verifiable headlessly.** No automation test has a `PlayerController`, so
+  nothing in the suite exercises a key. Check the binding against `BaseInput.ini` before choosing it
+  and press it once on a real run; the build passing says nothing about it.
 
 *Exit: a recording of the demo shows, on screen, every change the operator makes; the channels can be
 inspected one at a time; decay runs at a rate that is exactly frame-rate independent, and taking it
