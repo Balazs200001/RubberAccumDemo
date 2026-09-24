@@ -951,7 +951,7 @@ four change. They are rewritten rather than replaced, and what each one was is r
 | G3 | Measure where the band lands across the track width, by readback | A texel profile across the ribbon showing a monotonic fall from the line outward, in `MEASUREMENTS.md` |
 | G4 | Marbles visible in the channel view | The marbles view is no longer black. Free: the existing debug material already drives `Coverage.B` to emissive |
 | G5 | Scattered dots in the host debug material, denser and individually bigger toward maximum | Dots, not a flat wash, with both count and radius rising with density. **Graph built and compiled 2026-09-24; not yet looked at** |
-| G6 | Clearing when cars drive through | Repeated passes open a path. *Unblocked 2026-09-24, see below. Not started* |
+| G6 | Clearing when cars drive through | Repeated passes open a path — **met 2026-09-24**, and it is what puts the band outside the line rather than on it |
 | G7 | Channel wired into the query path | Per-wheel readout changes as a car crosses the band. **Belongs to F and moves there** |
 
 *Exit: marbles accumulate off the racing line, denser nearer the line than at the edge, and the
@@ -1179,13 +1179,15 @@ profile and the entry records the disagreement rather than quietly re-deriving t
 
 ### Traps found while planning, recorded before they cost anything
 
-- **`AppendStroke` does not clamp lateral offset, and an out-of-range alpha lands in the wrong
-  atlas row.** `NormalisedAcrossTrack(-1.5)` is `-0.25`, and `RibbonToAtlasInRow` maps that to
-  `(Row - 0.25) / Rows`, which is inside the *previous* row's band. Today nothing reaches it because
-  `RegisterSurfaceContactInTrackSpace` rejects `|alpha| > 1` on entry and the cars' lateral rate is
-  small. The marble deposit keeps it unreachable by zeroing `LateralOffsetAlphaPerSecond`, so start
-  and end alpha are equal and the entry check covers both. **Pre-existing, not introduced by G, and
-  not fixed by G.**
+- ~~**`AppendStroke` does not clamp lateral offset, and an out-of-range alpha lands in the wrong
+  atlas row.**~~ **This was wrong and is retracted, 2026-09-24.** Clamping was tried and
+  `RacetrackSurface.Stroke.KeepsContactsCrossingTheLateralEdge` failed immediately: the off-track
+  endpoint is left outside *deliberately*, so the rasteriser clips the quad and a mark runs off the
+  edge instead of piling against it. Clamping produces the stripe-at-the-kerb artefact this phase
+  rejects by name. The wrong-row hazard does not exist either, because `PaintStrokes` sets a
+  scissor rect to the row's own bounds whenever the ribbon folds, which clips anything outside the
+  band. **The clamp was reverted and the trap entry is kept, struck through, because being wrong in
+  a recorded trap is worth seeing.**
 - **Gating deposition on `bCommittedToACorner` would leak marbles onto the straight.**
   `UpdateCornerCommitment` (`SplineFollowingCar.cpp:109-134`) holds the flag latched for
   `SameCornerSeparationCentimetres` = 600 cm *after* cornering has stopped. The gate is live
@@ -1280,11 +1282,153 @@ rebuild.
 stays comparable; the blue channel of the all-channels view is now a dot mask rather than a smooth
 coverage, and is not.
 
+### The cornering profile was never built at runtime, and it had broken four things at once
+
+**Found 2026-09-24, on screen, after four wrong explanations. This is the most important entry in
+this phase and it is not about marbles.**
+
+`ARacetrackCircuit::CorneringProfile` is a plain `TArray<double>` with **no `UPROPERTY`**, so it is
+not serialised. It was built only in `OnConstruction` and `SetLayout`. **`OnConstruction` does not
+re-run for a map-loaded actor in PIE**, because PIE duplicates the editor world and duplication
+copies reflected members only. So in a Play-In-Editor session the profile was empty, and
+`GetSignedCorneringAtDistance` hit its `CorneringProfile.Num() == 0` guard and returned **0.0
+everywhere, silently**.
+
+Everything downstream reads that one signal, so one empty array produced four symptoms that looked
+like four separate bugs:
+
+| Consequence of cornering being identically zero | How it presented |
+|---|---|
+| Marbles are gated on `cornering >= CornerExitCorneringAmount`, so the gate never opened | Marble channel exactly 0.000000 |
+| `TargetSpeed = Lerp(1, CorneringSpeedFraction, 0)` is full speed, so `BrakingAmount` is always 0 and no wheel ever locks | Skid channel exactly 0.000000 |
+| `RollingSlip = Lerp(0.05, 0.50, 0)` is the straight value everywhere | Rubber identical on straights and in corners |
+| `TargetAlpha = Lerp(Baseline, ApexTarget, Commitment * 0)` is the driver's baseline all lap | No convergence in corners, no line variation, a band of constant width |
+
+**Fixed** by calling `BuildCorneringProfile()` from `PostInitializeComponents`, which does run for a
+map-loaded actor — proven, because `PublishTrackRibbon` already lives there and the ribbon was
+always correctly sized at 14401 x 1024 in the live log. `BuildCorneringProfile` now logs its sample
+count, tightest curvature and normalisation percentile, so an empty profile can never be silent
+again. On the demo layout: **1200 samples, tightest curvature 0.00197596 per cm** (a 5.06 m radius),
+**normalised against the 75th percentile at 0.00023151** (43 m).
+
+**Why the suite never caught it, which is the part worth learning.** Every test either spawns the
+circuit with `SpawnActor`, which runs `OnConstruction`, or calls `SetLayout` explicitly. Both
+rebuild the profile. Standalone `-game` runs `OnConstruction` too, so R6, C9 and C10 — every
+measurement of record — were taken on the working path. **Pressing Play in the editor was the only
+broken path, and nothing automated ever does that.**
+
+Same failure class C8 recorded and C9 wrote a fail-loud default for: *a configuration path that
+never runs*. It has now cost a day. Stated generally for next time: **state that must exist at
+runtime and is not a `UPROPERTY` has to be rebuilt from a hook that fires on map load, and its
+absence has to be loud.**
+
+**The regression guard is weaker than the bug deserves, and that is stated rather than hidden.**
+`RubberAccumDemo.Demo.CorneringProfileSurvivesRuntimeInitialisation` asserts that
+`PostInitializeComponents` leaves a usable profile, but no test easily reproduces PIE world
+duplication, so it would still pass if the call were removed and `OnConstruction` alone rebuilt it.
+The real guard is the log line.
+
+### Deposition was keyed to the corner the car was braking for, not the one it was in
+
+`ASplineFollowingCar::Tick` computed one `CorneringAmount` as the maximum of the curvature at the
+car and the curvature `BrakingLookaheadCentimetres` = 2500 cm ahead, then used that single value for
+**both** the speed target and the slip that sets deposition. The lookahead exists so a car brakes
+*before* a corner; a car braking in a straight line is still going straight, and it was laying
+cornering-grade rubber for 25 m before every corner entry.
+
+Measured against the cornering at the car's own position: the straightest tenth of the lap deposited
+**0.1805** against a `StraightSlipAmount` of 0.05, a realised contrast of **2.76 to 1** against the
+model's own 10 to 1. Deposition now reads local curvature and braking keeps the lookahead:
+**0.0750 and 6.63 to 1**.
+
+The residual gap from 10 to 1 is honest rather than a defect. The straightest tenth of this lap
+genuinely reads 0.057 cornering, because Spa is twisty and its centreline was read off a plan view
+by eye. **Half the lap reads at or above 0.484 and a quarter is clamped at 1.000**, the latter by
+construction because the profile normalises to the 75th percentile and clamps. If the demo wants
+more visible straights, that percentile is the knob, and it is tuning rather than a fault.
+
+### The lateral back-extrapolation was inventing sideways movement under time compression
+
+`BuildStrokes` reconstructs a stroke's start from the contact's *instantaneous* lateral rate:
+`StartAlpha = EndAlpha - LateralOffsetAlphaPerSecond * DeltaSeconds`. At 20x, `DeltaSeconds` is about
+0.333 s and a car covers roughly 830 cm per tick, over which it rotates tens of degrees.
+Extrapolating an end-of-tick lateral velocity across all of that invented motion that never
+happened: **97.45 texels of lateral smear, 15.2 times the mark's own width, 304 cm across an 800 cm
+track.** That is the diagonal streaking and the rubber appearing where no car drives.
+
+**This is not the sagitta problem phase R recorded, and the difference matters.** R predicted long
+strokes would need subdividing. Subdivision does not help at all here: splitting a straight line
+into shorter straight pieces leaves every piece on the same wrong line. The fault is in the
+*endpoint*, not the length. Recorded because the plan's own prediction pointed at the wrong remedy.
+
+**Fixed** by applying the lateral rate over `min(DeltaSeconds, MaximumLateralExtrapolationSeconds)`,
+the cap at 1/30 s being the horizon over which a first-order linearisation of a turning car is worth
+anything. Real time is unchanged; at 20x the smear falls to **9.74 texels, 1.5 times the mark
+width**. The furthest a stroke reaches is alpha 0.8589 against wheels that never exceed 0.7749, so
+**33.6 cm is still invented** and no stroke leaves the track.
+
+**The honest limit:** the cap under-corrects, because a car genuinely does move laterally mid-tick
+and the cap now assumes it mostly holds its line. The exact fix converts the previous wheel position
+directly instead of extrapolating a velocity, costing a second spline search per contact — 160 a
+frame against R2's measured 0.1383 ms for 80. Not taken: invisible at 1x, bounded at 20x.
+**Recorded against C4, whose territory time compression is.**
+
+### G6 arrived early, and it is what puts the band outside the line
+
+Planned as "not in this phase" earlier the same day, on the grounds that a sweep would change the
+steady state G3 had just measured. Requested directly after the band was seen sitting **on** the
+racing line, which it should never do.
+
+**The deposit distribution peaks at zero offset, which is the car's own line.** `min(u1, u2)` has
+density `2(1 - x)`, densest at the car. Taken alone that is simply wrong. Two answers were possible:
+
+| Option | Verdict |
+|---|---|
+| A clearance parameter, so nothing is deposited within N cm of the car's own line | **Rejected.** No car knows the *field's* band, only its own line, so a driver on the inside of the band would deposit its cleared marbles straight onto drivers running outside it. And it is authored: a number reserving a gap |
+| Marbles are deposited everywhere and **swept off the line by the traffic that drives there** | **Taken.** Physically what happens, and the clean line becomes a consequence of where traffic is rather than of a constant |
+
+`USurfaceAccumulationBuffer::SweepStrokes` draws each tyre stroke a second time as a
+`BLEND_Modulate` quad coloured `White - ChannelMask(Marbles) * (1 - Retention)`, which is
+`(1, 1, Retention)`. `SE_BLEND_Modulate` is `<CW_RGB, BO_Add, BF_DestColor, BF_Zero>`
+(`BatchedElements.cpp:490`), a per-channel multiply, so it scales marbles and leaves rubber and skid
+bit-identical. `r.RacetrackSurface.MarbleSweepRetention` defaults to 0.5.
+
+**Playback-speed independence, checked rather than assumed.** A texel is covered by exactly one
+stroke per tyre pass whether that pass is one 1000 cm stroke at 20x or twenty 50 cm strokes at 1x,
+because consecutive strokes tile the lap rather than overlapping. A constant retention per stroke is
+therefore a constant retention per pass — the same property C3 required of deposition.
+
+`MarbleThrowCentimetres` moved from 200 to **400**, the full half-width, so the band reaches to
+within 50 cm of the track edge instead of stopping halfway. `RacetrackDemo.MarbleThrow` sets it live
+across the field, per C10.6's rule that every host control gets a console command.
+
+**0.12 % of deposits now leave the track and are discarded**, 66 of 55017. Correct and deliberate:
+the throw is not clamped to the edge, because clamping piles the distribution's tail onto the
+boundary texel and makes the kerb stripe this phase rejects by name. An earlier assertion required
+zero discards; it was written when the throw was 200 cm, and it was the assertion that was wrong.
+
+### C6 needs no change, decided 2026-09-24
+
+A revision was designed — a per-corner `ApexPhaseBias` shaping the blend so cars would enter and
+exit together and take different arcs between — and then **not built**, because the complaint it
+answered turned out to be the cornering-profile bug. With cornering identically zero no car ever
+committed to an apex or varied anything; every driver held its baseline all lap. Once the profile
+was rebuilt at runtime, the corner behaviour was judged acceptable as it stands.
+
+Recorded because the near-miss is the point: **the design would have been tuned against a signal
+stuck at zero**, and every C6 and C8 figure it moved would have been re-measured against the same
+broken signal. What saved it was refusing to tune a model while a diagnosis was still open.
+
 ### Not in this phase
-- **G6**, per the section above.
+
+- **G5's dot rendering.** Built, its curve corrected, then **bypassed on request**: `Multiply.A` is
+  driven from `Coverage` again and marbles render as flat coverage like rubber and skid. The nine
+  dot nodes stay in the graph, orphaned and costing nothing, so restoring them is one connection.
+  Both steps are logged in [EDITOR_SETUP.md](EDITOR_SETUP.md).
 - **G7**, which moves to phase F where the query path is built.
 - **Per-channel decay**, which moves to E5 with its cost corrected downward.
 - **The per-contact segment cache.** G adds no world-space contacts, so R2's trigger is not moved.
+- **The exact fix for the lateral extrapolation**, recorded against C4 above.
 
 ## Phase H — Marble volume, hardening, demo map
 
