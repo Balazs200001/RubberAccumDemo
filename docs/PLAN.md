@@ -908,7 +908,7 @@ lines change, and what each one was should be readable next to what it became.
 | # | Task | Exit |
 |---|---|---|
 | F0 | Recover `BlurredFoldedExposure`'s HLSL out of the `.uasset` and into `EDITOR_SETUP.md` | The shader the query has to agree with exists as text somewhere. **Met 2026-09-24**, and it corrected two assumptions this phase was resting on |
-| F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel |
+| F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel — **met 2026-09-24** |
 | F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | A query is answered every frame, with a bounded and reported age, and `FlushRenderingCommands` is never called on the query path |
 | F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
 | F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero |
@@ -934,6 +934,44 @@ Kept because the revised table above reverses three of these and the reversals h
 | F5 | Debug overlay drawing returned values beside the surface they came from | Wrong sample position is visible, not assumed absent |
 | F6 | Measured latency in frames, and query cost at 4 and at 80 contact points | Tolerance argued in the proposal demonstrated |
 | F7 | Survives level load, hitches, actor destruction | Decides readback vs grid |
+
+### F1 met 2026-09-24, and the exit condition was checked against ground truth rather than itself
+
+Eleven new tests in a new `RacetrackSurface.Query.*` group, **92 of 92 passing headlessly with the
+editor closed**, both build paths clean.
+
+`RacetrackSurfaceQuery::BuildTaps` turns one query coordinate into 18 taps — the nine tent
+positions, each split into the two along-track samples the shader's hand-rolled bilinear needs —
+and `USurfaceAccumulationBuffer::GatherTaps` draws them as 18 weighted 1x1 additive tiles into a
+`RTF_RGBA16f` gather target one texel high, one slot per query point.
+
+**The number that closes the exit condition.** A skid mark painted at three quarters of the lap
+stores **0.001802** in the atlas texel it landed on, read directly with
+`ReadRenderTargetRawPixelArea`; the gather aimed at the same ribbon coordinate returned
+**0.001801**. That is 0.06 %, which is fp16 rounding across an 18-tap sum and nothing else. A
+gather 0.9 across the track from the same point returned exactly **0**. So the gather reads what
+is stored, at the coordinate it was aimed at, and the check is against a separate readback of the
+buffer rather than against the gather's own arithmetic.
+
+`GatherTargetIsLinear` pins the gamma trap directly: `GetDisplayGamma()` on the gather target
+returns **1.0**, so the canvas is not baking a 2.2 curve into the exposure values on the way in.
+
+**Three things the tests found that the plan had wrong, all in the tests rather than the code.**
+The first two were my own test errors and are worth recording because each looked like a code bug
+for a minute:
+
+- Measuring the patch span as `(Highest - Lowest) * AtlasHeight` reported 262.4 texels against the
+  6.4 expected. The excess is exactly 256, one full band: half a lap is a **row boundary** on the
+  four-row demo ribbon, so the along-track pair legitimately folds into rows 1 and 2 and the span
+  has to be measured *within* a band. The fold was working; the metric was wrong. That test now
+  also stands as the check that the across-track span survives a row-straddling pair.
+- Querying at lap fraction `1 - 1/LapTexels` is the *boundary* between the last two texels, not the
+  centre of the last one, so the shader's `- 0.5` correctly lerps 50/50 between them. The expected
+  value assumed a texel centre.
+- `TapsCollapseToTheQueriedTexelAtZeroPatchWidth` has to allow half a texel of disagreement,
+  because the texel-centre snap is exactly what makes the read exact in X, so a query between two
+  texel centres cannot come back at the coordinate it was asked about. That is the snap working,
+  not an error, and the tolerance is stated in the assertion message rather than hidden.
 
 ### Decided: F1 is a canvas gather, not a compute pass
 
