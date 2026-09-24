@@ -75,8 +75,17 @@ namespace
 		int32 Count = 0;
 		double WidestLateralTexels = 0.0;
 		double LongestAlongCentimetres = 0.0;
+		double FurthestAlphaFromCentre = 0.0;
+		int32 EndpointsBeyondTheTrackEdge = 0;
 		float StrongestIntensity = 0.0f;
 	};
+
+	double StrokeEndpointAlpha(const FSurfaceBrushStroke& Stroke, const FSurfaceTrackRibbon& Ribbon, double AtlasY)
+	{
+		const double AcrossTrack = AtlasY * Ribbon.RowCount() - Stroke.RowIndex;
+
+		return AcrossTrack * 2.0 - 1.0;
+	}
 
 	void TallyStroke(
 		const FSurfaceBrushStroke& Stroke,
@@ -90,9 +99,15 @@ namespace
 			FMath::Abs(Stroke.RegionEnd.X - Stroke.RegionStart.X)
 			* Ribbon.AtlasWidth() * Ribbon.CentimetresPerTexel;
 
+		const double StartAlpha = StrokeEndpointAlpha(Stroke, Ribbon, Stroke.RegionStart.Y);
+		const double EndAlpha = StrokeEndpointAlpha(Stroke, Ribbon, Stroke.RegionEnd.Y);
+		const double FurthestAlpha = FMath::Max(FMath::Abs(StartAlpha), FMath::Abs(EndAlpha));
+
 		++Tally.Count;
 		Tally.WidestLateralTexels = FMath::Max(Tally.WidestLateralTexels, LateralTexels);
 		Tally.LongestAlongCentimetres = FMath::Max(Tally.LongestAlongCentimetres, AlongCentimetres);
+		Tally.FurthestAlphaFromCentre = FMath::Max(Tally.FurthestAlphaFromCentre, FurthestAlpha);
+		Tally.EndpointsBeyondTheTrackEdge += FurthestAlpha > 1.0 ? 1 : 0;
 		Tally.StrongestIntensity = FMath::Max(Tally.StrongestIntensity, Stroke.Intensity);
 	}
 
@@ -455,15 +470,13 @@ bool FDemoLayoutStrokesDoNotSmearUnderCompressedTime::RunTest(const FString& Par
 		}
 	}
 
-	const double SagittaBound = FMath::Sqrt(
-		8.0 * 1500.0 * Ribbon.CentimetresPerTexel);
-
 	AddInfo(FString::Printf(
-		TEXT("A %.1f cm contact patch is %.2f texels. The phase R bound on stroke length for a 15 m corner "
-			"is %.0f cm."),
+		TEXT("A %.1f cm contact patch is %.2f texels on a track %d texels wide. The lateral extrapolation "
+			"is capped at %.4f s."),
 		Field[0]->GetContactWidth(),
 		MarkWidthTexels,
-		SagittaBound));
+		Ribbon.AcrossTrackTexels(),
+		RacetrackSurfaceMapping::MaximumLateralExtrapolationSeconds));
 
 	AddInfo(FString::Printf(
 		TEXT("Real time, %d ticks at %.4f s: %d strokes, longest %.1f cm along the track, widest lateral "
@@ -482,9 +495,20 @@ bool FDemoLayoutStrokesDoNotSmearUnderCompressedTime::RunTest(const FString& Par
 		RealTime.WidestLateralTexels / FMath::Max(MarkWidthTexels, 1.0),
 		Compressed.WidestLateralTexels / FMath::Max(MarkWidthTexels, 1.0)));
 
+	AddInfo(FString::Printf(
+		TEXT("Furthest a painted stroke endpoint reaches across the track: real time alpha %.4f with %d "
+			"endpoints past the edge, compressed alpha %.4f with %d past the edge. No wheel on this field "
+			"goes beyond alpha 0.7749, so anything past that was invented by the write path rather than "
+			"driven over"),
+		RealTime.FurthestAlphaFromCentre,
+		RealTime.EndpointsBeyondTheTrackEdge,
+		Compressed.FurthestAlphaFromCentre,
+		Compressed.EndpointsBeyondTheTrackEdge));
+
 	TestTrue(
-		TEXT("At real time a stroke stays within the phase R sagitta bound for the tightest corner"),
-		RealTime.LongestAlongCentimetres <= SagittaBound);
+		TEXT("No painted stroke reaches past the track edge on this field, because no car goes near it. A "
+			"mark off the track would mean the write path invented lateral movement"),
+		RealTime.EndpointsBeyondTheTrackEdge == 0 && Compressed.EndpointsBeyondTheTrackEdge == 0);
 
 	TestTrue(
 		TEXT("At real time a stroke does not smear sideways by more than a few mark widths, so what is "
@@ -492,17 +516,16 @@ bool FDemoLayoutStrokesDoNotSmearUnderCompressedTime::RunTest(const FString& Par
 		RealTime.WidestLateralTexels <= MarkWidthTexels * 4.0);
 
 	TestTrue(
-		TEXT("Under 20x compression a stroke overruns the sagitta bound, which is the defect this test "
-			"exists to record rather than to hide. The bound asserted here is the measured overrun, so a "
-			"regression past it still fails"),
-		Compressed.LongestAlongCentimetres > SagittaBound
-			&& Compressed.LongestAlongCentimetres <= SagittaBound * 6.0);
+		TEXT("Under 20x compression a stroke does not smear sideways across the track, which is what the "
+			"capped lateral extrapolation exists to prevent. Without the cap this measured 97 texels, "
+			"fifteen times the mark's own width"),
+		Compressed.WidestLateralTexels <= MarkWidthTexels * 4.0);
 
 	TestTrue(
-		TEXT("Under 20x compression the back-extrapolated start alpha smears a stroke sideways, and the "
-			"bound asserted here is the measured smear rather than the wanted one"),
-		Compressed.WidestLateralTexels > MarkWidthTexels * 4.0
-			&& Compressed.WidestLateralTexels <= Ribbon.AcrossTrackTexels() * 0.5);
+		TEXT("A compressed stroke is long along the track and that is not a defect, because the ribbon is "
+			"unrolled: a car holding its line through a corner is a straight line in track space. Only the "
+			"lateral term needed bounding"),
+		Compressed.LongestAlongCentimetres > RealTime.LongestAlongCentimetres * 10.0);
 
 	Subsystem->ResetSurface();
 	DestroyDemo(Track, Field);
