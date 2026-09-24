@@ -914,6 +914,27 @@ The half of the project that turns accumulation from an effect into a mechanic.
 
 ## Phase G — Marble distribution and marble query
 
+**Pulled forward ahead of D, E and F on 2026-09-24, requested directly.** Recorded as a reorder
+rather than done quietly.
+
+Two things make it a better fit now than when it was written. **C10.2 built the channel viewer and
+marbles is the one channel that is black in it** — the mask, the cycle and the caption all exist and
+point at an empty buffer. And **G2 wants marble density driven by the buildup in adjacent cells,
+which needed buildup to have a steady state.** Before C10.3 it had none: the line only ever got
+darker, so "where is the line" depended on when you looked. It now settles at 0.9513 coverage at the
+apex against 0.3074 on the straight.
+
+**The cost, stated because it is the obvious attack.** Phase F is the half of the project the brief
+cares most about — the gameplay query API is the deliverable, marbles are dressing — and the cut
+list names phase G's marbles as one of the first things to go. Pulling G forward puts the least
+defensible phase ahead of the most defensible one. That is the user's call, made with this written
+down, and **F should be the phase after G rather than slipping further.**
+
+**One dependency this reorder exposes.** G2 as written reads the buildup field to decide where
+marbles go, and reading the field is phase F. Doing G first means either building a narrow read for
+it or deriving placement from what the car already knows. That is the first decision G has to take
+and it bears directly on the emergence claim, so it is not a detail.
+
 | # | Task | Exit |
 |---|---|---|
 | G1 | Cellular-noise clumping, threshold onset rather than linear | Clumps, not a gradient |
