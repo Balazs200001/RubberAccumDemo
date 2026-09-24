@@ -2584,6 +2584,68 @@ and a capture needs no keyboard.*
 
 ---
 
+## D7 — A lockup writes a full mark and a repeat lockup refreshes it
+
+Requested 2026-09-24 after looking at `c10-view-skid-marks`. **Not implemented. Not started.**
+Recorded here with the constraint measured, because it is a change to the write path and belongs to
+phase D rather than to C10.
+
+The proposal: a locked wheel should take the skid channel straight to full coverage, and a second
+lockup over the same texel should *refresh* that mark rather than deepen it, while decay continues
+to act on it normally. The physical argument is good — a lockup deposits its mark in one pass, and
+two cars locking up in the same braking zone do not lay a mark that is twice as dark or that lasts
+twice as long.
+
+**This splits into a cheap half and an expensive half, and only the cheap half is a tuning change.**
+
+### The cheap half: one lockup, one full mark
+
+Today a locked wheel reports `LockedWheelSlipAmount = 1.0` and that goes through
+`SlipToExposure(Slip, Scale) = Slip * 0.002 * Scale`, so one contact deposits **0.002 exposure,
+which is 0.6 % coverage**. The marks in `c10-view-skid-marks` are only visible at all because that
+capture ran at 32x deposition.
+
+Making a lockup saturate is a constant and a branch: the locked case stops going through
+`ExposurePerUnitSlip` and takes its own exposure, around 1.0 for 0.95 coverage or 3.0 for 0.9999.
+That is the same shape of derivation `SaturationConstant` already has.
+
+### The expensive half: refresh rather than accumulate
+
+This needs `dst = max(dst, value)` on one channel, and **the paint path cannot express that**.
+Measured against the engine source rather than assumed:
+
+- `FCanvas`'s `EBlendMode` maps to `ESimpleElementBlendMode` at `Canvas.cpp:1602-1615`, and the
+  available set is Opaque, Masked, Additive, Modulate, AlphaComposite, AlphaHoldout and
+  AlphaBlend/Translucent. **There is no max blend and no screen blend.**
+- `BLEND_Translucent`, which `ESurfacePaintMode::Saturating` already uses, writes all of RGB. A skid
+  stroke drawn with mask `(0,1,0)` and alpha 1 sets G to 1 *and multiplies R and B by zero*, so it
+  would erase the accumulated rubber and any marbles along the length of every skid mark. That is
+  worse than the problem it solves.
+
+So the options, none of them a tuning change:
+
+| Option | Cost |
+|---|---|
+| A separate single-channel target for skid, written opaque | Reverses B6's one-target decision, adds about 28 MiB at R16F, and the material samples twice |
+| A small custom pass for skid using the RHI's `BO_Max` blend op | Real rendering work. C0 rejected a hand-rolled RHI path, but it rejected it *for batching*, where the canvas already did the job correctly. Here the canvas genuinely cannot, so that rejection does not carry over |
+| Clamp the skid channel at read time instead | **Rejected.** It makes an over-accumulated mark *look* right while still taking an extra half-life to fade, which is the opposite of refreshing |
+
+### Decided: measure before building the expensive half
+
+The cheap half is worth doing on its own and is visible immediately. Whether the expensive half is
+needed at all depends on a number nobody has: **how often a second lockup lands on a texel that
+already carries one.** If repeat lockups on the same texel are rare, additive accumulation past full
+is invisible and only costs a slightly longer fade on a few texels; if they cluster tightly in the
+braking zones, it matters and the max write has to be built.
+
+`RubberAccumDemo.Track.CountedPassesOverATexelAgainstThePrediction` already counts passes over the
+busiest texel and is the natural place to count lockups the same way. That measurement comes first.
+
+*Exit: a lockup mark reads as full on the frame it is laid, and the decision on refresh-versus-
+accumulate is taken on a counted figure rather than on appearance.*
+
+---
+
 ## Standing rules for this backlog
 
 - A phase is not complete until its exit condition has been demonstrated, and what was *not*
