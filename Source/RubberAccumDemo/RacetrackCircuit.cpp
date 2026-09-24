@@ -1,6 +1,7 @@
 #include "RacetrackCircuit.h"
 
 #include "Components/InputComponent.h"
+#include "Engine/Engine.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -23,6 +24,23 @@ namespace RacetrackFieldSwitches
 	static constexpr const TCHAR* ReleaseField = TEXT("ReleaseField");
 
 	static constexpr const TCHAR* FreezeField = TEXT("FreezeField");
+}
+
+namespace RacetrackCircuitDisplay
+{
+	static constexpr float MessageSeconds = 6.0f;
+
+	void AnnounceOnScreen(FName MessageName, const FString& Text)
+	{
+		if (GEngine != nullptr)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				static_cast<uint64>(GetTypeHash(MessageName)),
+				MessageSeconds,
+				FColor::White,
+				Text);
+		}
+	}
 }
 
 namespace RacetrackLayouts
@@ -128,6 +146,13 @@ void ARacetrackCircuit::SetFieldPaused(bool bPaused)
 		bPaused ? TEXT("froze") : TEXT("released"),
 		SpawnedField.Num(),
 		bPaused ? TEXT("release them") : TEXT("freeze them"));
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		TEXT("RubberAccumDemo.FieldPaused"),
+		FString::Printf(
+			TEXT("Field %s, %d cars"),
+			bPaused ? TEXT("frozen") : TEXT("running"),
+			SpawnedField.Num()));
 }
 
 void ARacetrackCircuit::ToggleFieldPaused()
@@ -231,6 +256,10 @@ void ARacetrackCircuit::BindTimeControls()
 		FastestTimeDilation,
 		SlowestDepositionScale,
 		FastestDepositionScale);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		TEXT("RubberAccumDemo.Controls"),
+		TEXT("P field   . , time   ] [ deposition"));
 }
 
 void ARacetrackCircuit::DepositFaster()
@@ -279,6 +308,10 @@ void ARacetrackCircuit::ApplyTimeDilation(float Dilation)
 	UGameplayStatics::SetGlobalTimeDilation(this, Clamped);
 
 	UE_LOG(LogRacetrackSurface, Log, TEXT("Time dilation now %.2fx"), Clamped);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		TEXT("RubberAccumDemo.TimeDilation"),
+		FString::Printf(TEXT("Time dilation now %.2fx"), Clamped));
 }
 
 void ARacetrackCircuit::SpawnField()
