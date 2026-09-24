@@ -90,6 +90,11 @@ public:
 		return TotalTurningRadians;
 	}
 
+	int32 GetCorneringSampleCount() const
+	{
+		return CorneringProfile.Num();
+	}
+
 	double GetCornerRadius() const
 	{
 		return CornerRadius;

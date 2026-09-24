@@ -941,6 +941,7 @@ void ARacetrackCircuit::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
 
+	BuildCorneringProfile();
 	PublishTrackRibbon();
 }
 
@@ -1181,6 +1182,16 @@ void ARacetrackCircuit::BuildCorneringProfile()
 	{
 		Entry = FMath::Clamp(Entry / SustainedCurvature, -1.0, 1.0);
 	}
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s sampled %d cornering points over %.0f cm, tightest curvature %.8f per cm, normalised "
+			"against the %.0fth percentile at %.8f"),
+		*GetName(),
+		CorneringProfile.Num(),
+		Length,
+		TightestCurvature,
+		CorneringNormalisationPercentile * 100.0,
+		SustainedCurvature);
 }
 
 double ARacetrackCircuit::GetTrackLength() const
