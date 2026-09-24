@@ -83,6 +83,44 @@ namespace
 		return true;
 	}
 
+	int32 CountContactsInChannel(
+		const USurfaceAccumulationSubsystem& Subsystem,
+		EAccumulationChannel Channel)
+	{
+		int32 Count = 0;
+
+		for (const FSurfaceTrackContact& Contact : Subsystem.GetPendingContacts())
+		{
+			Count += Contact.Channel == Channel ? 1 : 0;
+		}
+
+		return Count;
+	}
+
+	int32 WheelContactsDiscardedOutsideRibbon(const USurfaceAccumulationSubsystem& Subsystem)
+	{
+		return Subsystem.GetContactsDiscardedOutsideRibbonInChannel(EAccumulationChannel::RubberBuildup)
+			+ Subsystem.GetContactsDiscardedOutsideRibbonInChannel(EAccumulationChannel::SkidMark);
+	}
+
+	bool FindOnlyMarbleContact(
+		const USurfaceAccumulationSubsystem& Subsystem,
+		FSurfaceTrackContact& OutContact)
+	{
+		int32 Found = 0;
+
+		for (const FSurfaceTrackContact& Contact : Subsystem.GetPendingContacts())
+		{
+			if (Contact.Channel == EAccumulationChannel::Marbles)
+			{
+				OutContact = Contact;
+				++Found;
+			}
+		}
+
+		return Found == 1;
+	}
+
 	double TightestRadiusOverAChord(const ARacetrackCircuit& Track, double ChordCentimetres)
 	{
 		const double Length = Track.GetTrackLength();
@@ -795,6 +833,8 @@ bool FSplineFollowingCarRegistersMoreSlipInACornerThanOnAStraight::RunTest(const
 
 	StraightContactCount = Subsystem->GetPendingContactCount();
 
+	const int32 StraightMarbleCount = CountContactsInChannel(*Subsystem, EAccumulationChannel::Marbles);
+
 	for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
 	{
 		StraightSlip = FMath::Max(StraightSlip, Contact.SlipAmount);
@@ -808,17 +848,26 @@ bool FSplineFollowingCarRegistersMoreSlipInACornerThanOnAStraight::RunTest(const
 	CornerContactCount = Subsystem->GetPendingContactCount();
 	CornerSlip = 1.0f;
 
+	const int32 CornerMarbleCount = CountContactsInChannel(*Subsystem, EAccumulationChannel::Marbles);
+
 	for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
 	{
-		CornerSlip = FMath::Min(CornerSlip, Contact.SlipAmount);
+		if (Contact.Channel != EAccumulationChannel::Marbles)
+		{
+			CornerSlip = FMath::Min(CornerSlip, Contact.SlipAmount);
+		}
 	}
 
 	AddInfo(FString::Printf(
-		TEXT("One car tick registered %d contacts on a straight and %d in a corner, against %d wheels. The "
-			"least-slipping wheel carries %.3f in the corner against %.3f on the straight"),
+		TEXT("One car tick registered %d contacts on a straight and %d in a corner, against %d wheels plus "
+			"one marble deposit that only fires where the car is actually turning. Marble contacts: %d on the "
+			"straight, %d in the corner. The least-slipping wheel carries %.3f in the corner against %.3f on "
+			"the straight"),
 		StraightContactCount,
 		CornerContactCount,
 		ASplineFollowingCar::WheelCount,
+		StraightMarbleCount,
+		CornerMarbleCount,
 		CornerSlip,
 		StraightSlip));
 
@@ -828,9 +877,21 @@ bool FSplineFollowingCarRegistersMoreSlipInACornerThanOnAStraight::RunTest(const
 		ASplineFollowingCar::WheelCount);
 
 	TestEqual(
-		TEXT("A car in a corner also registers one contact per wheel, so none is lost off the ribbon edge"),
+		TEXT("A straight sheds no marbles, so nothing is deposited where FMath::Sign of the cornering is zero "
+			"and the throw direction would collapse onto the racing line itself"),
+		StraightMarbleCount,
+		0);
+
+	TestEqual(
+		TEXT("A car in a corner registers one contact per wheel plus one marble deposit, so no wheel contact "
+			"is lost off the ribbon edge"),
 		CornerContactCount,
-		ASplineFollowingCar::WheelCount);
+		ASplineFollowingCar::WheelCount + 1);
+
+	TestEqual(
+		TEXT("The corner deposits exactly one marble contact for the car, not one per wheel"),
+		CornerMarbleCount,
+		1);
 
 	TestTrue(
 		TEXT("Even the least-slipping wheel in a corner carries more slip than any wheel on a straight, so "
@@ -1786,6 +1847,7 @@ bool FRacetrackCircuitNoWheelFallsOffTheRibbon::RunTest(const FString& Parameter
 	constexpr int32 ContactDrainInterval = 500;
 
 	double WidestWheelAlpha = 0.0;
+	int32 MarblesDiscarded = 0;
 	TArray<double> WheelAlphas;
 
 	Subsystem->ResetSurface();
@@ -1807,7 +1869,9 @@ bool FRacetrackCircuitNoWheelFallsOffTheRibbon::RunTest(const FString& Parameter
 
 		if (Tick % ContactDrainInterval == ContactDrainInterval - 1)
 		{
-			const int32 DiscardedSoFar = Subsystem->GetContactsDiscardedOutsideRibbon();
+			const int32 DiscardedSoFar = WheelContactsDiscardedOutsideRibbon(*Subsystem);
+			MarblesDiscarded += Subsystem->GetContactsDiscardedOutsideRibbonInChannel(
+				EAccumulationChannel::Marbles);
 			Subsystem->ResetSurface();
 
 			if (DiscardedSoFar > 0)
@@ -1817,23 +1881,28 @@ bool FRacetrackCircuitNoWheelFallsOffTheRibbon::RunTest(const FString& Parameter
 		}
 	}
 
-	const int32 Discarded = Subsystem->GetContactsDiscardedOutsideRibbon();
+	const int32 Discarded = WheelContactsDiscardedOutsideRibbon(*Subsystem);
+
+	MarblesDiscarded += Subsystem->GetContactsDiscardedOutsideRibbonInChannel(
+		EAccumulationChannel::Marbles);
 
 	AddInfo(FString::Printf(
 		TEXT("%d cars laying %d wheels each over %d ticks on a %.0f cm track put the widest wheel at alpha "
-			"%.4f, leaving %.4f of margin before a contact is discarded. Contacts discarded outside the "
-			"ribbon: %d"),
+			"%.4f, leaving %.4f of margin before a contact is discarded. Wheel contacts discarded outside the "
+			"ribbon: %d. Marble deposits that left the track and were discarded: %d"),
 		FieldSize,
 		ASplineFollowingCar::WheelCount,
 		TicksAcrossSeveralLaps,
 		Track->GetTrackWidth(),
 		WidestWheelAlpha,
 		1.0 - WidestWheelAlpha,
-		Discarded));
+		Discarded,
+		MarblesDiscarded));
 
 	TestEqual(
 		TEXT("No wheel contact is discarded for falling outside the ribbon, which would be silent otherwise "
-			"because nothing in the running game reads the discard counter"),
+			"because nothing in the running game reads the discard counter. Marble deposits are counted "
+			"separately because they are thrown outward and are meant to be able to leave the track"),
 		Discarded,
 		0);
 
@@ -2692,6 +2761,156 @@ bool FRacetrackCircuitLapSecondsMatchATickedLap::RunTest(const FString& Paramete
 		Car->Destroy();
 		Track->Destroy();
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSplineFollowingCarMarblesGatherOutsideTheLineAndThinTowardTheEdge,
+	"RubberAccumDemo.Car.MarblesGatherOutsideTheLineAndThinTowardTheEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSplineFollowingCarMarblesGatherOutsideTheLineAndThinTowardTheEdge::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("No USurfaceAccumulationSubsystem available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+	ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+
+	if (Track == nullptr || Car == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit or the car."));
+		return false;
+	}
+
+	constexpr int32 TicksAcrossSeveralLaps = 4000;
+	constexpr int32 BinCount = 5;
+
+	const double HalfWidth = Track->GetTrackWidth() * 0.5;
+	const double Throw = Car->GetMarbleThrowCentimetres();
+
+	Car->ConfigureDriver(Track, 0.0, 0.0, Track->GetDriverLineCommitment(0), UnusedDriverSeed);
+
+	int32 Bins[BinCount] = {};
+	int32 SampleCount = 0;
+	int32 SamplesTowardTheApex = 0;
+	double ThrowTotal = 0.0;
+	double WidestThrow = 0.0;
+	double CarAlphaTotalOutward = 0.0;
+	double MarbleAlphaTotalOutward = 0.0;
+
+	for (int32 Tick = 0; Tick < TicksAcrossSeveralLaps; ++Tick)
+	{
+		const double DistanceTheDepositWillUse = Car->GetDistanceAlongTrack();
+
+		Subsystem->ResetSurface();
+		Car->Tick(TickSeconds);
+
+		FSurfaceTrackContact Marble;
+
+		if (!FindOnlyMarbleContact(*Subsystem, Marble))
+		{
+			continue;
+		}
+
+		const double SignedCornering = Track->GetSignedCorneringAtDistance(DistanceTheDepositWillUse);
+		const double AwayFromTheApex = -FMath::Sign(SignedCornering);
+		const double CarAlpha = Car->GetLateralOffsetAlpha();
+
+		const double ThrowCentimetres =
+			(Marble.Coordinate.LateralOffsetAlpha - CarAlpha) * AwayFromTheApex * HalfWidth;
+
+		++SampleCount;
+		ThrowTotal += ThrowCentimetres;
+		WidestThrow = FMath::Max(WidestThrow, ThrowCentimetres);
+		CarAlphaTotalOutward += CarAlpha * AwayFromTheApex;
+		MarbleAlphaTotalOutward += Marble.Coordinate.LateralOffsetAlpha * AwayFromTheApex;
+
+		if (ThrowCentimetres < 0.0)
+		{
+			++SamplesTowardTheApex;
+		}
+
+		const int32 Bin = FMath::Clamp(
+			FMath::FloorToInt32(ThrowCentimetres / FMath::Max(Throw, 1.0) * BinCount), 0, BinCount - 1);
+
+		++Bins[Bin];
+	}
+
+	const double MeanThrow = SampleCount > 0 ? ThrowTotal / SampleCount : 0.0;
+	const double MeanCarAlpha = SampleCount > 0 ? CarAlphaTotalOutward / SampleCount : 0.0;
+	const double MeanMarbleAlpha = SampleCount > 0 ? MarbleAlphaTotalOutward / SampleCount : 0.0;
+
+	bool bBinsFallAway = true;
+
+	for (int32 Bin = 0; Bin + 1 < BinCount; ++Bin)
+	{
+		bBinsFallAway = bBinsFallAway && Bins[Bin] >= Bins[Bin + 1];
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("%d marble deposits over %d ticks on the stadium. Throw outward from the car: mean %.2f cm "
+			"against a predicted %.2f cm, widest %.2f cm against a %.0f cm maximum. Measured across the "
+			"track, the mean deposit sits at alpha %.4f against the car's own %.4f, both signed so that "
+			"positive is away from the apex. Deposits per fifth of the throw, nearest the line first: "
+			"%d, %d, %d, %d, %d"),
+		SampleCount,
+		TicksAcrossSeveralLaps,
+		MeanThrow,
+		Throw / 3.0,
+		WidestThrow,
+		Throw,
+		MeanMarbleAlpha,
+		MeanCarAlpha,
+		Bins[0], Bins[1], Bins[2], Bins[3], Bins[4]));
+
+	TestTrue(
+		TEXT("The corners of a lap deposit marbles at all, so the rest of this test is measuring something"),
+		SampleCount > 100);
+
+	TestEqual(
+		TEXT("No deposit lands on the apex side of the car, which is what would happen if the sign of the "
+			"cornering were read the wrong way round"),
+		SamplesTowardTheApex,
+		0);
+
+	TestTrue(
+		TEXT("No deposit exceeds the throw distance, so the draw is bounded by its own parameter"),
+		WidestThrow <= Throw);
+
+	TestTrue(
+		TEXT("The mean throw lands on a third of the maximum, which is what the minimum of two uniform "
+			"draws gives, so the distribution is the one the plan derived rather than a uniform one"),
+		FMath::Abs(MeanThrow - Throw / 3.0) < Throw * 0.05);
+
+	TestTrue(
+		TEXT("Deposits thin monotonically from the line outward, so the band reads as a gradient falling "
+			"away from the racing line rather than as a stripe at the track edge"),
+		bBinsFallAway);
+
+	TestTrue(
+		TEXT("The marble band sits outside the line the car itself drives, measured as a mean across the "
+			"track rather than looked at"),
+		MeanMarbleAlpha > MeanCarAlpha);
+
+	Subsystem->ResetSurface();
+
+	Car->Destroy();
+	Track->Destroy();
 
 	return true;
 }
