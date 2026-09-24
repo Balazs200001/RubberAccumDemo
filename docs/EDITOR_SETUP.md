@@ -1097,3 +1097,114 @@ existed and worked without it:
 `UMaterialInstanceDynamic::SetVectorParameterValue` writes into the instance's own parameter array
 and does not validate the name against the parent, so the cycle logged and announced correctly while
 the image did not change. That was the intended degradation, not an accident.
+
+---
+
+## 2026-09-24 — G5: marbles render as scattered dots in the debug material
+
+**Asset changed:** `/Game/Materials/M_SurfaceAccumulationDebug`. Nine expressions added, one
+existing connection rewired, nothing deleted. `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+is **not touched**, for the same reason C10.2 recorded and which is restated at the end of this
+entry. Saved and verified not dirty.
+
+The material was five nodes before this and is fourteen after.
+
+### What was added
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionWorldPosition_0` | `WorldPosition` | defaults, absolute |
+| `MaterialExpressionScalarParameter_0` | `ScalarParameter` | `MarbleDotCellCentimetres`, default **12.0**, group `Surface Debug` |
+| `MaterialExpressionDivide_0` | `Divide` | world position over cell size |
+| `MaterialExpressionVectorNoise_0` | `VectorNoise` | `VNF_CellnoiseALU` (the class default), Quality 1 |
+| `MaterialExpressionVectorNoise_1` | `VectorNoise` | `VNF_VoronoiALU`, Quality 1 |
+| `MaterialExpressionScalarParameter_1` | `ScalarParameter` | `MarbleDotMaxRadius`, default **0.42**, group `Surface Debug` |
+| `MaterialExpressionCustom_0` | `Custom` | `MarbleDots`, `CMOT_Float1`, four inputs |
+| `MaterialExpressionComponentMask_1` | `ComponentMask` | R and G only |
+| `MaterialExpressionAppendVector_0` | `AppendVector` | |
+
+### Wiring
+
+```
+WorldPosition ---------\
+                        Divide --> VectorNoise(Cellnoise) --> Custom.CellRandom
+MarbleDotCellCentremes-/      \--> VectorNoise(Voronoi)   --> Custom.Voronoi
+MF_SampleRacetrackSurface.Marbles ----------------------------> Custom.Density
+MarbleDotMaxRadius ------------------------------------------> Custom.MaxRadius
+
+MF_SampleRacetrackSurface.Coverage --> ComponentMask(RG) --> AppendVector.A
+Custom (dot mask) -----------------------------------------> AppendVector.B
+AppendVector --> Multiply.A        (rewired; was Coverage direct)
+DebugChannelMask --> ComponentMask(RGB) --> Multiply.B      (unchanged)
+Multiply --> MP_EmissiveColor                               (unchanged)
+```
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+This text lives only inside a binary `.uasset`. It is not in any `.cpp`, `.usf` or `.ush`, so it
+cannot appear in a diff and this entry is the only reviewable copy.
+
+```hlsl
+float Radius = saturate(Density * 2.0 - CellRandom.r) * MaxRadius;
+float Edge = max(Radius * 0.45, 1e-4);
+return Radius <= 1e-4 ? 0.0 : (1.0 - smoothstep(Radius - Edge, Radius, Voronoi.a));
+```
+
+Inputs in order: `Density`, `CellRandom`, `Voronoi`, `MaxRadius`. Output `CMOT_Float1`.
+
+**One threshold produces both required behaviours, which is why there is no second comparison.**
+The goal asked for dots that get *both denser and individually bigger* toward maximum. Because the
+radius is `saturate(Density * 2 - CellRandom.r)`, a cell whose random draw is low crosses zero
+first, so at low density only a few cells carry a dot at all; as density rises, more cells cross
+zero *and* every radius already past zero grows. Count and size therefore both rise from a single
+expression, rather than from a presence test multiplied by a size term.
+
+### The two engine facts this rests on, checked in the 5.8 source rather than assumed
+
+From `Engine/Source/Runtime/Engine/Public/Materials/MaterialExpressionVectorNoise.h`:
+
+- `VNF_CellnoiseALU` is documented at lines 15-19 as *"Random color for each unit cell in 3D space.
+  RGB output range 0 to 1"*. It is the only one of the five functions that is a normalised per-cell
+  random, which is why the presence term reads `CellRandom.r`.
+- `VNF_VoronoiALU` is documented at lines 40-46 as *"RGB = position of closest point at center of
+  Voronoi cell. A = distance to closest point with range 0 to about 4"*. **The distance is in the
+  alpha channel, not in RGB.** RGB is a position, so comparing it against a coverage scalar would
+  not give a stable per-cell threshold — an error worth recording because it is the obvious
+  misreading of this node and one of the planning passes made it.
+
+`get_expression_output_names` reports a single unnamed output on the Voronoi node, so the whole
+float4 is passed into the Custom node and `.a` is taken in HLSL. That the material compiles is the
+confirmation that the output really is four components.
+
+### Why world position rather than the ribbon UV
+
+The mesh UV is anisotropic: U spans a quarter of the lap per atlas row, V spans the 800 cm track
+width. Feeding it to the noise would make elliptical dots whose aspect changes with lap length, and
+would need `CentimetresPerTexel` published to `MPC_RacetrackSurface` to correct. `WorldPosition`
+needs nothing published, gives round dots by construction, and is continuous across the fold
+boundaries because it never knows about them.
+
+At the 12 cm default cell size, a 800 cm track carries about 66 cells across its width and a dot
+reaches about 5 cm across at full density.
+
+### Why this is in the host material and not the plugin's function
+
+Unchanged from C10.2, and worth restating because the temptation is stronger here. A
+scattered-blue-dot renderer is a debug read of a density. A shipping host would render marbles with
+H1's parallax-occlusion material, not with dots. `MF_SampleRacetrackSurface` keeps returning
+`Marbles` as a plain scalar, which is what an integrator wants, and every node above sits in
+`/Game`. This also keeps clear of the asset where `MaterialTools.delete_expression` is known to
+assert and halt the editor — nothing in this change deletes anything anywhere.
+
+### Not verified
+
+- **Not seen on screen.** The graph compiles and the wiring was read back and confirmed, but no run
+  has been looked at, and whether the dot size and cell size read well is a judgement rather than a
+  check.
+- **`MarbleDotCellCentimetres` at 12.0 and `MarbleDotMaxRadius` at 0.42 are starting values chosen
+  by arithmetic, not by eye.** They are instance parameters in the `Surface Debug` group, so they
+  are an A/B with a slider rather than a rebuild.
+- **The rewire changed what the all-channels view shows.** `Multiply.A` was `Coverage` directly and
+  is now `AppendVector(Coverage.rg, MarbleDots)`. Rubber and skid are bit-identical, but the blue
+  channel of the all-channels view is now a dot mask rather than a smooth coverage — so captures
+  taken before this change are still comparable in R and G and are **not** comparable in B.
