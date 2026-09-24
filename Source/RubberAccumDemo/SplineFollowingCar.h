@@ -70,6 +70,16 @@ public:
 		return ContactWidth;
 	}
 
+	double GetStraightLineSpeedCentimetresPerSecond() const
+	{
+		return StraightLineSpeedCentimetresPerSecond;
+	}
+
+	double GetCorneringSpeedFraction() const
+	{
+		return CorneringSpeedFraction;
+	}
+
 	double GetWheelbase() const
 	{
 		return Wheelbase;

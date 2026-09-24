@@ -125,6 +125,15 @@ public:
 
 	bool StartsPausedAfterCommandLine() const;
 
+	float NextDecayRate(float CurrentRate, bool bFaster) const;
+
+	double GetLapSeconds() const;
+
+	double GetDecayHalfLifeInLaps() const
+	{
+		return DecayHalfLifeInLaps;
+	}
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;
@@ -152,6 +161,18 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Deposition", meta = (ClampMin = "1.0"))
 	float FastestDepositionScale = 64.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Decay", meta = (ClampMin = "1.01"))
+	float DecayRateStep = 2.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Decay", meta = (ClampMin = "0.01"))
+	float SlowestDecayRate = 0.25f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Decay", meta = (ClampMin = "1.0"))
+	float FastestDecayRate = 20.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Decay", meta = (ClampMin = "0.1"))
+	double DecayHalfLifeInLaps = 56.0;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Observer", meta = (ClampMin = "10.0", ClampMax = "89.0"))
 	double ObserverPitchDegrees = 62.0;
@@ -231,6 +252,12 @@ private:
 	void DepositSlower();
 
 	void ApplyDepositionScale(float Scale);
+
+	void DecayFaster();
+
+	void DecaySlower();
+
+	void ApplyDecayRate(float Rate);
 
 	void PublishTrackRibbon();
 

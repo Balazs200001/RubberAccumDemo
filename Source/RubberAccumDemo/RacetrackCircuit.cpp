@@ -246,20 +246,27 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &ARacetrackCircuit::DepositFaster);
 	InputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &ARacetrackCircuit::DepositSlower);
 	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARacetrackCircuit::ToggleFieldPaused);
+	InputComponent->BindKey(EKeys::Apostrophe, IE_Pressed, this, &ARacetrackCircuit::DecayFaster);
+	InputComponent->BindKey(EKeys::Semicolon, IE_Pressed, this, &ARacetrackCircuit::DecaySlower);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
 			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
-			"%.0fx of the derived rate. W A S D, Q E and the mouse fly the camera at all times"),
+			"%.0fx of the derived rate. Press ' and ; for how fast it fades, between off and %.0fx of a "
+			"%.0f lap half-life, which is %.0f s on this layout. W A S D, Q E and the mouse fly the "
+			"camera at all times"),
 		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
 		SlowestDepositionScale,
-		FastestDepositionScale);
+		FastestDepositionScale,
+		FastestDecayRate,
+		DecayHalfLifeInLaps,
+		DecayHalfLifeInLaps * GetLapSeconds());
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition"));
+		TEXT("P field   . , time   ] [ deposition   ' ; decay"));
 }
 
 void ARacetrackCircuit::DepositFaster()
@@ -312,6 +319,69 @@ void ARacetrackCircuit::ApplyTimeDilation(float Dilation)
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		TEXT("RubberAccumDemo.TimeDilation"),
 		FString::Printf(TEXT("Time dilation now %.2fx"), Clamped));
+}
+
+void ARacetrackCircuit::DecayFaster()
+{
+	ApplyDecayRate(NextDecayRate(USurfaceAccumulationSubsystem::GetDecayRate(), true));
+}
+
+void ARacetrackCircuit::DecaySlower()
+{
+	ApplyDecayRate(NextDecayRate(USurfaceAccumulationSubsystem::GetDecayRate(), false));
+}
+
+float ARacetrackCircuit::NextDecayRate(float CurrentRate, bool bFaster) const
+{
+	if (!bFaster)
+	{
+		return CurrentRate <= SlowestDecayRate ? 0.0f : FMath::Max(CurrentRate / DecayRateStep, SlowestDecayRate);
+	}
+
+	return CurrentRate <= 0.0f
+		? SlowestDecayRate
+		: FMath::Min(CurrentRate * DecayRateStep, FastestDecayRate);
+}
+
+void ARacetrackCircuit::ApplyDecayRate(float Rate)
+{
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(
+		RacetrackSurfaceMapping::DecayRateVariableName);
+
+	if (Variable == nullptr)
+	{
+		return;
+	}
+
+	const float Clamped = Rate <= 0.0f ? 0.0f : FMath::Clamp(Rate, SlowestDecayRate, FastestDecayRate);
+
+	Variable->Set(Clamped, ECVF_SetByCode);
+
+	if (Clamped <= 0.0f)
+	{
+		UE_LOG(LogRacetrackSurface, Log,
+			TEXT("Decay off. Nothing fades, which is the state every measurement before C10 was taken in"));
+		return;
+	}
+
+	UWorld* World = GetWorld();
+
+	const USurfaceAccumulationSubsystem* Subsystem =
+		World != nullptr ? World->GetSubsystem<USurfaceAccumulationSubsystem>() : nullptr;
+
+	const float HalfLifeSeconds = Subsystem != nullptr
+		? Subsystem->GetDecayHalfLifeSeconds() / Clamped
+		: 0.0f;
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("Decay now %.2fx, a half-life of %.1f laps and %.0f s of track time, applied in %.0f steps "
+			"of %.6f retention"),
+		Clamped,
+		DecayHalfLifeInLaps / Clamped,
+		HalfLifeSeconds,
+		USurfaceAccumulationSubsystem::GetDecayStepsPerHalfLife(),
+		RacetrackSurfaceMapping::DecayRetentionForProgress(
+			1.0f / USurfaceAccumulationSubsystem::GetDecayStepsPerHalfLife()));
 }
 
 void ARacetrackCircuit::SpawnField()
@@ -634,6 +704,45 @@ void ARacetrackCircuit::PublishTrackRibbon()
 	Ribbon.bClosedLoop = Spline->IsClosedLoop();
 
 	Subsystem->ConfigureTrackRibbon(Spline, Ribbon);
+
+	const double LapSeconds = GetLapSeconds();
+
+	if (LapSeconds > UE_DOUBLE_SMALL_NUMBER)
+	{
+		Subsystem->SetDecayHalfLifeSeconds(static_cast<float>(DecayHalfLifeInLaps * LapSeconds));
+	}
+}
+
+double ARacetrackCircuit::GetLapSeconds() const
+{
+	const double Length = GetTrackLength();
+	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();
+
+	if (Reference == nullptr || CorneringProfile.Num() == 0 || Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	const double StraightSpeed = Reference->GetStraightLineSpeedCentimetresPerSecond();
+	const double CorneringSpeed = StraightSpeed * Reference->GetCorneringSpeedFraction();
+
+	if (StraightSpeed <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	const double Spacing = Length / CorneringProfile.Num();
+
+	double Seconds = 0.0;
+
+	for (const double SignedCornering : CorneringProfile)
+	{
+		const double Speed = FMath::Lerp(StraightSpeed, CorneringSpeed, FMath::Abs(SignedCornering));
+
+		Seconds += Spacing / FMath::Max(Speed, UE_DOUBLE_SMALL_NUMBER);
+	}
+
+	return Seconds;
 }
 
 void ARacetrackCircuit::BuildStadiumPoints(TArray<FVector>& OutPoints) const

@@ -2416,6 +2416,37 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 			"stripes gave, which is the change C6 is for"),
 		ApexExposurePerLap / FMath::Max(StraightExposurePerLap, UE_DOUBLE_SMALL_NUMBER) < 20.0);
 
+	const double HalfLifeInLaps = Track->GetDecayHalfLifeInLaps();
+	const double ApexEquilibriumExposure = ApexExposurePerLap * HalfLifeInLaps / UE_LN2;
+	const double StraightEquilibriumExposure = StraightExposurePerLap * HalfLifeInLaps / UE_LN2;
+
+	const double ApexEquilibriumCoverage =
+		RacetrackSurfaceMapping::ExposureToCoverage(static_cast<float>(ApexEquilibriumExposure));
+
+	const double StraightEquilibriumCoverage =
+		RacetrackSurfaceMapping::ExposureToCoverage(static_cast<float>(StraightEquilibriumExposure));
+
+	AddInfo(FString::Printf(
+		TEXT("At a half-life of %.1f laps the apex settles at %.4f exposure and %.4f coverage, the "
+			"straight at %.4f and %.4f, an equilibrium contrast of %.2f to 1 in coverage. Lap time cancels "
+			"out of that entirely, which is why the half-life is held in laps rather than in seconds"),
+		HalfLifeInLaps,
+		ApexEquilibriumExposure,
+		ApexEquilibriumCoverage,
+		StraightEquilibriumExposure,
+		StraightEquilibriumCoverage,
+		ApexEquilibriumCoverage / FMath::Max(StraightEquilibriumCoverage, UE_DOUBLE_SMALL_NUMBER)));
+
+	TestTrue(
+		TEXT("The configured half-life settles the apex near the saturation the C9 captures reached, so "
+			"turning decay on holds the racing line rather than erasing it or leaving it to keep darkening"),
+		ApexEquilibriumCoverage > 0.90 && ApexEquilibriumCoverage < 0.99);
+
+	TestTrue(
+		TEXT("The straight settles far below the apex, so the equilibrium is a racing line rather than a "
+			"uniformly grey track"),
+		StraightEquilibriumCoverage < ApexEquilibriumCoverage * 0.5);
+
 	if (Subsystem != nullptr)
 	{
 		Subsystem->ResetSurface();
@@ -2427,6 +2458,185 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 	}
 
 	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitDecayRateReachesZeroAndTheCeiling,
+	"RubberAccumDemo.Track.DecayRateReachesZeroAndTheCeiling",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitDecayRateReachesZeroAndTheCeiling::RunTest(const FString& Parameters)
+{
+	const ARacetrackCircuit* Reference = GetDefault<ARacetrackCircuit>();
+
+	if (Reference == nullptr)
+	{
+		AddError(TEXT("No circuit defaults available."));
+		return false;
+	}
+
+	TArray<float> Ascending;
+	float Rate = 0.0f;
+
+	for (int32 Step = 0; Step < 32; ++Step)
+	{
+		const float Next = Reference->NextDecayRate(Rate, true);
+
+		if (Next <= Rate)
+		{
+			break;
+		}
+
+		Rate = Next;
+		Ascending.Add(Rate);
+	}
+
+	TArray<float> Descending;
+
+	for (int32 Step = 0; Step < 32; ++Step)
+	{
+		const float Next = Reference->NextDecayRate(Rate, false);
+
+		if (Next >= Rate)
+		{
+			break;
+		}
+
+		Rate = Next;
+		Descending.Add(Rate);
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Pressing faster from off reaches %.2fx in %d steps and pressing slower returns to %.2fx in "
+			"%d, so the control spans the whole range without stranding the operator at either end"),
+		Ascending.Num() > 0 ? Ascending.Last() : 0.0f,
+		Ascending.Num(),
+		Descending.Num() > 0 ? Descending.Last() : 0.0f,
+		Descending.Num()));
+
+	TestTrue(TEXT("Pressing faster from off starts the fade"), Ascending.Num() > 0);
+
+	if (Ascending.Num() > 0)
+	{
+		TestEqual(
+			TEXT("The first press from off lands on the slowest rate rather than multiplying zero by the "
+				"step and staying at zero"),
+			Ascending[0],
+			0.25f);
+
+		TestEqual(TEXT("Pressing faster stops at the twenty times ceiling"), Ascending.Last(), 20.0f);
+	}
+
+	TestTrue(TEXT("Pressing slower walks back down"), Descending.Num() > 0);
+
+	if (Descending.Num() > 0)
+	{
+		TestEqual(
+			TEXT("Pressing slower reaches a true zero, which is what reproduces every measurement taken "
+				"before decay existed"),
+			Descending.Last(),
+			0.0f);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitLapSecondsMatchATickedLap,
+	"RubberAccumDemo.Track.LapSecondsMatchATickedLap",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitLapSecondsMatchATickedLap::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	const ETrackLayout Layouts[] = { ETrackLayout::Stadium, ETrackLayout::Spa };
+
+	for (const ETrackLayout Layout : Layouts)
+	{
+		ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+		if (Track == nullptr)
+		{
+			AddError(TEXT("Failed to spawn ARacetrackCircuit."));
+			return false;
+		}
+
+		Track->SetLayout(Layout, Track->GetAuthoredLayoutLapLength());
+
+		const double Length = Track->GetTrackLength();
+		const double PredictedLapSeconds = Track->GetLapSeconds();
+
+		ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+
+		if (Car == nullptr)
+		{
+			AddError(TEXT("Failed to spawn a car."));
+			Track->Destroy();
+			return false;
+		}
+
+		Car->ConfigureDriver(Track, 0.0, 0.0, Track->GetDriverLineCommitment(0), UnusedDriverSeed);
+
+		int32 Ticks = 0;
+		const int32 TickLimit = FMath::CeilToInt32(4.0 * PredictedLapSeconds / TickSeconds) + 1;
+
+		while (Car->GetDistanceAlongTrack() < Length && Ticks < TickLimit)
+		{
+			Car->Tick(TickSeconds);
+			++Ticks;
+		}
+
+		const double TickedLapSeconds = Ticks * TickSeconds;
+
+		AddInfo(FString::Printf(
+			TEXT("%s at %.0f cm: the speed profile predicts a %.2f s lap and a car took %.2f s over %d "
+				"ticks, a difference of %.1f %%. The half-life of %.1f laps is therefore %.0f s here"),
+			Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+			Length,
+			PredictedLapSeconds,
+			TickedLapSeconds,
+			Ticks,
+			100.0 * FMath::Abs(TickedLapSeconds - PredictedLapSeconds)
+				/ FMath::Max(TickedLapSeconds, UE_DOUBLE_SMALL_NUMBER),
+			Track->GetDecayHalfLifeInLaps(),
+			Track->GetDecayHalfLifeInLaps() * PredictedLapSeconds));
+
+		TestTrue(
+			*FString::Printf(TEXT("The car completed a lap on the %s layout"),
+				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa")),
+			Ticks < TickLimit);
+
+		TestTrue(
+			TEXT("Integrating the speed profile predicts the lap time a ticked car actually takes, so the "
+				"half-life the circuit publishes is derived from the lap rather than guessed at. The "
+				"integration ignores the bounded braking and acceleration rates, so it runs slightly fast"),
+			FMath::Abs(TickedLapSeconds - PredictedLapSeconds) < 0.15 * TickedLapSeconds);
+
+		USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+		if (Subsystem != nullptr)
+		{
+			TestTrue(
+				TEXT("The circuit published a half-life of its own laps to the subsystem rather than "
+					"leaving the plugin's layout-agnostic fallback in place"),
+				FMath::IsNearlyEqual(
+					Subsystem->GetDecayHalfLifeSeconds(),
+					static_cast<float>(Track->GetDecayHalfLifeInLaps() * PredictedLapSeconds),
+					1.0f));
+		}
+
+		Car->Destroy();
+		Track->Destroy();
+	}
 
 	return true;
 }
