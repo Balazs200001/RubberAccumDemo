@@ -8,6 +8,7 @@
 
 class ARacetrackCircuit;
 class UStaticMeshComponent;
+class USurfaceAccumulationSubsystem;
 
 enum class ECarWheel : uint8
 {
@@ -135,6 +136,11 @@ public:
 		return MaxCornerDeviationAlpha;
 	}
 
+	double GetMarbleThrowCentimetres() const
+	{
+		return MarbleThrowCentimetres;
+	}
+
 protected:
 	UPROPERTY(EditInstanceOnly, Category = "Spline Following Car")
 	TObjectPtr<ARacetrackCircuit> Track;
@@ -217,6 +223,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0"))
 	double SameBrakingEventSeparationCentimetres = 600.0;
 
+	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Marbles", meta = (ClampMin = "0.0"))
+	double MarbleThrowCentimetres = 200.0;
+
 private:
 	void ResizeCarMesh();
 
@@ -233,6 +242,13 @@ private:
 	EAccumulationChannel ChannelAtWheel(int32 WheelIndex) const;
 
 	double DrawTriangularCornerDeviationAlpha();
+
+	double DrawMarbleThrowFallingAwayFromTheLine();
+
+	void DepositMarblesOutsideTheLine(
+		USurfaceAccumulationSubsystem& Subsystem,
+		double SignedCornering,
+		float RollingSlipAmount);
 
 	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
 	TObjectPtr<UStaticMeshComponent> CarMesh;
@@ -268,4 +284,6 @@ private:
 	TOptional<double> DistanceLastBraking;
 
 	FRandomStream BrakingRandomStream;
+
+	FRandomStream MarbleRandomStream;
 };
