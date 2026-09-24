@@ -142,6 +142,8 @@ public:
 
 	void SetDebugView(ESurfaceDebugView View);
 
+	void ReportSurfaceCoverage();
+
 	void ApplyTimeDilation(float Dilation);
 
 	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);

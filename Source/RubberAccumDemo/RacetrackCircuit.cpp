@@ -10,6 +10,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetRenderingLibrary.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -114,6 +115,23 @@ namespace RacetrackDemoCommands
 
 		Circuit->SetDebugView(static_cast<ESurfaceDebugView>(Requested));
 	}
+
+	void ReportSurface(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit != nullptr)
+		{
+			Circuit->ReportSurfaceCoverage();
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs SurfaceReportCommand(
+		TEXT("RacetrackDemo.SurfaceReport"),
+		TEXT("Reads the accumulation buffer back and reports the peak coverage in each channel, on screen "
+			"and in the log. Stalls the game thread on the readback, so it is a diagnostic rather than "
+			"something to leave running."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ReportSurface));
 
 	FAutoConsoleCommandWithWorldAndArgs FieldCommand(
 		TEXT("RacetrackDemo.Field"),
@@ -545,6 +563,74 @@ void ARacetrackCircuit::SetDebugView(ESurfaceDebugView View)
 		this,
 		TEXT("RubberAccumDemo.DebugView"),
 		FString::Printf(TEXT("Surface view: %s"), DebugViewName(DebugView)));
+}
+
+void ARacetrackCircuit::ReportSurfaceCoverage()
+{
+	USurfaceAccumulationSubsystem* Subsystem = GetWorld() != nullptr
+		? GetWorld()->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	USurfaceAccumulationBuffer* Buffer = Subsystem != nullptr ? Subsystem->GetBuffer() : nullptr;
+	UTextureRenderTarget2D* Target = Buffer != nullptr ? Buffer->GetTarget() : nullptr;
+
+	if (Target == nullptr)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.SurfaceReport"),
+			TEXT("No accumulation buffer is allocated yet"));
+		return;
+	}
+
+	const FSurfaceTrackRibbon& Ribbon = Subsystem->GetRibbon();
+	const int32 AcrossTexels = Ribbon.AcrossTrackTexels();
+
+	constexpr int32 ProbeCount = 48;
+
+	float Peak[AccumulationChannelCount] = {};
+
+	for (int32 Probe = 0; Probe < ProbeCount; ++Probe)
+	{
+		const double AlongTrack = static_cast<double>(Probe) / ProbeCount;
+		const int32 RowIndex = Ribbon.RowIndexAt(AlongTrack);
+
+		const int32 Column = FMath::Clamp(
+			FMath::RoundToInt32(Ribbon.RibbonToAtlasInRow(RowIndex, AlongTrack, 0.0).X * Ribbon.AtlasWidth()),
+			0,
+			Ribbon.AtlasWidth() - 1);
+
+		const TArray<FLinearColor> Band = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+			this, Target, Column, RowIndex * AcrossTexels, 1, AcrossTexels, false);
+
+		for (const FLinearColor& Texel : Band)
+		{
+			Peak[0] = FMath::Max(Peak[0], Texel.R);
+			Peak[1] = FMath::Max(Peak[1], Texel.G);
+			Peak[2] = FMath::Max(Peak[2], Texel.B);
+		}
+	}
+
+	const FString Report = FString::Printf(
+		TEXT("Peak coverage: rubber %.4f, skid %.4f, marbles %.4f"),
+		RacetrackSurfaceMapping::ExposureToCoverage(Peak[0]),
+		RacetrackSurfaceMapping::ExposureToCoverage(Peak[1]),
+		RacetrackSurfaceMapping::ExposureToCoverage(Peak[2]));
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s over %d columns of the %d x %d atlas. Peak exposure: rubber %.6f, skid %.6f, "
+			"marbles %.6f. Debug view is %s with mask %s"),
+		*Report,
+		ProbeCount,
+		Ribbon.AtlasWidth(),
+		Ribbon.AtlasHeight(),
+		Peak[0],
+		Peak[1],
+		Peak[2],
+		DebugViewName(DebugView),
+		*DebugViewChannelMask(DebugView).ToString());
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(this, TEXT("RubberAccumDemo.SurfaceReport"), Report);
 }
 
 void ARacetrackCircuit::ApplyDebugViewToRoad()
