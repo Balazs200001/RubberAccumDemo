@@ -1262,3 +1262,39 @@ after reading the quantity back, not before.
 - **Not seen on screen.** The graph compiles and the asset is saved; whether 44 % of cells at 5.6 cm
   reads as marbles rather than as noise is a judgement, and `MarbleDotCellCentimetres` and
   `MarbleDotMaxRadius` remain instance parameters for exactly that reason.
+
+---
+
+## 2026-09-24 — G5 bypassed: marbles render as flat coverage, like rubber and skid
+
+**Asset changed:** `/Game/Materials/M_SurfaceAccumulationDebug`. One connection rewired:
+`Multiply.A` is driven by `MF_SampleRacetrackSurface.Coverage` again, as it was before G5. Nothing
+deleted. Saved.
+
+Requested directly after two rounds of the dot presentation failing to show anything on screen. The
+blue channel is now displayed exactly the way red and green are.
+
+**The nine dot nodes are left in the graph, orphaned.** `WorldPosition`, the two `VectorNoise`
+nodes, the `Divide`, the two `ScalarParameter`s, the `Custom` node, the `ComponentMask` and the
+`AppendVector` are all still present and still wired to each other; only the final
+`AppendVector -> Multiply.A` link is gone. An unconnected expression compiles to nothing, so this
+costs no instructions, and restoring the dots later is one connection rather than nine nodes.
+
+**This is also a deliberate bisection.** The marble channel measurably holds 0.1769 coverage in the
+buffer on this exact layout, and nothing was visible on screen. Removing the Custom node from the
+path leaves the graph in its precise pre-G5 state, so the next run discriminates:
+
+- **Blue appears** — the dot mapping was the whole problem, and the fix is a presentation curve.
+- **Blue still absent** — the fault is upstream of anything added on 2026-09-24, in a read path
+  whose blue channel has never once carried data and therefore has never been exercised.
+
+**Checked while bisecting, and all sound:**
+
+- The placed circuit in `/Game/Maps/L_SpaHarness` matches the diagnostic test exactly: `Spa`,
+  180000 cm, `TrackWidth` 800, 3.125 cm per texel, `CarCount` 20, `CarClass` the C++
+  `ASplineFollowingCar` rather than a Blueprint, `RoadMaterial` this material. So the test is not
+  measuring a different scene from the one on screen.
+- `BlurredFoldedExposure` samples `.rgb` and returns `CMOT_Float3`, so blue is folded and blurred
+  identically to red.
+- The saturation chain is `Custom -> Multiply -> Exponential -> OneMinus -> Coverage`, all float3.
+  No mask drops a component.
