@@ -70,6 +70,33 @@ namespace
 		float Restore;
 	};
 
+	class FScopedDecayRate
+	{
+	public:
+		explicit FScopedDecayRate(float Rate)
+			: Variable(IConsoleManager::Get().FindConsoleVariable(
+				RacetrackSurfaceMapping::DecayRateVariableName))
+			, Restore(Variable != nullptr ? Variable->GetFloat() : 0.0f)
+		{
+			if (Variable != nullptr)
+			{
+				Variable->Set(Rate, ECVF_SetByCode);
+			}
+		}
+
+		~FScopedDecayRate()
+		{
+			if (Variable != nullptr)
+			{
+				Variable->Set(Restore, ECVF_SetByCode);
+			}
+		}
+
+	private:
+		IConsoleVariable* Variable;
+		float Restore;
+	};
+
 	struct FStrokeTally
 	{
 		int32 Count = 0;
@@ -379,6 +406,129 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 		TEXT("The marble channel holds a non-zero exposure in the buffer after a run, which is the claim "
 			"the write-side counts alone cannot make"),
 		StrongestMarbles > 0.0f);
+
+	Subsystem->ResetSurface();
+	DestroyDemo(Track, Field);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDemoLayoutChannelsAtSteadyStateUnderDecay,
+	"RubberAccumDemo.Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDemoLayoutChannelsAtSteadyStateUnderDecay::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindDemoWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("No USurfaceAccumulationSubsystem available."));
+		return false;
+	}
+
+	TArray<ASplineFollowingCar*> Field;
+	ARacetrackCircuit* Track = SpawnDemoCircuit(*World, Field);
+
+	if (Track == nullptr || Field.Num() == 0)
+	{
+		AddError(TEXT("Failed to spawn the demo circuit or its field."));
+		DestroyDemo(Track, Field);
+		return false;
+	}
+
+	const FScopedDepositionScale Deposition(16.0f);
+	const FScopedDecayRate Decay(16.0f);
+
+	Subsystem->ResetSurface();
+
+	const FSurfaceTrackRibbon& Ribbon = Subsystem->GetRibbon();
+	const float HalfLife = Subsystem->GetDecayHalfLifeSeconds();
+
+	constexpr int32 TickCount = 2500;
+
+	for (int32 Tick = 0; Tick < TickCount; ++Tick)
+	{
+		for (ASplineFollowingCar* Car : Field)
+		{
+			Car->Tick(CompressedTick);
+		}
+
+		Subsystem->Tick(CompressedTick);
+	}
+
+	UTextureRenderTarget2D* Painted = Subsystem->GetBuffer() != nullptr
+		? Subsystem->GetBuffer()->GetTarget()
+		: nullptr;
+
+	if (Painted == nullptr)
+	{
+		AddError(TEXT("No accumulation target was allocated."));
+		DestroyDemo(Track, Field);
+		return false;
+	}
+
+	constexpr int32 ProbeCount = 96;
+
+	const int32 AcrossTexels = Ribbon.AcrossTrackTexels();
+
+	float Peak[AccumulationChannelCount] = {};
+
+	for (int32 Probe = 0; Probe < ProbeCount; ++Probe)
+	{
+		const double AlongTrack = static_cast<double>(Probe) / ProbeCount;
+		const int32 RowIndex = Ribbon.RowIndexAt(AlongTrack);
+
+		const int32 Column = FMath::Clamp(
+			FMath::RoundToInt32(Ribbon.RibbonToAtlasInRow(RowIndex, AlongTrack, 0.0).X * Ribbon.AtlasWidth()),
+			0,
+			Ribbon.AtlasWidth() - 1);
+
+		const TArray<FLinearColor> Band = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+			World, Painted, Column, RowIndex * AcrossTexels, 1, AcrossTexels, false);
+
+		for (const FLinearColor& Texel : Band)
+		{
+			Peak[0] = FMath::Max(Peak[0], Texel.R);
+			Peak[1] = FMath::Max(Peak[1], Texel.G);
+			Peak[2] = FMath::Max(Peak[2], Texel.B);
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("Steady state under decay. Half-life %.0f s of track time at rate 16, so a time constant of "
+			"%.0f s, ticked %d times at %.4f s which is %.0f s of track time, about %.1f time constants."),
+		HalfLife,
+		HalfLife / 16.0f,
+		TickCount,
+		CompressedTick,
+		TickCount * CompressedTick,
+		TickCount * CompressedTick / (HalfLife / 16.0f)));
+
+	AddInfo(FString::Printf(
+		TEXT("Deposition 16 with decay 16 reaches the same equilibrium as the demo's 2 and 2, eight times "
+			"sooner. Peak exposure | buildup %.6f (coverage %.4f) | skid %.6f (coverage %.4f) | "
+			"marbles %.6f (coverage %.4f)"),
+		Peak[0], RacetrackSurfaceMapping::ExposureToCoverage(Peak[0]),
+		Peak[1], RacetrackSurfaceMapping::ExposureToCoverage(Peak[1]),
+		Peak[2], RacetrackSurfaceMapping::ExposureToCoverage(Peak[2])));
+
+	TestTrue(
+		TEXT("The skid channel reaches a coverage a viewer could see at the demo's own settings"),
+		RacetrackSurfaceMapping::ExposureToCoverage(Peak[1]) > 0.05f);
+
+	TestTrue(
+		TEXT("The marble channel reaches a coverage a viewer could see at the demo's own settings"),
+		RacetrackSurfaceMapping::ExposureToCoverage(Peak[2]) > 0.05f);
 
 	Subsystem->ResetSurface();
 	DestroyDemo(Track, Field);
