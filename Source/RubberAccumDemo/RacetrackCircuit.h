@@ -142,6 +142,8 @@ public:
 
 	void SetDebugView(ESurfaceDebugView View);
 
+	void ApplyTimeDilation(float Dilation);
+
 	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);
 
 	static FLinearColor DebugViewChannelMask(ESurfaceDebugView View);
@@ -267,8 +269,6 @@ private:
 	void SpeedUpTime();
 
 	void SlowDownTime();
-
-	void ApplyTimeDilation(float Dilation);
 
 	void DepositFaster();
 

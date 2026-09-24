@@ -7,6 +7,7 @@
 #include "Misc/Parse.h"
 #include "Components/SplineComponent.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -31,7 +32,13 @@ namespace RacetrackCircuitDisplay
 {
 	static constexpr const TCHAR* DebugChannelMaskParameterName = TEXT("DebugChannelMask");
 
-	static constexpr float MessageSeconds = 6.0f;
+	TAutoConsoleVariable<float> CVarMessageSeconds(
+		TEXT("RacetrackDemo.MessageSeconds"),
+		6.0f,
+		TEXT("How long an on-screen control message stays up. Six seconds suits someone watching the "
+			"demo live. Raise it for a still capture, where the surface needs laps to build and the "
+			"caption has to outlast them."),
+		ECVF_Default);
 
 	void AnnounceOnScreen(FName MessageName, const FString& Text)
 	{
@@ -39,11 +46,87 @@ namespace RacetrackCircuitDisplay
 		{
 			GEngine->AddOnScreenDebugMessage(
 				static_cast<uint64>(GetTypeHash(MessageName)),
-				MessageSeconds,
+				CVarMessageSeconds.GetValueOnGameThread(),
 				FColor::White,
 				Text);
 		}
 	}
+}
+
+namespace RacetrackDemoCommands
+{
+	ARacetrackCircuit* FindCircuit(UWorld* World)
+	{
+		if (World == nullptr)
+		{
+			return nullptr;
+		}
+
+		for (TActorIterator<ARacetrackCircuit> It(World); It; ++It)
+		{
+			return *It;
+		}
+
+		UE_LOG(LogRacetrackSurface, Warning,
+			TEXT("No ARacetrackCircuit in this world, so the demo console commands have nothing to drive"));
+
+		return nullptr;
+	}
+
+	void SetField(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit != nullptr)
+		{
+			Circuit->SetFieldPaused(Arguments.Num() > 0 && FCString::Atoi(*Arguments[0]) == 0);
+		}
+	}
+
+	void SetTimeDilation(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit != nullptr && Arguments.Num() > 0)
+		{
+			Circuit->ApplyTimeDilation(FCString::Atof(*Arguments[0]));
+		}
+	}
+
+	void SetChannelView(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit == nullptr || Arguments.Num() == 0)
+		{
+			return;
+		}
+
+		const int32 Requested = FMath::Clamp(
+			FCString::Atoi(*Arguments[0]),
+			0,
+			static_cast<int32>(ESurfaceDebugView::Marbles));
+
+		Circuit->SetDebugView(static_cast<ESurfaceDebugView>(Requested));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs FieldCommand(
+		TEXT("RacetrackDemo.Field"),
+		TEXT("1 releases the field, 0 freezes it. The same handler the P key calls, so it announces "
+			"itself on screen either way."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetField));
+
+	FAutoConsoleCommandWithWorldAndArgs TimeDilationCommand(
+		TEXT("RacetrackDemo.TimeDilation"),
+		TEXT("Sets global time dilation, clamped to the circuit's own range. The same handler the . and "
+			", keys call."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetTimeDilation));
+
+	FAutoConsoleCommandWithWorldAndArgs ChannelViewCommand(
+		TEXT("RacetrackDemo.Channel"),
+		TEXT("0 shows all three channels, 1 rubber buildup, 2 skid marks, 3 marbles. The same handler "
+			"the C key calls."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetChannelView));
 }
 
 namespace RacetrackLayouts

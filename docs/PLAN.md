@@ -2446,6 +2446,7 @@ equilibrium its own field implies on every run rather than leaving it in this do
 | C10.3 | The decay pass, its progress accumulator, and the rate and step console variables | A surface that fades, at a rate that is exactly frame-rate independent |
 | C10.4 | Measure the lap time and set the half-life constant from it | `H` recorded with the lap time it came from |
 | C10.5 | Capture the recording: every announcement, each channel in turn, decay off then on | Files in `assets/media/`, listed in `MEASUREMENTS.md` |
+| C10.6 | Console commands for the host controls. Added 2026-09-24, see below | `-ExecCmds` reaches every control, so a capture needs no keyboard |
 
 ### Tests
 
@@ -2543,9 +2544,43 @@ default circuit, and `Layout` defaults to `Stadium`; **17 of the 23 host tests t
 never call `SetLayout`**, so they run the oval. The equilibrium arithmetic is layout-independent so it is unaffected, but **re-measuring the
 contrast on the demo layout is owed** and is not part of C10.
 
-**Still outstanding, and both need the editor.** C10.2's `DebugChannelMask` parameter does not exist
-in `M_SurfaceAccumulationDebug`, so the cycle logs and announces correctly and the image does not
-change. C10.5's capture has not been taken. Unreal MCP was unreachable for this whole session.
+**C10.2's material edit landed 2026-09-24 once the editor came up.** `DebugChannelMask` is a
+`VectorParameter` defaulting to `(1,1,1,1)`, masked to RGB and multiplied into `Coverage` before
+`MP_EmissiveColor`. Three nodes added, nothing deleted, the plugin's function untouched. Logged in
+[EDITOR_SETUP.md](EDITOR_SETUP.md) by path.
+
+### C10.6 — Console commands for the host controls, added 2026-09-24 because the capture needs them
+
+Not in the plan above. Added on discovering that **C10.5 cannot be driven at all** otherwise.
+
+Unreal MCP exposes PIE control and screenshots but **no key input and no console-command execution**
+— `EditorAppToolset` still offers `SearchCVars` for lookup only, which is the same limitation B3
+recorded on 2026-09-22. The demo starts with the field frozen, decay at 0 and the view on all
+channels, and each of those moves only on a key press. So through MCP the demo can be started and
+photographed and nothing else, and every capture would be a human pressing keys.
+
+That collides directly with this project's own method rule: *"Where MCP can run a measurement, run it
+rather than handing me a placeholder."* The enabling change is small: **every host control gets an
+`FAutoConsoleCommand` alongside its key**, so the same handler is reachable from `-ExecCmds`, from
+the in-game console and from a key.
+
+This costs nothing in design terms and repays more than the capture:
+
+- The deposition scale is already a console variable and was already drivable this way. This makes
+  the field freeze, the time dilation, the decay rate and the channel view consistent with it
+  instead of being the odd ones out.
+- C9 needed two command-line switches, `-ReleaseField` and `-FreezeField`, precisely because
+  `bStartPaused` is read in `BeginPlay` before `-ExecCmds` runs at frame 1. A console command does
+  not have that problem for anything set *after* `BeginPlay`, which is all of these.
+- Every future capture and every future demo state becomes reproducible from one command line
+  rather than from a remembered sequence of keypresses.
+
+**The keys stay.** The commands call the same handlers, so there is one implementation and two ways
+in, and the on-screen announcement fires either way because it is attached to the value rather than
+to the key.
+
+*Exit for C10.6: `-ExecCmds` can reach the field, the dilation, the decay rate and the channel view,
+and a capture needs no keyboard.*
 
 ---
 
