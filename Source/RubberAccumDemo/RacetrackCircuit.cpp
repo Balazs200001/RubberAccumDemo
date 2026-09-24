@@ -14,6 +14,7 @@
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "SplineFollowingCar.h"
+#include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
@@ -28,6 +29,8 @@ namespace RacetrackFieldSwitches
 
 namespace RacetrackCircuitDisplay
 {
+	static constexpr const TCHAR* DebugChannelMaskParameterName = TEXT("DebugChannelMask");
+
 	static constexpr float MessageSeconds = 6.0f;
 
 	void AnnounceOnScreen(FName MessageName, const FString& Text)
@@ -248,13 +251,14 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARacetrackCircuit::ToggleFieldPaused);
 	InputComponent->BindKey(EKeys::Apostrophe, IE_Pressed, this, &ARacetrackCircuit::DecayFaster);
 	InputComponent->BindKey(EKeys::Semicolon, IE_Pressed, this, &ARacetrackCircuit::DecaySlower);
+	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARacetrackCircuit::CycleDebugView);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
 			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
 			"%.0fx of the derived rate. Press ' and ; for how fast it fades, between off and %.0fx of a "
-			"%.0f lap half-life, which is %.0f s on this layout. W A S D, Q E and the mouse fly the "
-			"camera at all times"),
+			"%.0f lap half-life, which is %.0f s on this layout. Press C to look at one accumulation "
+			"channel at a time. W A S D, Q E and the mouse fly the camera at all times"),
 		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
@@ -266,7 +270,7 @@ void ARacetrackCircuit::BindTimeControls()
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition   ' ; decay"));
+		TEXT("P field   . , time   ] [ deposition   ' ; decay   C channel"));
 }
 
 void ARacetrackCircuit::DepositFaster()
@@ -382,6 +386,85 @@ void ARacetrackCircuit::ApplyDecayRate(float Rate)
 		USurfaceAccumulationSubsystem::GetDecayStepsPerHalfLife(),
 		RacetrackSurfaceMapping::DecayRetentionForProgress(
 			1.0f / USurfaceAccumulationSubsystem::GetDecayStepsPerHalfLife()));
+}
+
+void ARacetrackCircuit::CycleDebugView()
+{
+	SetDebugView(NextDebugView(DebugView));
+}
+
+ESurfaceDebugView ARacetrackCircuit::NextDebugView(ESurfaceDebugView View)
+{
+	switch (View)
+	{
+	case ESurfaceDebugView::AllChannels:
+		return ESurfaceDebugView::RubberBuildup;
+	case ESurfaceDebugView::RubberBuildup:
+		return ESurfaceDebugView::SkidMarks;
+	case ESurfaceDebugView::SkidMarks:
+		return ESurfaceDebugView::Marbles;
+	default:
+		return ESurfaceDebugView::AllChannels;
+	}
+}
+
+FLinearColor ARacetrackCircuit::DebugViewChannelMask(ESurfaceDebugView View)
+{
+	switch (View)
+	{
+	case ESurfaceDebugView::RubberBuildup:
+		return USurfaceAccumulationBuffer::ChannelMask(EAccumulationChannel::RubberBuildup);
+	case ESurfaceDebugView::SkidMarks:
+		return USurfaceAccumulationBuffer::ChannelMask(EAccumulationChannel::SkidMark);
+	case ESurfaceDebugView::Marbles:
+		return USurfaceAccumulationBuffer::ChannelMask(EAccumulationChannel::Marbles);
+	default:
+		return FLinearColor::White;
+	}
+}
+
+const TCHAR* ARacetrackCircuit::DebugViewName(ESurfaceDebugView View)
+{
+	switch (View)
+	{
+	case ESurfaceDebugView::RubberBuildup:
+		return TEXT("rubber buildup only");
+	case ESurfaceDebugView::SkidMarks:
+		return TEXT("skid marks only");
+	case ESurfaceDebugView::Marbles:
+		return TEXT("marbles only, which nothing writes before phase G");
+	default:
+		return TEXT("all three channels");
+	}
+}
+
+void ARacetrackCircuit::SetDebugView(ESurfaceDebugView View)
+{
+	DebugView = View;
+
+	ApplyDebugViewToRoad();
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s now shows %s, masking the sampled coverage by %s"),
+		*GetName(),
+		DebugViewName(DebugView),
+		*DebugViewChannelMask(DebugView).ToString());
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		TEXT("RubberAccumDemo.DebugView"),
+		FString::Printf(TEXT("Surface view: %s"), DebugViewName(DebugView)));
+}
+
+void ARacetrackCircuit::ApplyDebugViewToRoad()
+{
+	if (RoadSurfaceMaterial == nullptr)
+	{
+		return;
+	}
+
+	RoadSurfaceMaterial->SetVectorParameterValue(
+		RacetrackCircuitDisplay::DebugChannelMaskParameterName,
+		DebugViewChannelMask(DebugView));
 }
 
 void ARacetrackCircuit::SpawnField()
@@ -561,16 +644,18 @@ void ARacetrackCircuit::BindAccumulationTargetToRoad()
 		return;
 	}
 
-	UMaterialInstanceDynamic* Dynamic = Road->CreateDynamicMaterialInstance(0, RoadMaterial);
+	RoadSurfaceMaterial = Road->CreateDynamicMaterialInstance(0, RoadMaterial);
 
-	if (Dynamic == nullptr)
+	if (RoadSurfaceMaterial == nullptr)
 	{
 		return;
 	}
 
-	Dynamic->SetTextureParameterValue(
+	RoadSurfaceMaterial->SetTextureParameterValue(
 		RacetrackSurfaceMapping::AccumulationTargetParameterName,
 		Target);
+
+	ApplyDebugViewToRoad();
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("%s bound a %d x %d accumulation target into the road material"),

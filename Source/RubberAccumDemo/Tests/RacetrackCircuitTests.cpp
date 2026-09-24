@@ -6,6 +6,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
@@ -2458,6 +2459,60 @@ bool FRacetrackCircuitCountedPassesOverATexelAgainstThePrediction::RunTest(const
 	}
 
 	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitDebugViewCyclesEveryChannel,
+	"RubberAccumDemo.Track.DebugViewCyclesEveryChannel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitDebugViewCyclesEveryChannel::RunTest(const FString& Parameters)
+{
+	const ESurfaceDebugView Expected[] = {
+		ESurfaceDebugView::RubberBuildup,
+		ESurfaceDebugView::SkidMarks,
+		ESurfaceDebugView::Marbles,
+		ESurfaceDebugView::AllChannels
+	};
+
+	ESurfaceDebugView View = ESurfaceDebugView::AllChannels;
+
+	for (const ESurfaceDebugView Next : Expected)
+	{
+		View = ARacetrackCircuit::NextDebugView(View);
+
+		TestTrue(
+			*FString::Printf(TEXT("The cycle reaches %s"), ARacetrackCircuit::DebugViewName(Next)),
+			View == Next);
+	}
+
+	TestTrue(
+		TEXT("The cycle returns to all three channels, so it is a loop rather than a dead end"),
+		View == ESurfaceDebugView::AllChannels);
+
+	TestEqual(
+		TEXT("Showing every channel is an exact multiply by one, so that view is the image every capture "
+			"before C10 was taken through"),
+		ARacetrackCircuit::DebugViewChannelMask(ESurfaceDebugView::AllChannels),
+		FLinearColor::White);
+
+	TestEqual(
+		TEXT("The rubber view masks by the same colour the paint path writes rubber with"),
+		ARacetrackCircuit::DebugViewChannelMask(ESurfaceDebugView::RubberBuildup),
+		USurfaceAccumulationBuffer::ChannelMask(EAccumulationChannel::RubberBuildup));
+
+	TestEqual(
+		TEXT("The skid view masks by the same colour the paint path writes skid marks with"),
+		ARacetrackCircuit::DebugViewChannelMask(ESurfaceDebugView::SkidMarks),
+		USurfaceAccumulationBuffer::ChannelMask(EAccumulationChannel::SkidMark));
+
+	TestEqual(
+		TEXT("The marbles view masks by the same colour the paint path would write marbles with, so the "
+			"black it shows today is an empty channel rather than a wrong mask"),
+		ARacetrackCircuit::DebugViewChannelMask(ESurfaceDebugView::Marbles),
+		USurfaceAccumulationBuffer::ChannelMask(EAccumulationChannel::Marbles));
 
 	return true;
 }

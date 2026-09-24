@@ -5,6 +5,7 @@
 #include "RacetrackCircuit.generated.h"
 
 class ASplineFollowingCar;
+class UMaterialInstanceDynamic;
 class UProceduralMeshComponent;
 class USplineComponent;
 
@@ -13,6 +14,15 @@ enum class ETrackLayout : uint8
 {
 	Stadium,
 	Spa
+};
+
+UENUM()
+enum class ESurfaceDebugView : uint8
+{
+	AllChannels,
+	RubberBuildup,
+	SkidMarks,
+	Marbles
 };
 
 UCLASS()
@@ -124,6 +134,19 @@ public:
 	void SetFieldPaused(bool bPaused);
 
 	bool StartsPausedAfterCommandLine() const;
+
+	ESurfaceDebugView GetDebugView() const
+	{
+		return DebugView;
+	}
+
+	void SetDebugView(ESurfaceDebugView View);
+
+	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);
+
+	static FLinearColor DebugViewChannelMask(ESurfaceDebugView View);
+
+	static const TCHAR* DebugViewName(ESurfaceDebugView View);
 
 	float NextDecayRate(float CurrentRate, bool bFaster) const;
 
@@ -259,6 +282,10 @@ private:
 
 	void ApplyDecayRate(float Rate);
 
+	void CycleDebugView();
+
+	void ApplyDebugViewToRoad();
+
 	void PublishTrackRibbon();
 
 	void GenerateTrackSpline();
@@ -281,10 +308,15 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UProceduralMeshComponent> Road;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> RoadSurfaceMaterial;
+
 	UPROPERTY()
 	TArray<TObjectPtr<ASplineFollowingCar>> SpawnedField;
 
 	bool bFieldPaused = false;
+
+	ESurfaceDebugView DebugView = ESurfaceDebugView::AllChannels;
 
 	TArray<double> CorneringProfile;
 
