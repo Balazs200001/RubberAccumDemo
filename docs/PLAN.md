@@ -2117,27 +2117,154 @@ to know it happened.
 
 `GEngine->AddOnScreenDebugMessage` is the whole mechanism. It was explicitly chosen as the simplest
 thing that gets text on screen; it does not need to be pretty and it does not need a HUD class.
+Verified signature, `Engine.h:2196-2200`:
+
+```
+ENGINE_API void AddOnScreenDebugMessage(uint64 Key, float TimeToDisplay, FColor DisplayColor,
+    const FString& DebugMessage, bool bNewerOnTop = true,
+    const FVector2D& TextScale = FVector2D::UnitVector);
+```
 
 Every existing control announces itself: `P` for the field, `.` and `,` for time dilation, `]` and
-`[` for the deposition scale. Each message carries the value it moved to, not just that it moved.
-**There is no on-screen text anywhere in the project today**, so this is greenfield.
+`[` for the deposition scale, and the two controls this phase adds. Each message carries the value it
+moved to, not just that it moved. **There is no on-screen text anywhere in the project today**, so
+this is greenfield.
 
-### C10.2 — Flip the debug material through the channels
+#### Decided: every message is keyed, and the key is a hash of a name rather than a small integer
 
-The buffer holds three channels and the debug material only ever shows the sum. A viewer cannot
-tell rubber from a skid mark.
+`AddOnScreenDebugMessage` keeps two stores (`UnrealEngine.cpp:12466-12523`). `Key == (uint64)-1`
+appends to `PriorityScreenMessages` and never replaces anything; any other key indexes a
+`TMap<int32, FScreenMessageString>` and **overwrites that entry in place**. Unkeyed is wrong here:
+holding `]` for six steps would leave six deposition lines stacked on screen, and a viewer cannot
+tell which is current. So each control owns a key and its line updates in place.
 
-`MF_SampleRacetrackSurface` already exposes what this needs: four outputs, `Coverage` carrying all
-three and three more carrying one channel each. `M_SurfaceAccumulationDebug` consumes `Coverage`
-alone. So the work is a selector on the road material and a key that cycles it, announcing the
-current view through C10.1.
+That makes key collision a real failure: the map is engine-wide, so two features choosing the same
+small integer silently overwrite each other's line, which is precisely the illegibility this phase
+exists to remove. Keys are therefore `GetTypeHash(FName(TEXT("RacetrackSurface.DecayRate")))` and so
+on — self-describing at the call site and collision-free without either module knowing the other's
+key list. `UKismetSystemLibrary::PrintString` derives its own key the same way
+(`KismetSystemLibrary.cpp:529-534`), so this is the engine's own idiom rather than an invention.
 
-The cycle is: **all channels together, then rubber, then skid marks, then marbles.**
+#### Decided: ownership follows who can observe the change, not who owns the key
 
-**Marbles will be black and that is correct.** Nothing writes that channel — a rolling wheel writes
-`RubberBuildup` and a locked one writes `SkidMark`, and marbles do not arrive until phase G. The
-on-screen message should name the channel so an empty view reads as *nothing here yet* rather than
-as a bug.
+The circuit owns the keys and the plugin owns the console variables, so neither module can announce
+everything. Splitting it by *who observes the value changing* resolves it without either module
+reaching into the other:
+
+| Value | Changed by | Announced from |
+|---|---|---|
+| Field frozen or released | `SetFieldPaused` | host, beside the existing `UE_LOG` |
+| Time dilation | `SetGlobalTimeDilation` | host, beside the existing `UE_LOG` |
+| Debug channel view | a host-only material parameter | host, beside the existing `UE_LOG` |
+| Deposition scale | `r.RacetrackSurface.DepositionScale` | **plugin, from the variable's own change callback** |
+| Decay rate | `r.RacetrackSurface.DecayRate` | **plugin, from the variable's own change callback** |
+
+The two console-variable rows are the interesting half. `IConsoleVariable::SetOnChangedCallback`
+(`IConsoleManager.h:687`) fires on every `Set`, so the announcement is attached to the value rather
+than to the key that moved it — and the message then appears whether the change came from a key
+press, from the in-game console, or from `-ExecCmds`. The host's `ApplyDepositionScale` deliberately
+gets **no** on-screen call of its own, because it already reaches the value through `Set` and would
+otherwise announce twice.
+
+`TAutoConsoleVariable` has a public constructor taking that delegate directly
+(`IConsoleManager.h:2045`), so this costs one extra constructor argument on a variable that already
+exists, and the callback is a free function in the anonymous namespace that already holds
+`CVarDepositionScale`. **Nothing new is exported. No new `RACETRACKSURFACE_API` symbol.** The plugin
+gets no on-screen *presence* — it gets on-screen *announcements for the two values it owns*, which
+is the narrowest thing that is correct.
+
+**Rejected: exporting a shared `AnnounceOnScreen` helper from the plugin** for the host to call too.
+Recording scaffolding is not part of "contact data in, surface state out", and a host that is not
+this demo would inherit a symbol that has nothing to do with surface state.
+
+**Rejected: `RegisterConsoleVariableSink_Handle`**, which the engine's own comment at
+`IConsoleManager.h:680` recommends over `SetOnChangedCallback`. A sink is called with no arguments
+(`CallAllConsoleVariableSinks`), so it cannot say which variable changed or to what, and using it
+would mean caching and diffing every value every frame. The engine's caution is specifically about
+setting *other* console variables from inside the callback and cascading; this callback only formats
+a string, so the hazard it warns about does not arise.
+
+**Rejected: `UKismetSystemLibrary::PrintString`.** It always writes a log line as well
+(`KismetSystemLibrary.cpp:458-538`) and prefixes the text with the PIE net mode and, under
+`DO_BLUEPRINT_GUARD`, a Blueprint name. Every handler here already has its own precisely worded
+`UE_LOG`, so this would either duplicate it or fight it.
+
+**One consequence to record rather than fix.** The whole mechanism is compiled out under
+`#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)` (`UnrealEngine.cpp:12468`), and
+`UEngine::bEnableOnScreenDebugMessages` can switch it off at runtime. Every build this project makes
+is Development, so this is not a limitation today, and it is the correct behaviour for a plugin that
+might one day ship: the announcements cost a shipping game nothing because they do not exist in one.
+
+### C10.2 — Look at one accumulation channel at a time
+
+**The sketch this section replaces was wrong about what the material does today, and the correction
+changes what the task is.** `MF_SampleRacetrackSurface`'s `Coverage` output is a **Vector3, not a
+sum** — R is buildup, G is skid, B is marbles, and `M_SurfaceAccumulationDebug` drives it straight
+into `MP_EmissiveColor` (`EDITOR_SETUP.md:105-113`, `:152-163`). So the debug view is already colour
+coded and a viewer *can* already tell rubber from a skid mark by hue.
+
+What a viewer cannot do is see one channel on its own. Rubber and skid overlapping read as yellow,
+and a faint channel sitting under a strong one is invisible. So this task is **isolation**, not
+colour coding, and it is a smaller change than the sketch assumed.
+
+#### Decided: a vector mask in the host material, not a branch, and not in the plugin's function
+
+The selector is one `VectorParameter` named `DebugChannelMask`, multiplied into `Coverage` before
+`MP_EmissiveColor`. The four views are four values of that parameter:
+
+| View | Mask | Reads as |
+|---|---|---|
+| All channels | `(1, 1, 1)` | today's image, unchanged |
+| Rubber buildup | `(1, 0, 0)` | red |
+| Skid marks | `(0, 1, 0)` | green |
+| Marbles | `(0, 0, 1)` | black, and that is correct |
+
+**Which asset carries it is the decision that matters, and only one answer keeps the plugin's
+function reusable.** `MF_SampleRacetrackSurface` is the seam a host integrates against, and it
+already offers everything a host could want: `Coverage` plus `Buildup`, `Skid` and `Marbles` as
+separate scalars. Which of those a host shows, and whether it cycles between them, is that host's
+business. Putting a debug-view selector inside the function would hand a parameter that means
+nothing outside this demo to every future integrator. `M_SurfaceAccumulationDebug` lives in `/Game`,
+is host content, and exists for exactly this. **The mask goes there and the plugin's function is not
+touched at all**, which also avoids the one asset where `MaterialTools.delete_expression` is known to
+halt the editor.
+
+**Why a mask multiply and not a branch.** An `If` chain over the four outputs would work, but the
+mask has a property the chain does not: **the all-channels view is a multiply by `(1,1,1)`, which is
+provably the image C9 captured**, not merely an image that should match it. Every capture in
+`MEASUREMENTS.md` was taken through the unmasked path, and that comparison is worth keeping exact.
+The mask is also three added nodes against five, evaluates the existing sample once rather than
+inviting the four outputs to be evaluated separately, and needs no branching at all.
+
+**The mask is the one the paint path already uses.** `USurfaceAccumulationBuffer::ChannelMask`
+(`SurfaceAccumulationBuffer.cpp:162-175`) already maps `EAccumulationChannel` to the
+`FLinearColor` a stroke is written with. The view reuses that same function rather than repeating the
+table, so **the channel the view isolates cannot disagree with the channel the write targets** — if
+one is ever changed the other follows. That is the only reason this phase adds
+`RACETRACKSURFACE_API` to anything: the one static function now genuinely crosses the module
+boundary. The all-channels case is `FLinearColor::White`, which is not a channel and stays host-side.
+
+**Marbles will be black and that is correct.** `ASplineFollowingCar::ChannelAtWheel` returns
+`SkidMark` for a locked wheel and `RubberBuildup` otherwise; nothing writes `Marbles` before phase G.
+The on-screen message names the channel so an empty view reads as *nothing here yet* rather than as
+a bug.
+
+**Rejected: four material instances swapped with `SetMaterial`.** Four assets that do not exist,
+four texture bindings to keep pointed at the live accumulation target, and a material swap per
+keypress, for the same image a single `SetVectorParameterValue` on the MID the circuit already
+creates produces.
+
+**Rejected: a `StaticSwitchParameter`.** Changing one compiles a new shader permutation on first
+use. That is the wrong tool for a value driven by a keypress during play.
+
+**The C++ has to work before the asset does, and this session cannot author the asset.** The editor
+is not running and nothing is listening on the MCP port, so the material edit is a separate,
+later step. `UMaterialInstanceDynamic::SetVectorParameterValue`
+(`MaterialInstanceDynamic.h:109`) writes into the instance's own parameter array and does not
+validate the name against the parent, so setting `DebugChannelMask` before the parameter exists is a
+silent no-op: the cycle logs and announces correctly and the image simply does not change yet. That
+is the intended degradation, and it is also the reason the parameter's default must be `(1,1,1,1)` —
+an absent or unset parameter has to mean *show everything*, never *show nothing*.
 
 ### C10.3 — Decay, and a rate control from 0 to 20x
 
@@ -2147,23 +2274,211 @@ at all**. Nothing in the demo has ever faded. The racing line that C9 measured i
 accumulation, which is why `MEASUREMENTS.md` records it as *"a transient, most legible somewhere
 between"* two lap counts — it only ever gets darker.
 
-So this is not a keybind on an existing feature. It is **phase E's coupling arriving early**, and
-it splits:
+So this is not a keybind on an existing feature. It is **phase E's coupling arriving early**, and it
+has to answer four questions the sketch left open: what clock decay runs on, what a rate of 1x means,
+how often the pass runs, and how 0x is guaranteed to reproduce C9.
 
-- **Run the decay pass at all**, from the subsystem tick, at a retention derived from a
-  half-life in seconds rather than a per-frame constant, so the rate is frame-rate independent the
-  way C0 made deposition frame-rate independent.
-- **Then** a control from **0x to 20x** of that rate, on the same pattern as the deposition scale:
-  a console variable the circuit clamps and announces on screen. 0x must mean *no decay at all*,
-  which is today's behaviour and the baseline everything so far was measured against.
+#### Decided: decay runs on dilated world time, the same clock deposition already runs on
 
-**What this phase must not do is change the numbers C9 measured without saying so.** Decay at any
-non-zero rate moves the saturation figures, the 8.2:1 contrast and the laps-to-63 % counts, all of
-which were taken with nothing fading. A decay rate of 0 has to remain available and has to reproduce
-those numbers exactly, or the comparison is lost.
+`USurfaceAccumulationSubsystem` is a `UTickableWorldSubsystem`, and `UWorld::Tick` does
+`DeltaSeconds *= Info->GetEffectiveTimeDilation()` at `LevelTick.cpp:1596` and then passes that same
+`DeltaSeconds` to `FTickableGameObject::TickObjects` at `LevelTick.cpp:1821`, so the `DeltaTime` that
+`FlushPendingContacts` already uses is dilated. The demo confirms it from the other end: C3 recorded
+a stroke of about 330 cm at 20x and 100 fps, which is 1650 cm/s x 0.01 s x 20.
+
+Decay must ride the same clock, and the argument is the one C3 already made for deposition. A lap
+has to lay the same rubber whether you watch it at 1x or 20x; equally, **a lap has to lose the same
+rubber**. If decay ran on real time, fast-forwarding a capture would change the ratio of deposit to
+decay and therefore change the coverage a texel settles at, purely as an artefact of playback speed.
+Keeping both on the dilated clock makes the equilibrium a property of the track and the traffic
+rather than of how fast you are watching.
+
+**Consequence, recorded rather than fixed:** decay keeps running while the field is frozen with `P`.
+C7 already established that freezing the field is not pausing the game — the subsystem keeps ticking
+and real and dilated time both keep advancing — and it deliberately did not gate the time and
+deposition keys on the frozen state either. Decay follows the same rule. At the derived half-life the
+loss over a few seconds of inspection is far below what the buffer can represent, and an operator who
+wants the surface held exactly still has 0x.
+
+#### Decided: the rate multiplies the decay constant, not the half-life, so 0x is a clean off
+
+The primitive is a multiply by a retention factor, clamped to `[0,1]`, applied to the whole target
+through `BLEND_Modulate`. A half-life `H` gives a decay constant `lambda = ln2 / H`, and retention
+over an elapsed time `t` is `exp(-lambda * t)`. The runtime control scales `lambda`:
+
+```
+Retention(t, Rate) = exp(-(ln2 / H) * Rate * t) = 2^(-Rate * t / H)
+```
+
+Scaling `lambda` rather than `H` is what makes 0x well defined. `H / Rate` at `Rate = 0` is a
+division by zero, and `H * Rate` at `Rate = 0` is a half-life of zero, which is *infinitely fast*
+decay — the buffer vanishing on the next application, the exact opposite of what 0x has to mean.
+Scaling the constant gives `lambda = 0` and a retention of exactly 1 for any elapsed time.
+
+Composing across frames is exact: the product of `2^(-Rate*dt_i/H)` over a set of frames is
+`2^(-Rate*sum(dt_i)/H)`, which depends only on the total elapsed time. So the result is frame-rate
+independent by construction rather than by tuning, which is the property C0 established for
+deposition and the reason the sketch ruled out a per-frame retention constant.
+
+#### Decided: 0x means the pass does not run at all, and that is a test
+
+A retention of exactly 1.0 is not good enough. It still costs a
+`BeginDrawCanvasToRenderTarget` / `K2_DrawTexture` / `EndDrawCanvasToRenderTarget` round trip over
+112.50 MiB, it still pushes every texel through the canvas blend pipeline, and C9 measured a frame
+that did none of that. So `Rate <= 0` returns before touching the accumulator or the buffer, and the
+test asserts the *absence of the call*, not the value it would have passed.
+
+**The rate therefore defaults to 0**, and three independent reasons agree on that:
+
+1. **Every figure in `MEASUREMENTS.md` was taken with nothing fading.** Defaulting to 0 makes the
+   default configuration the documented baseline, so no past number is quietly invalidated and no
+   future measurement is accidentally taken against a different surface model.
+2. **One existing test already ticks the subsystem.** `SurfaceReadPathTests.cpp:160` calls
+   `Subsystem->Tick(1.0f)`. A non-zero default would put a decay pass inside a test written before
+   decay existed. At 0 the 64 tests keep measuring what they measured.
+3. **Turning decay on during a recording is more legible than having it always on.** The viewer sees
+   the announcement, then sees the fade start. A surface that has always been fading shows an effect
+   with no visible cause, which is the thing this phase exists to prevent.
+
+`-ExecCmds` is sufficient to force 0 or any other value for a capture, unlike `bStartPaused` in C9:
+that failed because `BeginPlay` reads it at frame 0, whereas the first decay pass cannot happen until
+a measurable amount of track time has been banked.
+
+#### Decided: the pass runs on a fixed amount of decay, not on a fixed interval in seconds
+
+Per-frame is ruled out twice over, once on cost and once on precision, and the precision argument is
+the one that also rules out the obvious fix.
+
+**Cost.** Extrapolating the B4 sweep — 2048 square RGBA16f, 33554432 bytes, 0.2400 ms — linearly in
+bytes touched, which is B4's own stated reading, puts a full-buffer pass at 117964800 bytes at about
+**0.845 ms**. Against a measured 2.365 ms GPU and 4.725 ms frame, that is 36 % of GPU time every
+frame for a change no single frame can show. *This is an extrapolation from a square buffer to a
+14:1 folded atlas and is not a measurement. Taking it is the first task below.*
+
+**Precision, which is the sharper constraint.** The target is RGBA16f. A half float carries an
+11-bit significand, so the spacing between representable values is between `2^-11` and `2^-10` of the
+value, and round-to-nearest discards any multiply that moves a value by less than half of that,
+`2.441e-4` relative. At a half-life of about 1500 s, one frame at 60 Hz has a retention of
+`1 - 7.3e-6` — **33 times below the threshold, so it rounds back to the same bits and the decay pass
+does nothing at all, every frame, while still costing 0.845 ms.** Silently.
+
+A fixed interval in seconds does not fix this, and that is why the sketch's phrasing is replaced. At
+1x and a 1500 s half-life, one second of retention is `1 - 4.4e-4`, under one unit in the last place
+at the coarse end of the range — still erratic. An interval short enough to look continuous at 20x is
+too short to resolve at 1x, and one long enough to resolve at 1x visibly stair-steps at 20x. **No
+single interval in seconds works across the rate range.**
+
+So the interval is expressed in decay rather than in time. The subsystem banks dimensionless progress
+and applies a pass when it crosses one step:
+
+```
+Progress   += Rate * DeltaSeconds / H
+apply when  Progress >= 1 / StepsPerHalfLife
+Retention   = 2^(-Progress)      then Progress = 0
+```
+
+At a default of 256 steps per half-life the retention per application is `2^(-1/256) = 0.997296`, a
+move of `2.70e-3`, which is between 2.8 and 5.5 units in the last place everywhere in the normal
+range. **The retention factor is then a constant, independent of rate and of frame rate** — every
+application does the same amount of work, and only how often it runs changes. That makes the cost
+model trivial: `Rate * StepsPerHalfLife / H` passes per dilated second, so 0.162 per second at 1x
+against 3.24 at 20x, or **0.0023 ms per frame at 1x and 60 Hz**.
+
+Using the actual banked progress in the exponent rather than the nominal step keeps a hitch or a
+frame-time spike exact rather than approximated, for the same reason C0 derived deposition from
+distance actually swept rather than from an assumed cadence.
+
+`StepsPerHalfLife` is the cost knob phase E2 already called for — *"decay pass over real time,
+frequency as a cost knob"* — arriving here with a measurement behind it rather than a slider.
+
+#### The half-life is a demo calibration, and it is derived, not chosen
+
+`H` lives beside `SaturationConstant` and `ExposurePerUnitSlip` in `SurfaceAccumulationMapping.h`,
+as a constant rather than a console variable, for the same reason `k = 3.0` is one: it is the
+contract the rest of the system is derived against, and a second copy that can drift is the failure
+mode that file exists to prevent.
+
+Its value is derived from the equilibrium the demo should settle at. A texel under a steady deposit
+`D` of exposure per dilated second approaches `E = D / lambda`, so asking the apex to settle at an
+exposure of 1.0 — which is 0.95 coverage through `1 - exp(-3E)` — fixes the half-life:
+
+```
+H = ln2 * LapSeconds / ApexExposurePerLap
+```
+
+`ApexExposurePerLap` is `CarCount * WheelsSharingATrack * SlipToExposure(CorneringSlipAmount, 1)`,
+which is `20 * 2 * 0.001 = 0.04` at the current defaults. `LapSeconds` is **not yet measured** and
+setting the constant is the second task below.
+
+**This is worth more than a fade.** `MEASUREMENTS.md` records the racing line as a transient with no
+settled state — it only ever gets darker, so there is a best moment to look at it and no equilibrium
+to measure. With decay there is one, and the apex-to-straight contrast becomes a steady-state
+property of the traffic rather than a function of how long the capture ran. **That is the first time
+this project can state a racing line as a number that does not depend on when you looked.**
+
+**Stated plainly, because it is the obvious attack:** the half-life is calibrated against this
+demo's own field, so it is demo tuning in the same sense `GridSpacing` is. What is *not* tuning is
+the shape — dilated clock, rate on the constant, exact frame-rate independence, 0x as a true skip.
+A host with different traffic must retune the half-life, which is why the circuit logs the
+equilibrium its own field implies on every run rather than leaving it in this document.
+
+#### Not in this phase
+
+- **E5's coupling.** `ApplyDecay` multiplies the whole target by one factor, so every channel decays
+  at the same rate. Making skid decay a function of local buildup needs a different pass and is E5.
+- **Decay applied per region or per row.** The pass is the whole atlas. Nothing needs less yet.
+- **Retuning `StepsPerHalfLife` from the measured cost.** The default is set by the precision floor,
+  which is the binding constraint; the measurement below only has to confirm the cost is not also
+  binding.
+
+### Tasks
+
+| # | Task | Exit |
+|---|---|---|
+| C10.0 | Measure the full-buffer decay pass at the real 14400 x 1024 RGBA16f atlas | A number in `MEASUREMENTS.md` replacing the 0.845 ms extrapolation |
+| C10.1 | On-screen announcement for every control, keyed, with the two console variables announcing from their own change callback | Pressing any control changes a line on screen that carries the new value |
+| C10.2 | `DebugChannelMask` on `M_SurfaceAccumulationDebug`, cycled by a key, reusing `ChannelMask` | Each channel can be viewed alone; the all-channels view is unchanged from C9 |
+| C10.3 | The decay pass, its progress accumulator, and the rate and step console variables | A surface that fades, at a rate that is exactly frame-rate independent |
+| C10.4 | Measure the lap time and set the half-life constant from it | `H` recorded with the lap time it came from |
+| C10.5 | Capture the recording: every announcement, each channel in turn, decay off then on | Files in `assets/media/`, listed in `MEASUREMENTS.md` |
+
+### Tests
+
+Added:
+
+- The retention formula is exactly frame-rate independent: 600 steps of 1/60 s and 1 step of 10 s
+  give the same retention to float tolerance.
+- A rate of 0 returns a retention of exactly 1.0 for any elapsed time, and — separately, because it
+  is the stronger claim — **ticking the subsystem at rate 0 for a simulated hour issues no decay
+  call at all.** Asserted by the buffer contents being bit-identical, since the call itself is not
+  observable from outside.
+- The retention at one step is resolvable in half-float precision: `1 - 2^(-1/StepsPerHalfLife)`
+  exceeds the `2.441e-4` round-to-nearest threshold with margin. This is the assertion that fails
+  if anyone later raises `StepsPerHalfLife` past the point where decay silently stops working.
+- Progress accumulates and the pass fires the expected number of times over a known span at a known
+  rate, and the product of the retentions it applied equals the closed-form retention over that span.
+- The debug view cycles All, Rubber, Skid, Marbles and wraps, and each view's mask is the one
+  `USurfaceAccumulationBuffer::ChannelMask` gives for that channel, with All exactly `(1,1,1)`.
+- The decay rate control reaches 0 from the slowest non-zero rate and returns to it, and clamps at
+  20x.
+
+Rewritten: none. Nothing existing asserts a model this phase changes, which is itself the point of
+defaulting the rate to 0.
+
+### Traps carried into this phase
+
+- **New `UPROPERTY` members and new reflection do not survive Live Coding.** This phase adds a stored
+  `UMaterialInstanceDynamic` on the circuit and new console variables. The editor must be closed and
+  a real build run, exactly as `EDITOR_SETUP.md` records for C9.
+- **The material edit cannot happen this session.** The editor is not running and nothing is
+  listening on the MCP port. The C++ lands first and is correct without the asset; the asset edit is
+  its own step, its own approval and its own `EDITOR_SETUP.md` entry.
+- **Additive material edits only.** `MaterialTools.delete_expression` halts the editor. The mask is
+  three added nodes plus one rewired destination pin.
 
 *Exit: a recording of the demo shows, on screen, every change the operator makes; the channels can be
-inspected one at a time; decay runs and its rate can be taken to zero to reproduce the C9 figures.*
+inspected one at a time; decay runs at a rate that is exactly frame-rate independent, and taking it
+to zero provably does not run the pass at all, so the C9 figures stand.*
 
 ---
 
