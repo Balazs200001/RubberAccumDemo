@@ -950,7 +950,7 @@ four change. They are rewritten rather than replaced, and what each one was is r
 | G2 | The displacement law: direction from the sign of local curvature, magnitude from a falling draw. *Was "density driven by buildup in adjacent cells"; superseded by D-A* | Deposits land on the opposite side to the car's own apex target, every time, on both layouts |
 | G3 | Measure where the band lands across the track width, by readback | A texel profile across the ribbon showing a monotonic fall from the line outward, in `MEASUREMENTS.md` |
 | G4 | Marbles visible in the channel view | The marbles view is no longer black. Free: the existing debug material already drives `Coverage.B` to emissive |
-| G5 | Scattered dots in the host debug material, denser and individually bigger toward maximum | Dots, not a flat wash, with both count and radius rising with density. **Needs the editor** |
+| G5 | Scattered dots in the host debug material, denser and individually bigger toward maximum | Dots, not a flat wash, with both count and radius rising with density. **Graph built and compiled 2026-09-24; not yet looked at** |
 | G6 | Clearing when cars drive through | Repeated passes open a path. *Unblocked 2026-09-24, see below. Not started* |
 | G7 | Channel wired into the query path | Per-wheel readout changes as a car crosses the band. **Belongs to F and moves there** |
 
@@ -1251,12 +1251,36 @@ distinguish *a bug threw a wheel off the ribbon* from *debris correctly left the
 actually discarded, so the test would have passed either way — which is precisely why it was worth
 fixing rather than leaving as a trap for whoever next raises the throw.
 
-### Not in this phase
+### G5 landed the same day, once the editor came up
 
-- **G5's material edit**, until the editor is open. Until then marbles render as flat blue, because
-  `M_SurfaceAccumulationDebug` already drives `Coverage` into `MP_EmissiveColor` and B is part of
-  `Coverage`. The C10.2 degradation pattern repeats exactly: the C++ is correct and the asset
-  catches up.
+Nine expressions added to `/Game/Materials/M_SurfaceAccumulationDebug`, one connection rewired,
+nothing deleted, `MF_SampleRacetrackSurface` untouched. Node list, wiring and the Custom node's
+HLSL verbatim in [EDITOR_SETUP.md](EDITOR_SETUP.md).
+
+**The design collapsed to one threshold rather than two.** The plan called for a presence test
+(`CellNoise.R < Density`) multiplied by a size term. Both fall out of a single expression instead:
+`Radius = saturate(Density * 2 - CellRandom.r) * MaxRadius`. A cell with a low random draw crosses
+zero first, so at low density few cells carry a dot; as density rises, more cells cross zero *and*
+every radius already past zero grows. Count and size both rise, from one line.
+
+**The plan's node table was wrong about `VNF_VoronoiALU` in a way worth recording.** It is right
+that the node gives a dot primitive, but the distance is in the **alpha** channel and RGB is the
+seed *position*. One of the three planning designs proposed comparing the R channel against a
+coverage scalar, which would not have produced a stable per-cell threshold. Both facts are in the
+engine header at `MaterialExpressionVectorNoise.h:15-19` and `:40-46`.
+
+**Not verified: nobody has looked at it.** The graph compiles and the wiring was read back and
+confirmed node by node, which establishes that it is wired as designed and not that it looks right.
+`MarbleDotCellCentimetres` at 12.0 and `MarbleDotMaxRadius` at 0.42 are arithmetic, not judgement,
+and both are instance parameters in the `Surface Debug` group so they are a slider rather than a
+rebuild.
+
+**One consequence for older captures.** `Multiply.A` was `Coverage` and is now
+`AppendVector(Coverage.rg, MarbleDots)`. R and G are bit-identical, so every rubber and skid capture
+stays comparable; the blue channel of the all-channels view is now a dot mask rather than a smooth
+coverage, and is not.
+
+### Not in this phase
 - **G6**, per the section above.
 - **G7**, which moves to phase F where the query path is built.
 - **Per-channel decay**, which moves to E5 with its cost corrected downward.
