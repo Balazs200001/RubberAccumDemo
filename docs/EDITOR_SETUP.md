@@ -1298,3 +1298,101 @@ path leaves the graph in its precise pre-G5 state, so the next run discriminates
   identically to red.
 - The saturation chain is `Custom -> Multiply -> Exponential -> OneMinus -> Coverage`, all float3.
   No mask drops a component.
+
+---
+
+## 2026-09-24 — F0: `BlurredFoldedExposure`'s HLSL, read back and recorded verbatim
+
+Asset: `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`
+Change: **none. This is a read, not an edit.** No property was set, nothing was saved, nothing is
+dirty.
+Why: phase F writes a second reader of the accumulation buffer in C++, and the only existing
+reader is this Custom node, whose source existed nowhere outside the `.uasset`. C9 recorded
+"keeping the two in step" as this project's standing risk; you cannot keep in step with something
+you cannot read. The G5 marble-dot node was quoted verbatim "because it exists nowhere else" and
+this one was not, which was an inconsistency rather than a decision.
+Made via: `ObjectTools.get_properties` on `MaterialExpressionCustom_0`, properties `Code`,
+`Description`, `OutputType`, `Inputs`.
+
+```hlsl
+float RowTotal = max(Rows, 1.0);
+float RowWidth = round(1.0 / max(TexelSize.x, 0.000001));
+float LapTexels = RowTotal * RowWidth;
+float2 RibbonTexel = float2(1.0 / LapTexels, TexelSize.y * RowTotal);
+float HalfBand = TexelSize.y * RowTotal * 0.5;
+float3 Sum = 0;
+float Weight = 0;
+[unroll] for (int y = -1; y <= 1; ++y)
+{
+	[unroll] for (int x = -1; x <= 1; ++x)
+	{
+		float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
+		float2 Ribbon = UV + float2(x, y) * RibbonTexel * Radius;
+		float Along = frac(Ribbon.x);
+		float Across = clamp(Ribbon.y, HalfBand, 1.0 - HalfBand);
+		float Sampled = Along * LapTexels - 0.5;
+		float Lower = floor(Sampled);
+		float Blend = Sampled - Lower;
+		float FirstTexel = Lower < 0.0 ? LapTexels - 1.0 : Lower;
+		float SecondTexel = Lower + 1.0 >= LapTexels ? 0.0 : Lower + 1.0;
+		float FirstRow = floor(FirstTexel / RowWidth);
+		float SecondRow = floor(SecondTexel / RowWidth);
+		float2 FirstUV = float2((FirstTexel - FirstRow * RowWidth + 0.5) / RowWidth, (FirstRow + Across) / RowTotal);
+		float2 SecondUV = float2((SecondTexel - SecondRow * RowWidth + 0.5) / RowWidth, (SecondRow + Across) / RowTotal);
+		float3 First = Texture2DSampleLevel(Tex, TexSampler, FirstUV, 0).rgb;
+		float3 Second = Texture2DSampleLevel(Tex, TexSampler, SecondUV, 0).rgb;
+		Sum += lerp(First, Second, Blend) * w;
+		Weight += w;
+	}
+}
+return Sum / Weight;
+```
+
+`Description` is `BlurredFoldedExposure`, `OutputType` is `CMOT_Float3`, and the five inputs are
+wired as C9 recorded them: `Tex` from the `AccumulationTarget` function input, `UV` from
+`TextureCoordinate_0`, `TexelSize` from `TextureProperty_0`, `Radius` from the
+`SurfaceBlurTexels` scalar parameter, `Rows` from the `AccumulationRowCount` collection parameter.
+
+### Three things the prose record did not say, and one it said slightly wrong
+
+**The kernel is separable and its weights are `(x==0?2:1) * (y==0?2:1)`**, which is
+`[1 2 1] ⊗ [1 2 1]`, summing to 16. It is normalised by an accumulated `Weight` rather than by a
+literal `/16`, so the node stays correct if the loop bounds ever change.
+
+**`Radius` scales the tap *spacing*, not the weights.** That is structurally the same knob phase F
+wants for the contact patch, which makes the relationship between the display read and the query
+read much simpler than PLAN.md assumed when it wrote F1: they are *the same kernel at two
+radii*. The material's `SurfaceBlurTexels` defaults to 1 texel for looks; the query uses the
+contact patch, 6.4 texels at 3.125 cm per texel for a 20 cm patch. **They can therefore be forced
+into exact agreement for F5's overlay check by setting `SurfaceBlurTexels` to the patch width**,
+which is a far stronger check than comparing two different kernels and arguing they ought to be
+close.
+
+**The lap is `RowTotal * RowWidth` texels, not `AlongTrackTexels()`.** On the demo ribbon those
+differ: the atlas is 14401 wide over 4 rows, so the shader's lap is 57604 texels, while
+`FSurfaceTrackRibbon::AlongTrackTexels()` returns 57601. The three-texel difference is padding
+introduced by `TexelsPerRow()`'s `DivideAndRoundUp`. It is **not a bug** — the C++ paint path
+normalises through `RibbonToAtlasInRow`, which uses the same `RowCount`-based convention, so the
+write and the read already agree with each other, and the effective texel size is 0.005 % off the
+configured one, consistently, on both sides. **It is a trap for F1**: a C++ gather that reached for
+`AlongTrackTexels()` because it is the obvious-looking accessor would land a fraction of a texel
+off, which no test written against itself would catch.
+
+**Corrected from the C9 entry:** it says "the shader therefore depends on neither the target's
+`Filter` nor its `AddressX`". That holds for the along-track axis, where the manual two-tap lerp
+and the `+0.5` snap make the result exact, and for `AddressX`, which `frac` and the explicit wrap
+make irrelevant. It does **not** hold across-track: `Across` is passed through unsnapped and the
+blend in Y is the hardware sampler's, which is what the same entry says two sentences earlier
+("leaving the sampler's bilinear in Y, which is wanted inside a band"). The summary sentence
+overstates the guarantee; the detailed sentence is right. Phase F inherits this and it is
+harmless either way, because a canvas gather samples the same texture through the same sampler, so
+the two readers move together whatever `Filter` is set to.
+
+### What was verified, and what was not
+
+Verified: that the node read back is the one C9 edited, by its `Description`, its `CMOT_Float3`
+output and its five named inputs; and that nothing was written, because only `get_properties` was
+called.
+
+Not verified: that this is the code the *cooked* shader contains. It is the code in the asset, and
+the asset recompiled clean on 2026-09-23, but no shader map was inspected.
