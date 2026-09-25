@@ -2915,4 +2915,276 @@ bool FSplineFollowingCarMarblesGatherOutsideTheLineAndThinTowardTheEdge::RunTest
 	return true;
 }
 
+namespace
+{
+	void TickTheWholeField(const ARacetrackCircuit& Track, int32 TickCount)
+	{
+		for (const TObjectPtr<ASplineFollowingCar>& Entry : Track.GetSpawnedField())
+		{
+			if (ASplineFollowingCar* Car = Entry.Get())
+			{
+				TickCar(*Car, TickCount);
+			}
+		}
+	}
+
+	ASplineFollowingCar* FurthestCarByHand(const ARacetrackCircuit& Track)
+	{
+		ASplineFollowingCar* Furthest = nullptr;
+		double Greatest = 0.0;
+
+		for (const TObjectPtr<ASplineFollowingCar>& Entry : Track.GetSpawnedField())
+		{
+			ASplineFollowingCar* Car = Entry.Get();
+
+			if (!IsValid(Car) || !Car->HasPlacedItsWheels())
+			{
+				continue;
+			}
+
+			if (Furthest == nullptr || Car->GetDistanceAlongTrack() > Greatest)
+			{
+				Greatest = Car->GetDistanceAlongTrack();
+				Furthest = Car;
+			}
+		}
+
+		return Furthest;
+	}
+
+	void DestroyTheField(ARacetrackCircuit& Track)
+	{
+		TArray<ASplineFollowingCar*> Field;
+
+		for (const TObjectPtr<ASplineFollowingCar>& Entry : Track.GetSpawnedField())
+		{
+			if (ASplineFollowingCar* Car = Entry.Get())
+			{
+				Field.Add(Car);
+			}
+		}
+
+		for (ASplineFollowingCar* Car : Field)
+		{
+			if (IsValid(Car))
+			{
+				Car->Destroy();
+			}
+		}
+
+		Track.Destroy();
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitTheLeaderIsTheCarFurthestAroundTheTrack,
+	"RubberAccumDemo.Demo.TheLeaderIsTheCarFurthestAroundTheTrack",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitTheLeaderIsTheCarFurthestAroundTheTrack::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No editor, game or PIE world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Could not spawn a circuit."));
+		return false;
+	}
+
+	Track->PostInitializeComponents();
+	Track->DispatchBeginPlay();
+
+	TestTrue(
+		TEXT("A field was spawned, so there is something to lead"),
+		Track->GetSpawnedCarCount() > 1);
+
+	TestTrue(
+		TEXT("Before any car has placed its wheels there is no leader at all, rather than a car whose "
+			"four wheels are still at the world origin"),
+		Track->FindLeadingCar() == nullptr);
+
+	TickTheWholeField(*Track, 4);
+
+	ASplineFollowingCar* ByHand = FurthestCarByHand(*Track);
+	ASplineFollowingCar* Leading = Track->FindLeadingCar();
+
+	TestTrue(TEXT("A leader is found once the field has placed its wheels"), Leading != nullptr);
+
+	TestTrue(
+		TEXT("The leader is the car furthest around the track, found the same way an independent pass "
+			"over the field finds it"),
+		Leading == ByHand);
+
+	if (Leading == nullptr)
+	{
+		DestroyTheField(*Track);
+		return false;
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("%d cars, the leader %.1f cm around a %.1f cm lap, which is %.2f laps"),
+		Track->GetSpawnedCarCount(),
+		Leading->GetDistanceAlongTrack(),
+		Track->GetTrackLength(),
+		Leading->GetDistanceAlongTrack() / FMath::Max(Track->GetTrackLength(), 1.0)));
+
+	TestTrue(
+		TEXT("Distance along the track is cumulative rather than wrapped into one lap, which is why "
+			"greatest distance already means greatest progress and no lap counter is needed"),
+		Leading->GetDistanceAlongTrack() >= Track->GetTrackLength());
+
+	ASplineFollowingCar* Destroyed = Leading;
+	const double DistanceWhenDestroyed = Destroyed->GetDistanceAlongTrack();
+
+	Destroyed->Destroy();
+
+	ASplineFollowingCar* Successor = Track->FindLeadingCar();
+
+	TestTrue(TEXT("Destroying the leader leaves a successor"), Successor != nullptr);
+
+	TestTrue(
+		TEXT("A destroyed car is skipped rather than read through, so the field survives a car leaving "
+			"it mid run"),
+		Successor != Destroyed);
+
+	if (Successor != nullptr)
+	{
+		TestTrue(
+			FString::Printf(
+				TEXT("The successor is the next car back, %.1f cm against the %.1f cm the destroyed "
+					"leader had reached"),
+				Successor->GetDistanceAlongTrack(),
+				DistanceWhenDestroyed),
+			Successor->GetDistanceAlongTrack() < DistanceWhenDestroyed);
+	}
+
+	DestroyTheField(*Track);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitFourHandlesSurviveAChangeOfLeader,
+	"RubberAccumDemo.Demo.FourHandlesSurviveAChangeOfLeader",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitFourHandlesSurviveAChangeOfLeader::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No editor, game or PIE world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr || !Subsystem->IsInitialized())
+	{
+		AddWarning(TEXT("Skipped: the world's accumulation subsystem is not initialised."));
+		return true;
+	}
+
+	const int32 QueriesBefore = Subsystem->GetActiveSurfaceQueryCount();
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Could not spawn a circuit."));
+		return false;
+	}
+
+	Track->PostInitializeComponents();
+	Track->DispatchBeginPlay();
+
+	TestEqual(
+		TEXT("The circuit acquires one query per wheel of the car it reads, once, rather than one per "
+			"car in the field"),
+		Track->GetLeaderWheelQueries().Num(),
+		ASplineFollowingCar::WheelCount);
+
+	TestEqual(
+		TEXT("Those four are the only queries the demo adds"),
+		Subsystem->GetActiveSurfaceQueryCount(),
+		QueriesBefore + ASplineFollowingCar::WheelCount);
+
+	TickTheWholeField(*Track, 4);
+	Track->Tick(1.0f / 60.0f);
+
+	const TArray<FSurfaceQueryHandle> Before = Track->GetLeaderWheelQueries();
+	ASplineFollowingCar* FirstLeader = Track->FindLeadingCar();
+
+	TestTrue(TEXT("The circuit read a leader"), FirstLeader != nullptr);
+
+	TestTrue(
+		TEXT("The car the circuit read is the one it leads with"),
+		Track->GetLeadingCarLastRead() == FirstLeader);
+
+	TestEqual(
+		TEXT("Reading four wheels produces four samples"),
+		Track->GetLeaderWheelSamples().Num(),
+		ASplineFollowingCar::WheelCount);
+
+	if (FirstLeader == nullptr)
+	{
+		DestroyTheField(*Track);
+		return false;
+	}
+
+	FirstLeader->Destroy();
+
+	TickTheWholeField(*Track, 1);
+	Track->Tick(1.0f / 60.0f);
+
+	const TArray<FSurfaceQueryHandle>& After = Track->GetLeaderWheelQueries();
+	const ASplineFollowingCar* SecondLeader = Track->GetLeadingCarLastRead();
+
+	TestTrue(TEXT("A different car is read after the first is destroyed"), SecondLeader != FirstLeader);
+
+	TestTrue(TEXT("And it is a live one"), IsValid(SecondLeader));
+
+	TestEqual(TEXT("Still four queries, not four more"), After.Num(), Before.Num());
+
+	TestEqual(
+		TEXT("Destroying the car being read acquires and releases nothing, so the subsystem sees no "
+			"handle churn at all"),
+		Subsystem->GetActiveSurfaceQueryCount(),
+		QueriesBefore + ASplineFollowingCar::WheelCount);
+
+	bool bHandlesUnchanged = After.Num() == Before.Num();
+
+	for (int32 Wheel = 0; Wheel < Before.Num() && bHandlesUnchanged; ++Wheel)
+	{
+		bHandlesUnchanged =
+			After[Wheel].SlotIndex == Before[Wheel].SlotIndex
+			&& After[Wheel].Generation == Before[Wheel].Generation;
+	}
+
+	TestTrue(
+		TEXT("Every handle keeps its slot and its generation across the change of leader, which is what "
+			"holding the handles on the circuit rather than on the car buys: a change of leader is a "
+			"change of submitted position and nothing else"),
+		bHandlesUnchanged);
+
+	DestroyTheField(*Track);
+
+	TestEqual(
+		TEXT("Destroying the circuit releases its four queries rather than leaking them into the world "
+			"subsystem, which outlives it"),
+		Subsystem->GetActiveSurfaceQueryCount(),
+		QueriesBefore);
+
+	return true;
+}
+
 #endif
