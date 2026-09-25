@@ -3047,3 +3047,216 @@ F5 stills — `TimeDilation 20`, 45 s in — and shows the leader as a single ca
 - **It does not touch the lateral extrapolation recorded against C4.** Strokes are still built from
   one contact per frame, so the 8.86 texels of compressed smear is the same bounded approximation it
   was, slightly smaller.
+
+---
+
+## 2026-09-25 — E5 to E7: skid decay coupled to local rubber, its cost, and two marks compared
+
+```
+Build:    Development, editor target. Tests headless through UnrealEditor-Cmd.exe with the editor
+          closed; captures through UnrealEditor.exe -game, windowed 1600x900
+Power:    MAINS. BatteryStatus.PowerOnline True, read before the baselines, before the suite of
+          record at 14:48:31 local, and before the final suite
+Scene:    Tests: the engine OpenWorld template map, no actors. Captures: /Game/Maps/L_SpaHarness,
+          twenty cars, Spa layout
+Driven:   Tests: C++ automation, the subsystem ticked by hand. Captures: -ReleaseField and -ExecCmds
+          only, no keyboard, one process per view, each still taken by PrintWindow with
+          PW_CLIENTONLY | PW_RENDERFULLCONTENT at the moment the log printed the matching report
+Tests:    120 of 120 pass in the final suite, started 15:12:45 local. Both build paths clean
+          (editor target and RunUAT BuildPlugin)
+Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+          -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+```
+
+The design is in PLAN.md under *E5 to E7, expanded 2026-09-25*. Skid decays at `1 + k * E_rubber`
+times the shared rate, with `k` the existing `SaturationConstant`, in an in-place compute pass.
+
+### E6 first: the recorded 0.3340 ms did not reproduce
+
+Taken before any change, on the committed build, with the test the 0.3340 ms came from,
+`RacetrackSurface.Performance.DecayAtTheProductionAtlas`, 64 samples:
+
+| How the test was run | Median | Minimum |
+|---|---|---|
+| Alone, first after boot | 0.7440 ms | 0.7080 ms |
+| First of the `Performance` group | 0.7460 ms | 0.6570 ms |
+| After the eight `Accumulator` tests | 0.4390 ms | 0.4220 ms |
+| 48 full-suite logs in `C:/RSBuild`, 2026-09-24 and 25 | 0.3320 to 0.4140 ms | 0.2860 to 0.3200 ms |
+
+**The same pass costs 2.2 times as much on a cold GPU as on a warm one.** Every earlier figure came
+from deep inside a full suite. So E6 does not compare against the old number at all. It times the
+new pass and the old one interleaved, sample by sample, in the same run.
+
+### E6: the coupled pass against the C10 quad, interleaved
+
+The C10 quad is redrawn by the test exactly as `ApplyDecay` drew it. It runs on a plain non-UAV
+target, which is C10's own configuration, and on the UAV-capable target, to separate the pass from
+the flag. The atlas is 14400 x 1024 RGBA16f, 117964800 bytes. The populated rows fill both targets
+with a tiled 256-texel noise texture, which is a worst case for framebuffer compression.
+
+| Run | Buffer | Coupled pass | C10 quad, plain target | C10 quad, UAV target |
+|---|---|---|---|---|
+| Final suite, 15:12 | Empty | **0.2350 ms** | 0.3430 ms | 0.3440 ms |
+| Final suite, 15:12 | Filled with noise | **1.4570 ms** | 1.4270 ms | 1.4320 ms |
+| Suite at 14:48, before the fallback was added | Empty | 0.2830 ms | 0.4420 ms | 0.4450 ms |
+| Suite at 14:48, before the fallback was added | Filled with noise | 1.1560 ms | 1.1200 ms | 1.1600 ms |
+| `Performance` group run, before the fallback was added | Empty | 0.3080 ms | 0.4950 ms | 0.4960 ms |
+| `Performance` group run, before the fallback was added | Filled with noise | 1.1420 ms | 1.1060 ms | 1.1080 ms |
+
+The fallback does not touch an RGBA16f target, so all three runs time the same passes.
+
+- **The absolute figures move by up to 44 % between runs, and the comparison does not move.** That
+  is the same clock-state effect as the baseline table above, and it is why the passes are
+  interleaved.
+- **On an empty buffer the coupled pass costs 0.62 to 0.69 times the quad it replaced**, in all
+  three runs.
+- **Populated, the three passes are within 4 % of each other in every run**, bandwidth-bound: the
+  full 117964800 bytes are read and written in 1.142 to 1.457 ms, 162 to 207 GB/s. PLAN.md predicted
+  about 0.9 ms from this GPU's nominal 256 GB/s. It also predicted that the 0.33 ms was only possible
+  through compression of an empty target, and that the populated C10 quad would rise too. Both held.
+- **The UAV flag costs the canvas nothing measurable**: 0.3430 against 0.3440 ms empty, 1.4270
+  against 1.4320 ms populated, in the final suite.
+- **What 0.3340 ms described was an empty buffer.** A real session lies between the two rows.
+- **At Spa's 4504.6 s half-life** a pass runs 0.05683 times a second of track time. Taking the final
+  suite, that is 0.0002 ms a frame at 1x and 60 Hz empty and 0.0014 ms populated, and at 20x it is
+  0.0045 and 0.0276 ms a frame.
+
+### E5: the UAV store truncates, and the pass now rounds for itself
+
+`RacetrackSurface.Decay.CoupledPassMatchesTheClosedFormAtEveryTexel`. Rubber at four exposures, skid
+and marbles are painted across a 256 x 256 buffer, and every texel is compared before and after one
+pass against `SkidRetentionForProgress` in C++.
+
+| One pass of | Texels compared | Carrying rubber and skid | Largest skid rate | Disagreements | Worst relative error |
+|---|---|---|---|---|---|
+| 1/256 half-life | 65536 | 17280 | 16.33x | **0** | 3.723e-4 |
+| 1/4 half-life | 65536 | 17280 | 16.28x | **0** | 4.296e-4 |
+
+**Before the fix the same test passed, and the pass was wrong.** The tally counts the values where
+round-to-nearest and truncation give different half floats, and records which one the GPU stored:
+
+| | Distinguishable values | Stored the nearest | Stored the truncation |
+|---|---|---|---|
+| Before, at 1/256 half-life | 8640 | 0 | **8640** |
+| Before, at 1/4 half-life | 43680 | 0 | **43680** |
+| After, at 1/256 half-life | 8640 | **8640** | 0 |
+| After, at 1/4 half-life | 43680 | **43680** | 0 |
+
+The fix is `RoundToNearestHalfFloat` in `SurfaceDecay.usf`: the value is rounded to a multiple of its
+own half-float spacing before the store, so the store only converts values it represents exactly.
+**Truncation is invisible in one pass and large over many.** Before the fix, E7's bare mark kept
+0.4586 of itself over a half-life, against 0.5000, a half-life about 11 % short.
+
+**Over a half-life of passes, measured directly on the same fixture**, 56684 rubber and marble values:
+
+| 256 passes of one step each | Kept, against exactly half | Worst value | Effective half-life at 56 nominal laps |
+|---|---|---|---|
+| Coupled pass, after the fix | **+0.71 %** | 0.76 % | 56.6 laps |
+| C10 canvas quad, as shipped | **-5.06 %** | 5.35 % | **52.1 laps** |
+
+**C10's canvas pass ran its decay 7 % fast, and nothing had ever measured it.** Its equilibrium
+arithmetic is CPU arithmetic and is unaffected; the C10.5 stills with decay on faded faster than
+their captions state. The coupled pass replaces that path wherever it can run.
+
+### E7: two identical marks, traffic over one, against a prediction made before the run
+
+`RacetrackSurface.Decay.SkidOnTheLinePavesOverAndSkidOffItPersists`, on a 256 x 256 buffer through
+the subsystem at decay rate 1, one pass per tick. Both marks were laid with skid 0.666504. Traffic
+over mark A lays 0.002704 between passes, which holds the rubber under it at exactly 1.000000, the
+apex equilibrium the half-life is calibrated against. Mark B has no rubber.
+
+| Passes | Half-lives | Mark A kept | Predicted | Mark B kept | Predicted | Ratio | Predicted |
+|---|---|---|---|---|---|---|---|
+| 64 | 0.25 | **0.5004** | 0.5000 | **0.8462** | 0.8409 | 1.691 | 1.68 |
+| 128 | 0.50 | **0.2502** | 0.2500 | **0.7117** | 0.7071 | 2.845 | 2.83 |
+| 256 | 1.00 | **0.0625** | 0.0625 | **0.5037** | 0.5000 | **8.053** | **8.00** |
+
+**At the calibrated half-life that is 56 laps: a mark on the settled apex keeps 6.25 % of itself and
+an identical mark off the line keeps 50 %.** Mark B's +0.7 % is the rounding drift in the table
+above. The assertion is 3 % relative, fixed in PLAN.md before the run.
+
+### E7 with real cars: the capture
+
+`RacetrackDemo.SkidMarkPair 1609 563`, a console command added for this capture and flagged as scope
+in PLAN.md. After 1609 s of track time, 20 laps, it read the rubber across the middle of the longest
+apex. It laid two identical 300 cm lockup marks there, each 134 coincident contacts sized to about
+1.0 exposure: one where a mark's footprint holds the most rubber, one on bare track a quarter of the
+width away. Settings: 20x dilation, decay rate 1, deposition 4 so the field builds a line in twenty
+laps. The same pair was run twice, once per view.
+
+| Laps after laying | Skid-only run: on the line | off it | rubber under the line | All-channels run: on the line | off it |
+|---|---|---|---|---|---|
+| 0 | 0.994629 laid | 0.994629 laid | 0.658 | 0.994629 laid | 0.994629 laid |
+| 7 | 0.7496 | 0.9205 | 0.873 | 0.7388 | 0.9210 |
+| 14 | 0.5454 | 0.8444 | 1.036 | 0.5351 | 0.8449 |
+| 28 | 0.2418 | 0.7128 | 1.340 | 0.2414 | 0.7128 |
+| 56 | **0.0328** | **0.5042** | 1.784 | **0.0321** | **0.5042** |
+
+- **The bare mark keeps 0.5042 after one half-life in both runs**, the calibrated fade plus the
+  rounding drift.
+- **The mark on the line keeps 3 %, a ratio of 15.4 and 15.7.** That is steeper than the controlled 8
+  because the field was still laying rubber: the line's exposure climbed from 0.66 to 1.78 at
+  deposition 4, and paving tracks it.
+- **Dilation held:** 563 s of track time passed between reports in 28.15 s of wall time, 20.0x. The
+  log's frame counter wraps at 1000, so a frame rate cannot be recovered from it and none is claimed.
+- **"Laps" in the report is track time over `GetLapSeconds`**, which runs 7.5 % fast (C10.4), so 56
+  reported laps is one half-life exactly and about 52 laps actually driven.
+
+Stills, in `assets/media/`:
+
+| Still | Shows |
+|---|---|
+| `e7-skid-pair-laid-skid-only` | Both marks just laid, skid channel only, caption naming the pair |
+| `e7-skid-pair-7-laps-skid-only` | 7 laps on, caption 75 % and 92 % |
+| `e7-skid-pair-14-laps-skid-only` | 14 laps on |
+| `e7-skid-pair-28-laps-skid-only` | 28 laps on |
+| `e7-skid-pair-56-laps-skid-only` | 56 laps on, caption *"the mark on the line keeps 3 %, the mark off it 50 %"* |
+| `e7-skid-pair-laid-all-channels` | The second run as laid: the left mark over the red rubber line, the right over bare track beside the blue marble band |
+| `e7-skid-pair-14-laps-all-channels` | 14 laps on |
+| `e7-skid-pair-56-laps-all-channels` | 56 laps on |
+
+Every still was opened and renders the road, both marks and the caption. **The display maps coverage,
+`1 - exp(-3E)`, not exposure**, so on screen the 56-lap mark on the line is dimmer than the bare one
+but not in the 3 : 50 proportion of the numbers. Whether that reads well is not judged here.
+
+### Formats, and the fallback the review asked for
+
+This RHI reports typed UAV loads for `FloatRGBA`, `A32B32G32R32F` and `B8G8R8A8`. In-place decay is
+nonetheless RGBA16f only, because the rounding is to half-float spacing. An adversarial review of the
+plugin commits confirmed one defect: on an RHI without typed UAV loads for RGBA16f, decay would have
+stopped entirely, where C10's canvas pass ran anywhere. **Any target without a UAV now decays uniformly
+on the canvas instead, with one warning that skid is not paved over.**
+`RacetrackSurface.Decay.BufferWithoutAUavDecaysUniformlyOnTheCanvas` forces it with an RGBA32f buffer:
+400 of 400 texels with skid over rubber kept skid at exactly the shared 0.840896, and rubber was at
+most 5.96e-8 off it.
+
+The B4 sweep decays every format again, the others through the fallback:
+
+| Resolution | RGBA8, fallback | RGBA16f, coupled in place | RGBA32f, fallback |
+|---|---|---|---|
+| 1024 | 0.1050 ms | 0.1200 ms | 0.2170 ms |
+| 2048 | 0.1310 ms | 0.1380 ms | 0.6020 ms |
+| 4096 | 0.2610 ms | 0.2730 ms | 2.1030 ms |
+
+All three columns are from the final suite. Each buffer holds four strokes, so these are
+near-empty-buffer figures, and they are not interleaved.
+
+### Observed on the way, and not changed
+
+**Additive strokes have no lateral falloff.** The brush's falloff is in its alpha, and
+`SE_BLEND_Additive` is `CW_RGB, One, One`, so alpha never reaches the destination. A 12.8-texel
+rubber stroke read back as 13 equal texels at 0.3582. It is why the capture command places a mark by
+its footprint rather than by the single highest texel, which had picked the band's edge.
+
+### Not verified
+
+- **The fallback has never run on hardware that needed it.** It is exercised by forcing formats
+  without a UAV on an RHI that supports typed UAV loads for all three.
+- **The +0.71 % drift is one fixture on one GPU.** Another GPU's `exp2` and `round` were not checked.
+- **The real-car figures are two runs of one configuration**, at deposition 4, not the calibrated 1.
+  At deposition 1 the line needs about five times as many laps to build.
+- **Paint cost with the UAV flag was not timed interleaved.** Only the decay pass was. The sweep's
+  paint figures are in the same range as before, which is not the same claim.
+- **Nothing was run in PIE.** The captures are standalone `-game`.
+- **The looks of the stills are not judged.** They render, and whether they read is the user's call.
