@@ -2933,3 +2933,39 @@ by `Surface.GatherAgreesWithTheShaderAtTheSameRadius` instead of by the screen.
 - **Standalone `-game` only.** The follow camera and the overlay have not been run in PIE.
 - **One moment of one run per still.** Each is wherever the leader happened to be 45 seconds in.
 
+---
+
+## 2026-09-25 — A flaky readback test, found by the suite and fixed
+
+```
+Build:    Development, editor target, UnrealEditor-Cmd.exe headless with the editor closed
+Power:    MAINS
+Test:     RacetrackSurface.Query.ReadbackResolvedFrameNeverGoesBackwards, which predates phase F5
+```
+
+The sixth full run of this phase failed one pre-existing test with *"Twenty four submissions gave 0
+readable caches ... with 0 resolves and 20 dropped"*. The five runs before it passed.
+
+**The test asserted something the GPU did not promise.** It looped 24 times over `Submit` and
+`FlushRenderingCommands` with no engine frame in between, then required that at least one copy had
+resolved. F2 already established that the flush waits for the render thread and not the GPU, so
+whether anything retires inside that loop depends on how busy the GPU happens to be.
+
+| Run | Resolves | Dropped |
+|---|---|---|
+| Alone, three runs | 11, 19, 22 | 1, 0, 0 |
+| Straight after `ReadbackLosesNoSubmissionWhenTheRingFills`, three runs | 10, 8, 18 | 7, 10, 0 |
+| In the full suite, once | **0** | 20 |
+| **After the fix**, straight after the burst test, three runs | **22, 22, 22** | **0, 0, 0** |
+
+The test that sorts immediately before it fires sixteen submissions into a ring of two as fast as
+the render thread will take them, so the GPU is still working through that burst when this one
+starts. The pair was the two-test repro; the full suite only added more GPU work ahead of it.
+
+**Fixed by submitting once per engine frame from a latent command**, which is the pattern the
+project's traps list already prescribes and the one `Performance.QueryReadbackRingDepth` uses. The
+assertion is unchanged. Two full runs afterwards: **113 of 113 both times**.
+
+**This does not change what the product does.** Only the test's loop changed. The ring behaved
+correctly throughout — every submission was accepted or counted as dropped, and no resolved frame
+went backwards in any run.
