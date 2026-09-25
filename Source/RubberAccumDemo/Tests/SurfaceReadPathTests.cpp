@@ -293,4 +293,343 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 	return true;
 }
 
+namespace
+{
+	constexpr const TCHAR* BlurRadiusParameterName = TEXT("SurfaceBlurTexels");
+
+	constexpr int32 AgreementWidth = 64;
+
+	constexpr int32 AgreementHeight = 16;
+
+	constexpr int32 AgreementFirstColumn = 44;
+
+	constexpr int32 AgreementColumnCount = 5;
+
+	constexpr int32 AgreementColumnStride = 2;
+
+	constexpr int32 AgreementFirstRow = 5;
+
+	constexpr int32 AgreementRowCount = 4;
+
+	constexpr float AgreementFrameSeconds = 1.0f / 60.0f;
+
+	constexpr int32 AgreementFrameBudget = 240;
+
+	constexpr float HalfFloatAgreementTolerance = 2.0e-3f;
+
+	struct FAgreementSample
+	{
+		int32 Column = 0;
+
+		int32 Row = 0;
+
+		FSurfaceTrackCoordinate Coordinate;
+
+		FSurfaceQueryHandle Handle;
+
+		float FromTheShader = 0.0f;
+
+		float FromTheGather = 0.0f;
+	};
+
+	struct FAgreementScenario
+	{
+		USurfaceAccumulationSubsystem* Subsystem = nullptr;
+
+		FSurfaceTrackRibbon Ribbon;
+
+		TArray<FAgreementSample> Samples;
+
+		int32 FramesWaited = 0;
+
+		void Finish()
+		{
+			if (Subsystem != nullptr)
+			{
+				for (const FAgreementSample& Sample : Samples)
+				{
+					Subsystem->ReleaseSurfaceQuery(Sample.Handle);
+				}
+
+				Subsystem->ResetSurface();
+				Subsystem = nullptr;
+			}
+
+			Samples.Reset();
+		}
+	};
+
+	FSurfaceTrackCoordinate CoordinateAtSampledPixel(
+		const FSurfaceTrackRibbon& Ribbon,
+		int32 Column,
+		int32 Row)
+	{
+		FSurfaceTrackCoordinate Coordinate;
+
+		Coordinate.DistanceAlongCentreline =
+			(Column + 0.5) / AgreementWidth * Ribbon.TrackLength;
+
+		Coordinate.LateralOffsetAlpha = 2.0 * (Row + 0.5) / AgreementHeight - 1.0;
+
+		return Coordinate;
+	}
+}
+
+DEFINE_LATENT_AUTOMATION_COMMAND_TWO_PARAMETER(
+	FCompareGatherAgainstTheShaderLatentCommand,
+	FAutomationTestBase*, Test,
+	TSharedPtr<FAgreementScenario>, Scenario);
+
+bool FCompareGatherAgainstTheShaderLatentCommand::Update()
+{
+	FAgreementScenario& State = *Scenario;
+
+	if (State.Subsystem == nullptr)
+	{
+		return true;
+	}
+
+	bool bAllResolved = true;
+
+	for (FAgreementSample& Sample : State.Samples)
+	{
+		const FSurfaceStateSample Answer =
+			State.Subsystem->QuerySurfaceStateInTrackSpace(Sample.Handle, Sample.Coordinate);
+
+		if (Answer.Status != ESurfaceSampleStatus::Valid)
+		{
+			bAllResolved = false;
+			continue;
+		}
+
+		Sample.FromTheGather = Answer.SkidMark;
+	}
+
+	if (bAllResolved)
+	{
+		double WorstDisagreement = 0.0;
+		int32 WorstColumn = 0;
+		int32 WorstRow = 0;
+		int32 CarryingSomething = 0;
+
+		for (const FAgreementSample& Sample : State.Samples)
+		{
+			const double Disagreement = FMath::Abs(Sample.FromTheGather - Sample.FromTheShader);
+
+			if (Disagreement > WorstDisagreement)
+			{
+				WorstDisagreement = Disagreement;
+				WorstColumn = Sample.Column;
+				WorstRow = Sample.Row;
+			}
+
+			CarryingSomething += Sample.FromTheShader > 0.0f ? 1 : 0;
+
+			Test->TestEqual(
+				FString::Printf(
+					TEXT("The canvas gather and MF_SampleRacetrackSurface agree at sampled pixel %d, %d, "
+						"which is lap fraction %.4f across alpha %.4f: gather %.6f against shader %.6f"),
+					Sample.Column,
+					Sample.Row,
+					Sample.Coordinate.DistanceAlongCentreline / State.Ribbon.TrackLength,
+					Sample.Coordinate.LateralOffsetAlpha,
+					Sample.FromTheGather,
+					Sample.FromTheShader),
+				Sample.FromTheGather,
+				Sample.FromTheShader,
+				HalfFloatAgreementTolerance);
+		}
+
+		Test->AddInfo(FString::Printf(
+			TEXT("%d sampled points, %d of them carrying a painted value, worst disagreement %.6f at "
+				"pixel %d, %d, over %d engine frames"),
+			State.Samples.Num(),
+			CarryingSomething,
+			WorstDisagreement,
+			WorstColumn,
+			WorstRow,
+			State.FramesWaited));
+
+		Test->TestTrue(
+			TEXT("Some of the compared points carry a painted value, so the agreement is not two "
+				"readers agreeing that an empty buffer is empty"),
+			CarryingSomething > 0);
+
+		Test->TestTrue(
+			TEXT("Some of the compared points are clean, so the sample spans an edge rather than "
+				"sitting inside a flat region where any kernel would agree"),
+			CarryingSomething < State.Samples.Num());
+
+		State.Finish();
+
+		return true;
+	}
+
+	if (++State.FramesWaited > AgreementFrameBudget)
+	{
+		Test->AddError(FString::Printf(
+			TEXT("Not every gather resolved across %d engine frames"), AgreementFrameBudget));
+
+		State.Finish();
+
+		return true;
+	}
+
+	State.Subsystem->Tick(AgreementFrameSeconds);
+
+	return false;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSurfaceGatherAgreesWithTheShaderAtTheSameRadius,
+	"RubberAccumDemo.Surface.GatherAgreesWithTheShaderAtTheSameRadius",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSurfaceGatherAgreesWithTheShaderAtTheSameRadius::RunTest(const FString& Parameters)
+{
+	if (!FApp::CanEverRender())
+	{
+		AddWarning(TEXT("Skipped: build cannot render."));
+		return true;
+	}
+
+	UWorld* World = FindReadPathWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No editor, game or PIE world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr || !Subsystem->IsInitialized())
+	{
+		AddWarning(TEXT("Skipped: the world's accumulation subsystem is not initialised."));
+		return true;
+	}
+
+	UMaterial* DebugMaterial = LoadObject<UMaterial>(nullptr, DebugMaterialPath);
+
+	if (DebugMaterial == nullptr)
+	{
+		AddError(FString::Printf(TEXT("Could not load %s, which is the only existing reader."), DebugMaterialPath));
+		return false;
+	}
+
+	const FSurfaceTrackRibbon Ribbon = MakeTwoRowReadRibbon();
+
+	Subsystem->ConfigureTrackRibbon(nullptr, Ribbon);
+	Subsystem->ResetSurface();
+
+	UTextureRenderTarget2D* Accumulation = Subsystem->GetOrCreateAccumulationTarget();
+
+	if (Accumulation == nullptr)
+	{
+		AddError(TEXT("The subsystem produced no accumulation target."));
+		return false;
+	}
+
+	IConsoleVariable* DepositionScale = IConsoleManager::Get().FindConsoleVariable(
+		RacetrackSurfaceMapping::DepositionScaleVariableName);
+
+	const float RestoreDepositionScale = DepositionScale != nullptr ? DepositionScale->GetFloat() : 1.0f;
+
+	if (DepositionScale != nullptr)
+	{
+		DepositionScale->Set(ReadPathDepositionScale);
+	}
+
+	const double TravelCentimetres = (PaintedAlongTrackEnd - PaintedAlongTrackStart) * Ribbon.TrackLength;
+
+	Subsystem->RegisterSurfaceContactInTrackSpace(
+		PaintedAlongTrackEnd * Ribbon.TrackLength,
+		0.0,
+		TravelCentimetres / ReadPathSeconds,
+		1.0f,
+		60.0f,
+		EAccumulationChannel::SkidMark);
+
+	Subsystem->Tick(ReadPathSeconds);
+
+	if (DepositionScale != nullptr)
+	{
+		DepositionScale->Set(RestoreDepositionScale);
+	}
+
+	const double BlurRadiusInTexels =
+		USurfaceAccumulationSubsystem::GetQueryContactPatchWidth() / (2.0 * Ribbon.SafeCentimetresPerTexel());
+
+	UMaterialInstanceDynamic* Sampler = UMaterialInstanceDynamic::Create(DebugMaterial, World);
+
+	if (Sampler == nullptr)
+	{
+		AddError(TEXT("Could not create a dynamic instance of the debug material."));
+		return false;
+	}
+
+	Sampler->SetTextureParameterValue(RacetrackSurfaceMapping::AccumulationTargetParameterName, Accumulation);
+	Sampler->SetScalarParameterValue(BlurRadiusParameterName, static_cast<float>(BlurRadiusInTexels));
+
+	AddInfo(FString::Printf(
+		TEXT("SurfaceBlurTexels set to %.4f, which is the query's contact patch radius in texels: a "
+			"%.1f cm patch over %.4f cm per texel, halved. The shader's Radius scales tap spacing and "
+			"so does BuildTaps, so at this value the display read and the query read are the same "
+			"kernel and must agree exactly rather than approximately"),
+		BlurRadiusInTexels,
+		USurfaceAccumulationSubsystem::GetQueryContactPatchWidth(),
+		Ribbon.CentimetresPerTexel));
+
+	UTextureRenderTarget2D* Sampled = UKismetRenderingLibrary::CreateRenderTarget2D(
+		World, AgreementWidth, AgreementHeight, RTF_RGBA16f, FLinearColor::Black, false, false);
+
+	if (Sampled == nullptr)
+	{
+		AddError(TEXT("Could not create the render target the material is sampled into."));
+		return false;
+	}
+
+	UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, Sampled, Sampler);
+
+	const TArray<FLinearColor> Coverage = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+		World, Sampled, 0, 0, AgreementWidth, AgreementHeight, false);
+
+	UKismetRenderingLibrary::ReleaseRenderTarget2D(Sampled);
+
+	if (Coverage.Num() != AgreementWidth * AgreementHeight)
+	{
+		AddError(FString::Printf(
+			TEXT("Readback returned %d texels, expected %d"),
+			Coverage.Num(),
+			AgreementWidth * AgreementHeight));
+
+		return false;
+	}
+
+	TSharedPtr<FAgreementScenario> Scenario = MakeShared<FAgreementScenario>();
+
+	Scenario->Subsystem = Subsystem;
+	Scenario->Ribbon = Ribbon;
+
+	for (int32 ColumnStep = 0; ColumnStep < AgreementColumnCount; ++ColumnStep)
+	{
+		for (int32 RowStep = 0; RowStep < AgreementRowCount; ++RowStep)
+		{
+			FAgreementSample Sample;
+
+			Sample.Column = AgreementFirstColumn + ColumnStep * AgreementColumnStride;
+			Sample.Row = AgreementFirstRow + RowStep;
+			Sample.Coordinate = CoordinateAtSampledPixel(Ribbon, Sample.Column, Sample.Row);
+			Sample.FromTheShader = Coverage[Sample.Row * AgreementWidth + Sample.Column].G;
+			Sample.Handle = Subsystem->AcquireSurfaceQuery();
+
+			Scenario->Samples.Add(Sample);
+		}
+	}
+
+	ADD_LATENT_AUTOMATION_COMMAND(FCompareGatherAgainstTheShaderLatentCommand(this, Scenario));
+
+	return true;
+}
+
 #endif
