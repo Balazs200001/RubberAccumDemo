@@ -1640,6 +1640,27 @@ with the same profile for all of them — so the ordering by cumulative distance
 leader changes only when a car is destroyed. Hysteresis would be machinery guarding a case that
 cannot occur in this demo. Recomputed every tick regardless, because it is twenty comparisons.
 
+**Amended 2026-09-25: that held in real time only, and the reason was a bug in the car.** The
+argument is right about the continuous motion and was wrong about the code. `ASplineFollowingCar`
+integrated its speed and distance in one step per frame, and under `TimeDilation 20` a frame is a
+third of a second to a second of game time, so a car moved 1000 to 3000 cm in one step — further
+than its own 2500 cm braking lookahead. At that step size the update stops being one-to-one: a car
+still on the straight jumps its full 3000 cm while the car just ahead, already braking, moves 1650,
+so two different positions can land on the same next position, and two cars that share a state
+share it from then on. Measured on the real grid, a car merged onto the one ahead at a one-second
+frame and stayed at a gap of 0.0 cm, and at a 0.667 s frame a car drove through the one ahead — so
+under compression the order *could* change and the leader could swap, which is the case this
+section said could not occur. It was seen on screen first, as the leader drawn with a second car
+inside it.
+
+**Fixed in the car, not with hysteresis here**: the car now sub-steps its motion in steps of at
+most 1/60 s of game time, and still places its wheels and registers its contacts once per frame.
+1/60 s because every real-time measurement in this project was taken at it, so a compressed run now
+drives the same field those measurements describe — the regression test finds the same smallest
+gap, 796.4 cm, between the same two cars at the same moment, at 1x and at 20x at 60, 30 and 20 fps.
+At one sub-step the code is the old code exactly, so nothing measured in real time moves. With the
+fix, the argument above holds at any frame rate for the reason it originally gave.
+
 **Cars that have not placed their wheels are skipped**, on `HasPlacedItsWheels()`, and so are null
 entries in `SpawnedField`. The first tick of the field has no wheel positions yet and querying at
 `FVector::ZeroVector` would report `OutsideRegion` at the world origin.
