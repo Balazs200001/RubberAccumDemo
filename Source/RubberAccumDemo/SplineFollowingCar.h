@@ -236,6 +236,8 @@ private:
 
 	void PlaceOnTrack();
 
+	void DriveAlongTrack(float StepSeconds);
+
 	void UpdateCornerCommitment(double CorneringAmount);
 
 	void UpdateBrakingCommitment(double BrakingAmount);

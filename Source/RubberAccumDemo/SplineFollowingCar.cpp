@@ -16,6 +16,8 @@ namespace
 
 	constexpr int32 BrakingSeedOffset = 1000003;
 	constexpr int32 MarbleSeedOffset = 2000003;
+
+	constexpr float LongestDrivingStepSeconds = 1.0f / 60.0f;
 }
 
 ASplineFollowingCar::ASplineFollowingCar()
@@ -263,22 +265,8 @@ void ASplineFollowingCar::BeginPlay()
 	PlaceOnTrack();
 }
 
-void ASplineFollowingCar::Tick(float DeltaSeconds)
+void ASplineFollowingCar::DriveAlongTrack(float StepSeconds)
 {
-	Super::Tick(DeltaSeconds);
-
-	if (Track == nullptr || DeltaSeconds <= UE_SMALL_NUMBER)
-	{
-		return;
-	}
-
-	USurfaceAccumulationSubsystem* Subsystem = GetWorld()->GetSubsystem<USurfaceAccumulationSubsystem>();
-
-	if (Subsystem == nullptr)
-	{
-		return;
-	}
-
 	const double SignedCornering = Track->GetSignedCorneringAtDistance(DistanceAlongTrack);
 	const double CorneringAmount = FMath::Max(
 		FMath::Abs(SignedCornering),
@@ -297,7 +285,7 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 	SpeedCentimetresPerSecond = FMath::FInterpConstantTo(
 		SpeedCentimetresPerSecond,
 		TargetSpeed,
-		DeltaSeconds,
+		StepSeconds,
 		SpeedChangeCentimetresPerSecondSquared);
 
 	UpdateCornerCommitment(CorneringAmount);
@@ -313,14 +301,40 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		ApexTarget,
 		CorneringLineCommitment * FMath::Abs(SignedCornering));
 
-	const double PreviousLateralOffsetAlpha = LateralOffsetAlpha;
-
 	LateralOffsetAlpha = FMath::Clamp(
-		FMath::FInterpTo(LateralOffsetAlpha, TargetLateralOffsetAlpha, DeltaSeconds, LineChangeResponsiveness),
+		FMath::FInterpTo(LateralOffsetAlpha, TargetLateralOffsetAlpha, StepSeconds, LineChangeResponsiveness),
 		-1.0,
 		1.0);
 
-	DistanceAlongTrack += SpeedCentimetresPerSecond * DeltaSeconds;
+	DistanceAlongTrack += SpeedCentimetresPerSecond * StepSeconds;
+}
+
+void ASplineFollowingCar::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (Track == nullptr || DeltaSeconds <= UE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = GetWorld()->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		return;
+	}
+
+	const double SignedCornering = Track->GetSignedCorneringAtDistance(DistanceAlongTrack);
+	const double PreviousLateralOffsetAlpha = LateralOffsetAlpha;
+
+	const int32 StepCount = FMath::Max(1, FMath::CeilToInt32(DeltaSeconds / LongestDrivingStepSeconds));
+	const float StepSeconds = DeltaSeconds / StepCount;
+
+	for (int32 Step = 0; Step < StepCount; ++Step)
+	{
+		DriveAlongTrack(StepSeconds);
+	}
 
 	const FVector RearAxle = Track->GetWorldPositionAtDistance(DistanceAlongTrack, LateralOffsetAlpha);
 	const FVector Forward = Track->GetWorldDirectionAtDistance(DistanceAlongTrack);
