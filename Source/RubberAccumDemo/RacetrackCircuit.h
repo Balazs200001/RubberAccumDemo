@@ -26,6 +26,21 @@ enum class ESurfaceDebugView : uint8
 	Marbles
 };
 
+struct FSkidMarkPairPlacement
+{
+	double DistanceAlongCentreline = 0.0;
+
+	double OnTheLineAlpha = 0.0;
+
+	double OffTheLineAlpha = 0.0;
+
+	float OnTheLineRubber = 0.0f;
+
+	float OffTheLineRubber = 0.0f;
+
+	int32 ContactsPerMark = 0;
+};
+
 UCLASS()
 class ARacetrackCircuit : public AActor
 {
@@ -195,6 +210,17 @@ public:
 		return DecayHalfLifeInLaps;
 	}
 
+	double FindLongestApexDistance() const;
+
+	void ArmSkidMarkPair(double DelaySeconds, double ReportIntervalSeconds);
+
+	const TOptional<FSkidMarkPairPlacement>& GetSkidMarkPair() const
+	{
+		return SkidMarkPair;
+	}
+
+	bool ReadSkidMarkPair(FLinearColor& OutOnTheLine, FLinearColor& OutOffTheLine);
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;
@@ -346,6 +372,14 @@ private:
 
 	void BindAccumulationTargetToRoad();
 
+	void AdvanceSkidMarkPair(float DeltaSeconds);
+
+	void LaySkidMarkPair(float DeltaSeconds);
+
+	void ReportSkidMarkPair();
+
+	void PlaceObserverAboveSkidMarkPair();
+
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<USplineComponent> Spline;
 
@@ -373,4 +407,16 @@ private:
 	double TightestCurvature = 0.0;
 
 	double TotalTurningRadians = 0.0;
+
+	TOptional<double> SecondsUntilSkidMarkPair;
+
+	double SkidMarkPairReportInterval = 0.0;
+
+	double SecondsUntilSkidMarkPairReport = 0.0;
+
+	double SecondsSinceSkidMarkPairLaid = 0.0;
+
+	TOptional<FSkidMarkPairPlacement> SkidMarkPair;
+
+	TOptional<FVector2D> SkidMarkPairLaidSkid;
 };

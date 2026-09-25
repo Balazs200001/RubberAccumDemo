@@ -197,6 +197,103 @@ namespace RacetrackDemoCommands
 		TEXT("0 shows all three channels, 1 rubber buildup, 2 skid marks, 3 marbles. The same handler "
 			"the C key calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetChannelView));
+
+	void ArmSkidMarkPair(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit != nullptr)
+		{
+			Circuit->ArmSkidMarkPair(
+				Arguments.Num() > 0 ? FCString::Atod(*Arguments[0]) : 0.0,
+				Arguments.Num() > 1 ? FCString::Atod(*Arguments[1]) : 0.0);
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs SkidMarkPairCommand(
+		TEXT("RacetrackDemo.SkidMarkPair"),
+		TEXT("After the first argument's seconds of track time, lays two identical lockup marks across the "
+			"middle of the longest apex: one on the texel the field has rubbered most, one on the least "
+			"rubbered texel at least a quarter of the track away, then parks the camera over them. Every "
+			"second argument's seconds of track time after that it reads both back and reports what each "
+			"still holds. The readbacks stall the game thread, so this is a capture tool rather than "
+			"something to leave running."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ArmSkidMarkPair));
+}
+
+namespace RacetrackSkidMarkPair
+{
+	constexpr double MarkLengthCentimetres = 300.0;
+
+	constexpr float LaidExposure = 1.0f;
+
+	constexpr double EdgeMarginCentimetres = 50.0;
+
+	constexpr int32 MaximumContactsPerMark = 4096;
+
+	constexpr double ObserverPitchDegrees = 60.0;
+
+	constexpr double ObserverFramingScale = 1.4;
+
+	constexpr int32 ApexSearchSlices = 2000;
+
+	constexpr double ApexCorneringAmount = 0.98;
+
+	int32 AtlasColumnAt(const FSurfaceTrackRibbon& Ribbon, double DistanceAlongCentreline, int32& OutRowIndex)
+	{
+		const double AlongTrack = Ribbon.NormalisedAlongTrack(Ribbon.WrapDistance(DistanceAlongCentreline));
+
+		OutRowIndex = Ribbon.RowIndexAt(AlongTrack);
+
+		return FMath::Clamp(
+			FMath::FloorToInt32(Ribbon.RibbonToAtlasInRow(OutRowIndex, AlongTrack, 0.0).X * Ribbon.AtlasWidth()),
+			0,
+			Ribbon.AtlasWidth() - 1);
+	}
+
+	int32 LateralTexelAt(const FSurfaceTrackRibbon& Ribbon, double LateralOffsetAlpha)
+	{
+		return FMath::Clamp(
+			FMath::FloorToInt32(FSurfaceTrackRibbon::NormalisedAcrossTrack(LateralOffsetAlpha) * Ribbon.AcrossTrackTexels()),
+			0,
+			Ribbon.AcrossTrackTexels() - 1);
+	}
+
+	double LateralTexelCentreAlpha(const FSurfaceTrackRibbon& Ribbon, int32 Texel)
+	{
+		return 2.0 * (Texel + 0.5) / Ribbon.AcrossTrackTexels() - 1.0;
+	}
+
+	TArray<float> RubberUnderAMarkCentredAt(const TArray<FLinearColor>& Band, int32 MarkTexels)
+	{
+		TArray<float> Footprint;
+		Footprint.SetNumZeroed(Band.Num());
+
+		for (int32 Centre = 0; Centre < Band.Num(); ++Centre)
+		{
+			const int32 First = FMath::Max(Centre - MarkTexels / 2, 0);
+			const int32 Last = FMath::Min(Centre - MarkTexels / 2 + MarkTexels, Band.Num());
+
+			for (int32 Texel = First; Texel < Last; ++Texel)
+			{
+				Footprint[Centre] += Band[Texel].R;
+			}
+		}
+
+		return Footprint;
+	}
+
+	int32 MiddleOfTheRunAt(const TArray<float>& Footprint, int32 Start, int32 End)
+	{
+		int32 RunEnd = Start;
+
+		while (RunEnd + 1 < End && Footprint[RunEnd + 1] == Footprint[Start])
+		{
+			++RunEnd;
+		}
+
+		return (Start + RunEnd) / 2;
+	}
 }
 
 namespace RacetrackLayouts
@@ -281,6 +378,417 @@ void ARacetrackCircuit::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	ReadAndDrawTheLeadersWheels();
+	AdvanceSkidMarkPair(DeltaSeconds);
+}
+
+double ARacetrackCircuit::FindLongestApexDistance() const
+{
+	const double Length = GetTrackLength();
+
+	if (Length <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	const int32 Slices = RacetrackSkidMarkPair::ApexSearchSlices;
+
+	double ApexDistance = 0.0;
+	double MostCornering = -1.0;
+	int32 LongestRun = 0;
+	int32 Run = 0;
+
+	for (int32 Slice = 0; Slice <= 2 * Slices; ++Slice)
+	{
+		const double Distance = Length * (Slice % Slices) / Slices;
+		const double Cornering = GetCorneringAmountAtDistance(Distance);
+
+		Run = Cornering > RacetrackSkidMarkPair::ApexCorneringAmount ? Run + 1 : 0;
+
+		if (Run > LongestRun)
+		{
+			LongestRun = Run;
+			ApexDistance = Length * (Slice - Run * 0.5) / Slices;
+		}
+
+		if (LongestRun == 0 && Cornering > MostCornering)
+		{
+			MostCornering = Cornering;
+			ApexDistance = Distance;
+		}
+	}
+
+	return WrapDistance(ApexDistance);
+}
+
+void ARacetrackCircuit::ArmSkidMarkPair(double DelaySeconds, double ReportIntervalSeconds)
+{
+	SecondsUntilSkidMarkPair = FMath::Max(DelaySeconds, 0.0);
+	SkidMarkPairReportInterval = FMath::Max(ReportIntervalSeconds, 0.0);
+	SecondsUntilSkidMarkPairReport = 0.0;
+	SecondsSinceSkidMarkPairLaid = 0.0;
+	SkidMarkPair.Reset();
+	SkidMarkPairLaidSkid.Reset();
+
+	const double LapSeconds = GetLapSeconds();
+	const double LapsUntilLaid = LapSeconds > UE_DOUBLE_SMALL_NUMBER ? SecondsUntilSkidMarkPair.GetValue() / LapSeconds : 0.0;
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s will lay a skid mark pair at the longest apex after %.0f s of track time, about %.1f laps, and "
+			"report on it every %.0f s"),
+		*GetName(),
+		SecondsUntilSkidMarkPair.GetValue(),
+		LapsUntilLaid,
+		SkidMarkPairReportInterval);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.SkidMarkPair"),
+		FString::Printf(TEXT("Skid mark pair due at the longest apex in about %.1f laps"), LapsUntilLaid));
+}
+
+void ARacetrackCircuit::AdvanceSkidMarkPair(float DeltaSeconds)
+{
+	if (SecondsUntilSkidMarkPair.IsSet())
+	{
+		SecondsUntilSkidMarkPair = SecondsUntilSkidMarkPair.GetValue() - DeltaSeconds;
+
+		if (SecondsUntilSkidMarkPair.GetValue() <= 0.0)
+		{
+			SecondsUntilSkidMarkPair.Reset();
+			LaySkidMarkPair(DeltaSeconds);
+		}
+
+		return;
+	}
+
+	if (!SkidMarkPair.IsSet())
+	{
+		return;
+	}
+
+	SecondsSinceSkidMarkPairLaid += DeltaSeconds;
+
+	if (!SkidMarkPairLaidSkid.IsSet())
+	{
+		FLinearColor OnTheLine;
+		FLinearColor OffTheLine;
+
+		if (ReadSkidMarkPair(OnTheLine, OffTheLine))
+		{
+			SkidMarkPairLaidSkid = FVector2D(OnTheLine.G, OffTheLine.G);
+			SecondsSinceSkidMarkPairLaid = 0.0;
+
+			UE_LOG(LogRacetrackSurface, Log,
+				TEXT("Skid mark pair laid with skid %.6f on the line over rubber %.6f, and %.6f off it over "
+					"rubber %.6f"),
+				OnTheLine.G,
+				OnTheLine.R,
+				OffTheLine.G,
+				OffTheLine.R);
+		}
+
+		return;
+	}
+
+	if (SkidMarkPairReportInterval <= 0.0)
+	{
+		return;
+	}
+
+	SecondsUntilSkidMarkPairReport -= DeltaSeconds;
+
+	if (SecondsUntilSkidMarkPairReport > 0.0)
+	{
+		return;
+	}
+
+	SecondsUntilSkidMarkPairReport = SkidMarkPairReportInterval;
+
+	ReportSkidMarkPair();
+}
+
+void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	USurfaceAccumulationBuffer* Buffer = Subsystem != nullptr ? Subsystem->GetBuffer() : nullptr;
+	UTextureRenderTarget2D* Target = Buffer != nullptr ? Buffer->GetTarget() : nullptr;
+
+	if (Target == nullptr)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.SkidMarkPair"),
+			TEXT("No accumulation buffer is allocated yet, so there is no line to lay a skid mark pair on"));
+		return;
+	}
+
+	const float ExposurePerContact =
+		RacetrackSurfaceMapping::SlipToExposure(1.0f, USurfaceAccumulationSubsystem::GetDepositionScale());
+
+	if (ExposurePerContact <= 0.0f)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.SkidMarkPair"),
+			TEXT("Deposition is off, so a skid mark pair would lay nothing"));
+		return;
+	}
+
+	const FSurfaceTrackRibbon& Ribbon = Subsystem->GetRibbon();
+	const int32 AcrossTexels = Ribbon.AcrossTrackTexels();
+	const double Distance = FindLongestApexDistance();
+
+	int32 RowIndex = 0;
+	const int32 Column = RacetrackSkidMarkPair::AtlasColumnAt(Ribbon, Distance, RowIndex);
+
+	const TArray<FLinearColor> Band = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+		this, Target, Column, RowIndex * AcrossTexels, 1, AcrossTexels, false);
+
+	if (Band.Num() != AcrossTexels)
+	{
+		return;
+	}
+
+	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();
+	const float ContactWidth = Reference != nullptr ? Reference->GetContactWidth() : 20.0f;
+
+	const int32 Margin = FMath::CeilToInt32(Ribbon.WorldDistanceToTexels(RacetrackSkidMarkPair::EdgeMarginCentimetres));
+	const int32 Separation = FMath::Max(AcrossTexels / 4, 1);
+	const int32 MarkTexels = FMath::Max(FMath::RoundToInt32(Ribbon.WorldDistanceToTexels(ContactWidth)), 1);
+	const TArray<float> Footprint = RacetrackSkidMarkPair::RubberUnderAMarkCentredAt(Band, MarkTexels);
+
+	int32 OnTheLine = INDEX_NONE;
+
+	for (int32 Texel = Margin; Texel < AcrossTexels - Margin; ++Texel)
+	{
+		if (OnTheLine == INDEX_NONE || Footprint[Texel] > Footprint[OnTheLine])
+		{
+			OnTheLine = Texel;
+		}
+	}
+
+	if (OnTheLine != INDEX_NONE)
+	{
+		OnTheLine = RacetrackSkidMarkPair::MiddleOfTheRunAt(Footprint, OnTheLine, AcrossTexels - Margin);
+	}
+
+	int32 OffTheLine = INDEX_NONE;
+
+	for (int32 Texel = Margin; OnTheLine != INDEX_NONE && Texel < AcrossTexels - Margin; ++Texel)
+	{
+		const int32 Apart = FMath::Abs(Texel - OnTheLine);
+
+		if (Apart < Separation)
+		{
+			continue;
+		}
+
+		const bool bLessRubber = OffTheLine == INDEX_NONE || Footprint[Texel] < Footprint[OffTheLine];
+		const bool bAsBareButCloser = OffTheLine != INDEX_NONE
+			&& Footprint[Texel] == Footprint[OffTheLine]
+			&& Apart < FMath::Abs(OffTheLine - OnTheLine);
+
+		if (bLessRubber || bAsBareButCloser)
+		{
+			OffTheLine = Texel;
+		}
+	}
+
+	if (OffTheLine == INDEX_NONE)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.SkidMarkPair"),
+			TEXT("The track is too narrow to lay two marks a quarter of its width apart"));
+		return;
+	}
+
+	const double MarkLength = RacetrackSkidMarkPair::MarkLengthCentimetres;
+	const double SweptShare = MarkLength / (MarkLength + ContactWidth);
+
+	FSkidMarkPairPlacement Placement;
+	Placement.DistanceAlongCentreline = Distance;
+	Placement.OnTheLineAlpha = RacetrackSkidMarkPair::LateralTexelCentreAlpha(Ribbon, OnTheLine);
+	Placement.OffTheLineAlpha = RacetrackSkidMarkPair::LateralTexelCentreAlpha(Ribbon, OffTheLine);
+	Placement.OnTheLineRubber = Band[OnTheLine].R;
+	Placement.OffTheLineRubber = Band[OffTheLine].R;
+	Placement.ContactsPerMark = FMath::Clamp(
+		FMath::CeilToInt32(RacetrackSkidMarkPair::LaidExposure / (ExposurePerContact * SweptShare)),
+		1,
+		RacetrackSkidMarkPair::MaximumContactsPerMark);
+
+	const double Speed = MarkLength / FMath::Max(static_cast<double>(DeltaSeconds), UE_DOUBLE_SMALL_NUMBER);
+	const double EndDistance = Distance + MarkLength * 0.5;
+	const double MarkAlphas[] = { Placement.OnTheLineAlpha, Placement.OffTheLineAlpha };
+
+	for (const double Alpha : MarkAlphas)
+	{
+		for (int32 Contact = 0; Contact < Placement.ContactsPerMark; ++Contact)
+		{
+			Subsystem->RegisterSurfaceContactInTrackSpace(
+				EndDistance,
+				Alpha,
+				Speed,
+				1.0f,
+				ContactWidth,
+				EAccumulationChannel::SkidMark);
+		}
+	}
+
+	SkidMarkPair = Placement;
+	SkidMarkPairLaidSkid.Reset();
+	SecondsSinceSkidMarkPairLaid = 0.0;
+	SecondsUntilSkidMarkPairReport = SkidMarkPairReportInterval;
+
+	PlaceObserverAboveSkidMarkPair();
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s laid a skid mark pair %.0f cm round the lap, at the middle of the longest apex: on the line at "
+			"alpha %.4f over rubber %.6f, off it at alpha %.4f over rubber %.6f, each %.0f cm long and made of "
+			"%d coincident lockup contacts"),
+		*GetName(),
+		Distance,
+		Placement.OnTheLineAlpha,
+		Placement.OnTheLineRubber,
+		Placement.OffTheLineAlpha,
+		Placement.OffTheLineRubber,
+		MarkLength,
+		Placement.ContactsPerMark);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.SkidMarkPair"),
+		FString::Printf(
+			TEXT("Two identical skid marks laid: one on the rubbered line, one %.1f m off it on bare track"),
+			FMath::Abs(Placement.OnTheLineAlpha - Placement.OffTheLineAlpha) * TrackWidth * 0.5 / 100.0));
+}
+
+bool ARacetrackCircuit::ReadSkidMarkPair(FLinearColor& OutOnTheLine, FLinearColor& OutOffTheLine)
+{
+	if (!SkidMarkPair.IsSet())
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	USurfaceAccumulationBuffer* Buffer = Subsystem != nullptr ? Subsystem->GetBuffer() : nullptr;
+	UTextureRenderTarget2D* Target = Buffer != nullptr ? Buffer->GetTarget() : nullptr;
+
+	if (Target == nullptr)
+	{
+		return false;
+	}
+
+	const FSurfaceTrackRibbon& Ribbon = Subsystem->GetRibbon();
+	const int32 AcrossTexels = Ribbon.AcrossTrackTexels();
+
+	int32 RowIndex = 0;
+	const int32 Column = RacetrackSkidMarkPair::AtlasColumnAt(Ribbon, SkidMarkPair->DistanceAlongCentreline, RowIndex);
+
+	const TArray<FLinearColor> OnTheLine = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+		this,
+		Target,
+		Column,
+		RowIndex * AcrossTexels + RacetrackSkidMarkPair::LateralTexelAt(Ribbon, SkidMarkPair->OnTheLineAlpha),
+		1,
+		1,
+		false);
+
+	const TArray<FLinearColor> OffTheLine = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+		this,
+		Target,
+		Column,
+		RowIndex * AcrossTexels + RacetrackSkidMarkPair::LateralTexelAt(Ribbon, SkidMarkPair->OffTheLineAlpha),
+		1,
+		1,
+		false);
+
+	if (OnTheLine.Num() != 1 || OffTheLine.Num() != 1)
+	{
+		return false;
+	}
+
+	OutOnTheLine = OnTheLine[0];
+	OutOffTheLine = OffTheLine[0];
+
+	return true;
+}
+
+void ARacetrackCircuit::ReportSkidMarkPair()
+{
+	FLinearColor OnTheLine;
+	FLinearColor OffTheLine;
+
+	if (!SkidMarkPairLaidSkid.IsSet() || !ReadSkidMarkPair(OnTheLine, OffTheLine))
+	{
+		return;
+	}
+
+	const FVector2D Laid = SkidMarkPairLaidSkid.GetValue();
+	const double OnTheLineKept = OnTheLine.G / FMath::Max(Laid.X, UE_DOUBLE_SMALL_NUMBER);
+	const double OffTheLineKept = OffTheLine.G / FMath::Max(Laid.Y, UE_DOUBLE_SMALL_NUMBER);
+
+	const double LapSeconds = GetLapSeconds();
+	const double Laps = LapSeconds > UE_DOUBLE_SMALL_NUMBER ? SecondsSinceSkidMarkPairLaid / LapSeconds : 0.0;
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("Skid mark pair after %.0f s of track time, %.2f laps: on the line keeps %.4f of its laid skid over "
+			"rubber %.6f, off the line keeps %.4f over rubber %.6f, a ratio of %.3f"),
+		SecondsSinceSkidMarkPairLaid,
+		Laps,
+		OnTheLineKept,
+		OnTheLine.R,
+		OffTheLineKept,
+		OffTheLine.R,
+		OffTheLineKept / FMath::Max(OnTheLineKept, UE_DOUBLE_SMALL_NUMBER));
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.SkidMarkPairReport"),
+		FString::Printf(
+			TEXT("%.1f laps after laying: the mark on the line keeps %.0f %%, the mark off it %.0f %%"),
+			Laps,
+			OnTheLineKept * 100.0,
+			OffTheLineKept * 100.0));
+}
+
+void ARacetrackCircuit::PlaceObserverAboveSkidMarkPair()
+{
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (!SkidMarkPair.IsSet() || Controller == nullptr || Controller->GetPawn() == nullptr)
+	{
+		return;
+	}
+
+	const double Distance = SkidMarkPair->DistanceAlongCentreline;
+	const FVector OnTheLine = GetWorldPositionAtDistance(Distance, SkidMarkPair->OnTheLineAlpha);
+	const FVector OffTheLine = GetWorldPositionAtDistance(Distance, SkidMarkPair->OffTheLineAlpha);
+	const FVector Focus = (OnTheLine + OffTheLine) * 0.5;
+	const FVector Forward = GetWorldDirectionAtDistance(Distance);
+	const FVector Up = GetWorldUpVectorAtDistance(Distance);
+
+	const double Spread = FMath::Max(
+		FVector::Distance(OnTheLine, OffTheLine),
+		RacetrackSkidMarkPair::MarkLengthCentimetres);
+	const double Range = Spread * RacetrackSkidMarkPair::ObserverFramingScale;
+	const double Pitch = FMath::DegreesToRadians(RacetrackSkidMarkPair::ObserverPitchDegrees);
+
+	const FVector Eye = Focus - Forward * (Range * FMath::Cos(Pitch)) + Up * (Range * FMath::Sin(Pitch));
+	const FRotator Look = (Focus - Eye).Rotation();
+
+	Controller->GetPawn()->SetActorLocationAndRotation(Eye, Look);
+	Controller->SetControlRotation(Look);
 }
 
 ASplineFollowingCar* ARacetrackCircuit::FindLeadingCar() const
