@@ -896,8 +896,9 @@ persistence on the line against off it.*
 
 ### E5 to E7, expanded 2026-09-25 before implementing
 
-Phase F is complete and 114 of 114 tests pass. E1 to E4 are the C10.3 decay pass and the work
-before it; what follows is only E5 to E7. **Nothing in this section has been built yet.**
+Phase F is complete and 114 of 114 tests pass. E1 is B5's saturating accumulator and E2 is the C10.3
+decay pass. **E3 and E4 are not built** (corrected 2026-09-25; this line first said E1 to E4 were
+done). What follows is only E5 to E7. **Nothing in this section has been built yet.**
 
 #### What D-E got wrong about E5's cost
 
