@@ -302,6 +302,8 @@ private:
 
 	void PlaceObserverAboveTrack();
 
+	void PlaceObserverBehindTheLeader(const ASplineFollowingCar& Leading);
+
 	void AcquireLeaderWheelQueries();
 
 	void ReleaseLeaderWheelQueries();

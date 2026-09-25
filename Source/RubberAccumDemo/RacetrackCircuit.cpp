@@ -43,6 +43,30 @@ namespace RacetrackCircuitDisplay
 		TEXT("the surface needs laps to build and the caption has to outlast them."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<int32> CVarFollowTheLeader(
+		TEXT("RacetrackDemo.FollowTheLeader"),
+		0,
+		TEXT("Parks the observer behind and above the leading car instead of framing the whole circuit. ")
+		TEXT("The wide framing is what the demo wants to show a racing line emerging over a lap; it puts ")
+		TEXT("a metre-long debug bar at about a pixel, so the query overlay cannot be read in it. Every ")
+		TEXT("capture this project takes is a standalone run driven from -ExecCmds at frame one, with no ")
+		TEXT("way to move the camera afterwards, so the camera has to be able to find the car itself."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarFollowDistance(
+		TEXT("RacetrackDemo.FollowDistance"),
+		450.0f,
+		TEXT("How far behind the leading car the observer sits, in centimetres, when it is following. ")
+		TEXT("Close enough that the query bars drawn beside the car are legible, far enough that all ")
+		TEXT("four wheels' bars are in frame together."),
+		ECVF_Default);
+
+	constexpr double FollowPitchDegrees = 40.0;
+
+	constexpr double FramingLateralFraction = -0.22;
+
+	constexpr double FramingVerticalFraction = 0.08;
+
 	constexpr double OverlayAheadOfTheCar = 60.0;
 
 	constexpr double OverlayBesideTheCar = 230.0;
@@ -383,6 +407,41 @@ void ARacetrackCircuit::ReadAndDrawTheLeadersWheels()
 			Basis,
 			LeaderWheelSamples[Wheel]);
 	}
+
+	if (RacetrackCircuitDisplay::CVarFollowTheLeader.GetValueOnGameThread() != 0)
+	{
+		PlaceObserverBehindTheLeader(*Leading);
+	}
+}
+
+void ARacetrackCircuit::PlaceObserverBehindTheLeader(const ASplineFollowingCar& Leading)
+{
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (Controller == nullptr || Controller->GetPawn() == nullptr)
+	{
+		return;
+	}
+
+	const double DistanceAlongTrack = Leading.GetDistanceAlongTrack();
+	const FVector Forward = GetWorldDirectionAtDistance(DistanceAlongTrack);
+	const FVector Right = GetWorldRightVectorAtDistance(DistanceAlongTrack);
+	const FVector Up = GetWorldUpVectorAtDistance(DistanceAlongTrack);
+	const FVector Focus = Leading.GetActorLocation();
+
+	const double Pitch = FMath::DegreesToRadians(RacetrackCircuitDisplay::FollowPitchDegrees);
+	const double Distance = FMath::Max(RacetrackCircuitDisplay::CVarFollowDistance.GetValueOnGameThread(), 1.0f);
+
+	const FVector Eye = Focus - Forward * (Distance * FMath::Cos(Pitch)) + Up * (Distance * FMath::Sin(Pitch));
+
+	const FVector AimedAt = Focus
+		- Right * (Distance * RacetrackCircuitDisplay::FramingLateralFraction)
+		- Up * (Distance * RacetrackCircuitDisplay::FramingVerticalFraction);
+
+	const FRotator Look = (AimedAt - Eye).Rotation();
+
+	Controller->GetPawn()->SetActorLocationAndRotation(Eye, Look);
+	Controller->SetControlRotation(Look);
 }
 
 bool ARacetrackCircuit::StartsPausedAfterCommandLine() const
