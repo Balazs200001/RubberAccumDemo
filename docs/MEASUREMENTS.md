@@ -2595,3 +2595,234 @@ fold was applied. An unfolded average over a circuit that turns both ways measur
   recorded against C4 and not taken.
 - **Everything here is the Spa demo layout.** The Stadium figures elsewhere in this file are still
   Stadium figures and the two should not be compared.
+
+---
+
+## 2026-09-24 — F5 to F8: the query path measured, and a readback bug the measurement found
+
+```
+Build:    Development, editor target, UnrealEditor-Cmd.exe headless with the editor closed
+Power:    MAINS, confirmed from Win32_Battery BatteryStatus 2 and BatteryStatus.PowerOnline True
+          rather than assumed
+Scene:    62500 cm lap, 800 cm wide, 3.1250 cm per texel, 2 rows, atlas 10000 x 512, on a 64 point
+          closed circle. One submission per engine frame on an otherwise idle run
+Driven:   RacetrackSurface.Performance.QueryCostAndLatency, .QueryReadbackRingDepth,
+          RacetrackSurface.Query.LatencyCostsLessThanTheFieldVariesAlongTrack,
+          RubberAccumDemo.Surface.GatherAgreesWithTheShaderAtTheSameRadius
+Suite:    113 of 113 passing, no GPU crash, both build paths clean
+```
+
+**113 of 113, up from 103.** Ten new tests, one of which found a bug that had nothing to do with
+what it was written for.
+
+### The bug the measurement found, which is the most valuable thing in this entry
+
+`RacetrackSurface.Query.LatencyCostsLessThanTheFieldVariesAlongTrack` acquires 41 query handles
+after one has already resolved. That widens the gather target from 1 slot to 41, and the RHI thread
+died with `E_INVALIDARG` at `D3D12CommandList.cpp:244` two frames later.
+
+**`ResolveSurfaceQueries` logged a claim the code did not carry out.** The message read *"the
+readback staging textures are rebuilt"*, but the call behind it was
+`FSurfaceQueryReadback::Invalidate()`, which bumps the epoch and clears the resolved cache and
+**never touches the `FRHIGPUTextureReadback` objects**. Those are created once per ring slot and
+reused, and `RHIGPUReadback.cpp:139` documents the assumption they carry: *"Assume for now that
+every enqueue happens on a texture of the same format and size (when reused)."* A staging texture
+sized for a 1 texel source was handed a 41 texel one.
+
+| | |
+|---|---|
+| Repro cost | **one test, 20 seconds**, against a twelve minute suite |
+| Fix | `RebuildForANewSourceSize()`, which resets the ring on the render thread so the next enqueue builds staging textures at the new size |
+| Guard | `RacetrackSurface.Query.GrowingTheQueryCountAfterResolvingStaysSafe` — one handle resolves, the count grows to 24, every one of them then answers with the painted mark. Recovered in **3 engine frames** |
+
+**This is user facing, not a test artefact.** Any caller whose live query count rises at runtime —
+a second car starting to query, a wheel added — grows the gather target under a ring already in
+flight. Nothing before this test did, because everything before it held a fixed handle count.
+
+It is the same shape as the reallocation bug F4 found: a resource resized underneath work the GPU
+had not finished with. The method that found it is also the same, and it is the transferable part:
+**shrink the repro before forming hypotheses.** One test reproduced it in 20 seconds, and the log
+line that was lying named the cause outright.
+
+### Latency, and the number the tolerance claim rests on
+
+| Quantity | Measured |
+|---|---|
+| Latency | **2 query frames, 3 engine frames, 0.0500 s** of dilated world time |
+| Along track travel over that, at 5500 cm/s | **183.3 cm, 58.7 texels** |
+| Lateral travel over that, at 1.20 alpha/s | **0.0400 alpha, 16.0 cm, 5.12 texels** |
+
+Measured on a swept skid from lap fraction 0.30 to 0.60, **300 cm wide**, at 100x the derived
+deposition so coverage sits at **0.440** — in the responsive part of the saturation curve rather
+than flattened against it. The band's lateral edges sit at alpha 0.375 and the lateral pairs sweep
+from -0.5 to 0.5, so some of them straddle one.
+
+The error is the coverage difference between the position submitted and the position the wheel
+occupies when the answer lands. It is taken from **two resolved values of one run** — the field is
+sampled at a point and at that point displaced by the measured latency — so no second reader has to
+agree with the first for the number to mean anything.
+
+| Direction | Median error | Worst | Coverage there | Worst as a fraction |
+|---|---|---|---|---|
+| Along track, inside the band | 0.000204 | 0.000207 | 0.440 | **0.05 %** |
+| Laterally | 0.000000 | **0.232302** | 0.309 | **75 %** |
+| Across a painted step edge | 0.000204 | 0.087805 | 0.421 | 21 % |
+
+**This half confirms the proposal's tolerance argument and half contradicts it, and the
+contradiction is the useful part.**
+
+PLAN.md corrected the proposal's reason — the delay is tolerable not because the field is static
+but because *"the field is smooth in the direction the wheel is moving fastest"* — and added that
+*"lateral position is what barely moves in three frames"*. The first clause holds and is now
+measured: along track the wheel moves 58.7 texels and the coverage it reads changes by 0.000204,
+which is the fp16 noise floor of a value near 0.44 and not a gradient at all. A swept deposit is
+uniform along its own direction of travel, by construction, because that is how it was laid.
+
+**The second clause is where the error actually lives.** The lateral move is small — 5.12 texels —
+but it is small against a field whose sharpest gradient runs *across* the band. A pair straddling
+the band's lateral edge disagrees by **0.232**, three orders of magnitude more than the along track
+case and 75 % of the coverage at that point. The median is zero because most of the band's width is
+flat, so this is a tail and not a typical frame. But it is the tail a grip model would feel: it is
+exactly the moment a car puts a wheel off the racing line.
+
+So the honest statement of the tolerance is **not** "the error is small". It is: *the error is at
+the noise floor wherever the field is smooth, and is bounded by the field's own gradient times the
+latency displacement wherever it is not, which on this field peaks at 0.23 coverage at the edge of
+an accumulated band.* Whether that matters is a question for whatever grip model consumes it, which
+is outside this plugin's boundary by design.
+
+### Query cost, at the demo's four points and at eighty
+
+| Points | Gather GPU median | GPU minimum | per point | BuildTaps CPU | WorldToTrack CPU | per point |
+|---|---|---|---|---|---|---|
+| **4** | **0.1030 ms** | 0.0870 ms | 0.02575 ms | 0.0005 ms | **0.0155 ms** | 0.00388 ms |
+| 80 | 0.1560 ms | 0.1460 ms | 0.00195 ms | 0.0082 ms | 0.3035 ms | 0.00379 ms |
+
+At the demo's four points the whole query costs **0.1030 ms on the GPU and 0.0160 ms on the CPU**,
+against the **0.3340 ms** decay pass already in the frame and 16.67 ms of a 60 Hz frame. It is under
+a third of a pass this project already pays for every frame, and about 0.7 % of the frame.
+
+**The gather is fixed cost dominated, and that is worth knowing before anyone optimises it.**
+Twenty times the points costs 1.5 times the GPU time — 0.1030 ms against 0.1560 ms — so per point
+the cost falls from 0.02575 ms to 0.00195 ms, a factor of thirteen. The clear and the canvas flush
+dominate 18 tile draws per point. The consequence: **there is no per point saving available at four
+points**, and the compute pass rejected in PLAN.md would be optimising the part that is already
+free. If the gather ever needs to be cheaper, the target is the fixed cost, not the taps.
+
+**R2's segment cache trigger is not approached and must not be described as the design target.**
+R2 wrote it as *"any world-space caller reaching 80 contacts per frame in a real scene"*. The demo
+reads one car, which is four, costing **0.0155 ms** of world to track conversion — 0.09 % of a
+frame. The trigger stays unimplemented for a reason rather than by omission.
+
+**One discrepancy recorded rather than smoothed over.** World to track at 80 points reads 0.3035 ms
+here against the **0.1383 ms** R2 measured for the same count. Different circuit: this entry uses a
+64 point closed circle of radius 9947 cm sized to the 62500 cm ribbon, R2 swept 18 to 1024 points at
+radius 15000 cm. Both are below R2's 1 ms crossover and neither supersedes the other; they are not
+the same measurement and should not be quoted as one.
+
+### Ring depth 4, measured rather than inherited
+
+One submission per engine frame, 30 frames at each depth, standalone ring, idle headless run.
+
+| Depth | Submissions | Accepted | Dropped | Resolves seen | Median resolve gap |
+|---|---|---|---|---|---|
+| 1 | 30 | 30 | 0 | 28 | 2 |
+| 2 | 30 | 30 | 0 | 28 | 2 |
+| 3 | 30 | 30 | 0 | 28 | 2 |
+| **4** | 30 | 30 | 0 | 28 | **2** |
+| 8 | 30 | 30 | 0 | 28 | 2 |
+
+**Depth buys nothing on this workload.** A ring of one drops nothing and answers exactly as fast as
+a ring of eight. Depth 4 is what Nanite streaming, Lumen surface cache feedback and distance field
+streaming each settled on independently with no shared engine constant tying them together, and
+PLAN.md recorded that as convention rather than derivation. The derivation now exists and says
+**one would do**.
+
+The default stays at 4 and the reason is stated rather than assumed: the sweep measures a GPU
+keeping up, and depth is insurance for one that does not. The hitch case below is what depth is
+for, and it is cheap — four staging textures of one row each.
+
+**What the "2 frames" is, precisely.** It is measured on the game thread from `CopyResolved`, so it
+includes the render thread hand off and is not GPU time. That depth 1 never fills means the GPU was
+finishing inside a single frame; the two frame gap is the cost of the answer crossing back, not of
+the copy.
+
+### F7: level load, a hitch, and actor destruction
+
+Three separate cases, because they fail in three different ways.
+
+| Case | Test | Result |
+|---|---|---|
+| Level load | `Query.ReadbackSurvivesTeardownWithACopyInFlight` | The ring outlived the game thread's pointer, died on the render thread, **no crash and nothing leaked** |
+| A hitch | `Query.SurvivesAHitch` | **Recovered 2 engine frames** after a single 500 ms tick with a gather in flight: 3 submitted, 3 accepted, **0 dropped** |
+| Actor destruction | `Demo.FourHandlesSurviveAChangeOfLeader` | The four handles keep **slot and generation** across the leader being destroyed. Acquired once, released once |
+| Gather target growth | `Query.GrowingTheQueryCountAfterResolvingStaysSafe` | Recovered in 3 engine frames. **This is the one that failed before the fix above** |
+
+The level load case does not need a world swap to be exercised. What a level change does to this
+system is `Deinitialize` the subsystem while GPU copies are in flight, and the hazard is a render
+command writing into freed memory. It cannot happen because every render command captures
+`AsShared()` rather than `this`, at all three sites. The test submits a copy, releases on the render
+thread, drops the last game thread reference, and flushes: the weak pointer is dead afterwards and
+nothing crashed.
+
+**The verdict F7 owed: the readback stays and the CPU grid is not built.** The evidence is the four
+rows above plus the cost table — it survives all three cases, and at four points it costs under a
+third of a pass already in the frame. The fallback was *"roughly an afternoon, public API
+unchanged"* at **coarse** grid fidelity, and PLAN.md is explicit that a full fidelity CPU shadow is
+not an afternoon. Nothing in these numbers argues for spending it.
+
+### The gather and the shader agree exactly, not approximately
+
+`RubberAccumDemo.Surface.GatherAgreesWithTheShaderAtTheSameRadius`, on a **2 row folded** ribbon of
+62500 cm by 200 cm at 200x deposition.
+
+| | |
+|---|---|
+| `SurfaceBlurTexels` | **3.2000**, the query's contact patch *radius* in texels: a 20 cm patch over 3.1250 cm per texel, halved |
+| Points compared | 20, spanning the painted band's edge in **both** axes |
+| Carrying a painted value | 12 of 20, so the agreement is not two readers agreeing an empty buffer is empty |
+| **Worst disagreement** | **0.000342** |
+
+F0 established that the display read and the query read are the same kernel at two radii, because
+the shader's `Radius` scales tap *spacing* and so does `BuildTaps`. Setting them equal turns F5's
+check from *"these ought to be close"* into a forced equality, which catches a wrong sample
+position, a wrong fold **and** a wrong weight where an approximate check catches only the first.
+0.000342 is fp16 rounding across an 18 tap sum and nothing else.
+
+**The radius is 3.2 and not 6.4.** PLAN.md said to set `SurfaceBlurTexels` "to the contact patch
+width", which reads as 6.4 texels for a 20 cm patch. `BuildTaps` computes
+`ContactPatchWidth / (2 * SafeCentimetresPerTexel())`, so the agreeing value is the half width.
+Setting 6.4 compares a tent against one of twice the radius and fails for a reason that is not a
+bug. The test derives the number from the console variable and the ribbon rather than hard coding
+it.
+
+### Not verified
+
+- **Nothing in this entry has been looked at on screen.** The editor was closed throughout and
+  Unreal MCP was unreachable — port 8000 was not listening, and the server loads at session start,
+  so restarting the editor would not have made the tools available either. The F5 overlay's
+  appearance is a separate capture, recorded on its own; everything above is headless.
+- **The hitch test does not prove staleness reporting under a real long frame.** It ticks the
+  subsystem by hand with a 500 ms delta, which exercises the ring and the banked decay, but
+  `World->GetTimeSeconds()` advances on engine frames and not on that call. `SecondsSinceResolved`
+  read 0.0500 s before and after, which is the test's own clock and not a 500 ms frame's. What is
+  demonstrated is that the ring does not wedge and loses no submission across a long tick.
+- **The 1.20 alpha per second lateral rate is an assumption, not a measurement.** It is derived from
+  `LineChangeResponsiveness` 2.0 against a plausible line change, as the fastest a car in this demo
+  plausibly moves across the track. The lateral error figure scales with it, so if the real rate is
+  half that, so is the 0.232. No run has measured the field's actual peak lateral rate.
+- **One field shape, one deposition.** The tolerance numbers are taken on a single swept band at
+  100x. A field built by twenty cars over many laps has a different lateral profile, probably softer
+  at the edges, which would lower the 0.232. That has not been measured.
+- **The ring depth sweep measures an idle machine.** Every depth behaved identically because the GPU
+  was never behind. The sweep says nothing about which depth is right when it is, which is the case
+  depth exists for.
+- **`QueryCostAndLatency` times the gather, not the whole frame.** It calls `GatherTaps` in
+  isolation through `SampleGpuWork`, so it excludes the readback copy and the drain. No `stat GPU`
+  capture of the query inside a running demo frame exists.
+- **The 80 point figure is the stress case and was never run in a real scene.** It is 80 synthetic
+  points on a static buffer, not twenty cars reading four wheels each.
+- **The gather target growth fix is tested at one transition.** One slot to 24, and one slot to 41
+  in the latency test. No test shrinks the count, because `EnsureGatherTarget` never shrinks the
+  target, and none grows it twice in a run.
+
