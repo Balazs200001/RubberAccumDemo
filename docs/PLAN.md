@@ -1205,6 +1205,89 @@ are unchanged and must still pass, because rate 0, banking and allocation are un
   the unmeasured 20x frame rate and sub-step cost. The capture run will print a frame rate as a side
   effect, and it is recorded only as what it is.
 
+### Measured on implementing, 2026-09-25. The plan was wrong three times, and the tests caught a defect C10 shipped.
+
+**E5 to E7 are met. 120 of 120 tests pass headlessly with the editor closed, and both build paths are
+clean.** Numbers are in [MEASUREMENTS.md](MEASUREMENTS.md). This section records only where the plan
+above was wrong, and what was decided because of it.
+
+**The D3D12 UAV store truncates, so the pass rounds each value itself.** The first E7 run failed in an
+informative way. The *ratio* between the marks was right, 8.03 against 8.00, but both marks lost about 8 %
+more than predicted over one half-life (the bare one kept 0.4586 against 0.5000). A tally in the
+closed-form test settled it. Of 8640 values where round-to-nearest and truncation give different half
+floats, **all 8640 landed on the truncation**. So every pass took half an ulp off every texel, and the
+buffer decayed with a half-life about 11 % shorter than the calibrated one. The closed-form test
+had passed because one pass is still within half-float tolerance: **a bias cannot be seen in one
+pass, only in many.**
+
+- **Fixed in the shader, not in C++.** `RoundToNearestHalfFloat` builds the half-float spacing for each
+  value's exponent out of the float's own bits, and rounds to a multiple of it with `round`, which is
+  round-half-to-even. The store then only ever converts values it can represent exactly, so its own
+  rounding mode no longer matters. After the fix, 8640 of 8640 and 43680 of 43680 land on the nearest,
+  and **256 coupled passes keep half of every value to within +0.71 % on average.**
+- **This is why in-place decay is RGBA16f only.** The rounding is to half-float spacing, which would
+  throw away precision on RGBA32f and mean nothing on RGBA8. The plan said RGBA8 could not decay
+  because `PF_B8G8R8A8` lacks typed UAV loads. **That was wrong:** this RHI reports typed UAV loads
+  for `FloatRGBA`, `A32B32G32R32F` and `B8G8R8A8` alike. The restriction is correct, and the reason
+  for it was not.
+- **The test now asserts both properties**: each stored value is rounded to nearest (truncations at most
+  1 % of the distinguishable values), and a half-life of passes leaves half within 1 % on average.
+
+**C10's canvas pass had a defect of its own, found by the same measurement.** The test draws the C10
+quad exactly as `ApplyDecay` drew it, 256 times on the same fixture. **It kept 5.06 % less than half.**
+So every decay that has run since C10.3 has used an effective half-life of about 52.1 laps, not the
+calibrated 56. The equilibrium arithmetic in C10.4 is unaffected, because it is CPU arithmetic from a
+counted deposit. **What is affected is anything observed with decay on, meaning the C10.5 stills,
+which faded about 7 % faster than their captions imply.** Nothing tested it, because no test ever
+compounded GPU passes. It is recorded, not re-measured, and the coupled pass replaces the path that
+had it.
+
+**E6's prediction held, and the recorded 0.3340 ms turns out to be an empty-buffer figure.** Timed
+interleaved in the final full suite:
+
+| | Coupled pass | C10 quad, plain target | C10 quad, UAV target |
+|---|---|---|---|
+| Empty buffer | **0.2350 ms** | 0.3430 ms | 0.3440 ms |
+| Filled with incompressible noise | **1.4570 ms** | 1.4270 ms | 1.4320 ms |
+
+On an empty buffer the coupled pass is cheaper than the quad it replaced. Populated, the three are
+within 4 % of one another at the bandwidth-bound figure the plan predicted. **The UAV flag costs the
+canvas nothing measurable.** Two earlier runs moved the absolute figures by up to 44 % and none of
+these comparisons, which is the reason for interleaving. At Spa's half-life the populated pass costs
+0.0011 to 0.0014 ms a frame at 1x and 0.022 to 0.028 ms a frame at 20x, which ends the cost question.
+
+**The capture command's placement rule was wrong on first contact with a real buffer.** Additive
+strokes have **no lateral falloff**. The brush's falloff is in alpha, and `SE_BLEND_Additive` is
+`CW_RGB, One, One`, so alpha never reaches the destination: a painted rubber band read back as 13
+equal texels. The first rule, highest single texel, therefore picked the band's *edge*. It now takes
+the texel whose mark-width footprint holds the most rubber and resolves ties to the middle of the
+tied run. The bare mark is chosen by the same footprint, so the whole mark sits on bare track. **The
+flat-topped stroke is pre-existing and is not changed here.** It is recorded because R4's width
+figures and any future falloff argument depend on it.
+
+**The plan's tests table held, with two additions.** `CoupledPassMatchesTheClosedFormAtEveryTexel` also
+carries the rounding and half-life assertions above, and reports the C10 quad's drift for
+comparison. The second addition is below. The count is 120.
+
+**Decided after an adversarial review: a target without a UAV decays uniformly on the canvas, not
+at all.** Four reviewers read the plugin commits, and each of their findings was then handed to a
+separate agent told to refute it. One defect survived, reported by two of the four: on an RHI
+without typed UAV loads for RGBA16f, `ApplyDecay` returned false on every pass, so decay stopped for
+the whole session, and C10's canvas pass had run anywhere. That is a regression this change
+introduced, so it is fixed here rather than recorded.
+
+| Option | Verdict |
+|---|---|
+| Fail loudly and do not decay | **Rejected.** Loud, but still removes a behaviour the plugin had |
+| Fall back to the C10 quad, with one warning that skid is not paved over | **Taken.** It is the code this change removed, restored as `ApplyUniformDecayOnCanvas` and reached only when there is no UAV |
+
+`ApplyDecay` takes a world context again, which only the canvas path needs.
+`RacetrackSurface.Decay.BufferWithoutAUavDecaysUniformlyOnTheCanvas` forces the fallback with an
+RGBA32f buffer, and asserts that skid over rubber decays at exactly the shared rate. **So the plan's
+line that an RGBA8 buffer can no longer decay is now doubly wrong**: it decays, on the fallback. The
+fallback keeps C10's 5 % drift, which is stated rather than fixed because nothing in production
+reaches it on this machine.
+
 ## Phase F — Query path
 
 The half of the project that turns accumulation from an effect into a mechanic. Everything built so
