@@ -887,12 +887,323 @@ The clearest proof the mechanism works, and the reason to prioritise it over mar
 | E2 | Decay pass over real time, frequency as a cost knob | Line fades over a session |
 | E3 | Wash-out call for users to hook to rain | One call, measurable effect |
 | E4 | Roughness and specular change with slight darkening, verified under Lumen and baked | Reads as laid rubber under both |
-| E5 | **The coupling**: skid decay rate as a function of local buildup | Marks on the line are paved over, marks off it persist |
-| E6 | Second profiling pass, focused on the decay pass | Numbers recorded |
-| E7 | Validation: two identical marks, traffic over one only, compare intensity | A number, not an impression |
+| E5 | **The coupling**: skid decay rate as a function of local buildup. *Expanded 2026-09-25, [below](#e5-to-e7-expanded-2026-09-25-before-implementing)*: an in-place compute pass, skid decaying `1 + k * RubberExposure` times as fast as the shared rate | Marks on the line are paved over, marks off it persist; the GPU pass agrees with its C++ closed form texel for texel |
+| E6 | Second profiling pass, focused on the decay pass. *Expanded*: the coupled pass and the C10 quad timed interleaved in one run, empty and populated | Numbers recorded, from the same run, with the power state |
+| E7 | Validation: two identical marks, traffic over one only, compare intensity. *Expanded*: a headless test with controlled traffic against a closed form, and a real-car capture laid by a console command | A number, not an impression, predicted before it was measured |
 
 *Exit: a racing line that appears from being driven on, and a measured difference in skid
 persistence on the line against off it.*
+
+### E5 to E7, expanded 2026-09-25 before implementing
+
+Phase F is complete and 114 of 114 tests pass. E1 to E4 are the C10.3 decay pass and the work
+before it; what follows is only E5 to E7. **Nothing in this section has been built yet.**
+
+#### What D-E got wrong about E5's cost
+
+Phase G recorded that per-channel rates are free, because `SE_BLEND_Modulate` is `Dst = Src * Dst`
+per channel, and concluded that *"E5 was priced assuming this needed either three passes or a new
+render path. It needs neither."* **The first half is right and the conclusion is not.** A colour
+`(RetentionR, RetentionG, RetentionB, 1)` gives three *constant* rates. E5 needs skid's rate at each
+texel to depend on the rubber *in that texel*, which is a per-texel, cross-channel, nonlinear term.
+Checked against the 5.8 source rather than argued:
+
+- `SE_BLEND_Modulate` binds `TStaticBlendState<CW_RGB, BO_Add, BF_DestColor, BF_Zero>`
+  (`BatchedElements.cpp:490`). The blend unit multiplies each destination channel by the same
+  source channel. No `ERHIBlendFactor` lets destination R scale destination G.
+- The pixel shader bound for it computes `Texture * Color` (`SimpleElementPixelShader.usf:70-94`).
+  It never reads the destination, so a per-texel rubber value cannot reach it.
+- The only batched-element shader that mixes channels is the colour-channel-mask path
+  (`SimpleElementColorChannelMaskPixelShader.usf:19-51`). It runs only under Opaque or Translucent
+  blend (`BatchedElements.cpp:609-619`), never Modulate, and its mix is a fixed *linear* matrix set
+  per draw on the CPU (`BatchedElements.cpp:589-643`).
+- Anything more expressive is `FBatchedElementParameters::BindShaders` (`BatchedElements.h:86-96`),
+  which is a custom global shader in all but name, or a material.
+
+**So this is D7's category, not F1's.** F1 rejected a compute pass because the canvas could already
+do the job. Here the canvas cannot, so F1's rejection does not carry over, for the same reason D7
+recorded that C0's does not carry over to a `max` blend.
+
+#### Decided: an in-place global compute shader, not a material pass
+
+Both routes were priced against the 5.8 source.
+
+| | Material via `DrawMaterialToRenderTarget` | Global compute shader |
+|---|---|---|
+| Reads its own target | Illegal, and **nothing guards it**: no alias check anywhere from `KismetRenderingLibrary.cpp:164-229` through `Renderer.cpp:473-711`, so a mistake is silent | Legal: a `RWTexture2D` read-modify-write where each thread touches only its own texel |
+| Second target | Yes, **+112.5 MiB**, doubling the buffer (`PixelFormat.cpp:44`: 8 bytes a texel) | None |
+| Work per pass | A full-target `CopyTexture` into the snapshot, then a material draw through the full base-pass mesh processor (`Renderer.cpp:601-711`). Two full passes and a heavier setup | One dispatch |
+| Where the logic lives | A Custom node inside a `.uasset`, recorded verbatim in `EDITOR_SETUP.md` per F0 | A `.usf` in the plugin, reviewable in a diff |
+| Editor dependency | The asset needs the editor and MCP. **MCP is down this session** (nothing on port 8000) | None |
+
+**Taken: the compute shader.** CLAUDE.md prefers logic in a diff over logic in a graph, and it wins
+on memory, pass count and safety as well. What it brings is everything F1 priced, plus one cost F1
+did not see:
+
+- A `Shaders/` directory, and `AddShaderSourceDirectoryMapping(TEXT("/Plugin/RacetrackSurface"), ...)`
+  in `StartupModule`. **5.8 does not map plugin shader directories automatically**
+  (`PluginManager.cpp` has no shader mapping). Every engine plugin with shaders does it by hand,
+  for example `WaterModule.cpp:18-22`. `ShaderCore.cpp:4218-4253` `checkf`s that the directory
+  exists.
+- A private `Projects` dependency for `IPluginManager::FindPlugin` (`IPluginManager.h:393`).
+- **The runtime module moves from `Default` to `PostConfigInit`, which F1 did not price.**
+  `FShaderTypeRegistration`'s constructor `checkf`s *"Shader type was loaded too late, use
+  ELoadingPhase::PostConfigInit"* (`Shader.cpp:312-317`), and `CommitAll` runs straight after
+  `PostConfigInit` modules load (`LaunchEngineLoop.cpp:3152`). A `Default` module with
+  `IMPLEMENT_GLOBAL_SHADER` asserts on load.
+- **Live Coding cannot take a new shader type**, which settles F1's open question. The registration
+  is a static constructed at DLL load, and it has no Live Coding rerun hook (`Shader.h:1764`, against
+  `DelayedAutoRegister.cpp:22-40`, which has one). New shader classes need an editor restart.
+
+**Decided: move the whole runtime module rather than split out a shader module.** Both patterns are
+Epic's. Water (`Water.uplugin:19-22`) and VirtualHeightfieldMesh keep UObjects and global shaders
+in one `PostConfigInit` runtime module; PCG splits them into `PCG` at `Default` and a UObject-free
+`PCGCompute` at `PostConfigInit`. A split module would need its dispatch exported across a module
+boundary, which CLAUDE.md asks to keep minimal. Moving the phase is one line, and it has a direct
+precedent with a `UWorldSubsystem` in the module (`WaterSubsystem`). **Risk, stated:** UObject
+classes and console variables now register before the engine is up. The plugin's CDOs are trivial,
+and every console callback already guards `GEngine == nullptr`, but this is the change to suspect
+first if startup misbehaves.
+
+**The target needs a UAV.** `UKismetRenderingLibrary::CreateRenderTarget2D` already takes
+`bSupportUAVs` and sets `bCanCreateUAV` before creating the resource
+(`KismetRenderingLibrary.cpp:78-93`), and `FTextureRenderTarget2DResource::GetCreateFlags` turns that
+into `ETextureCreateFlags::UAV` (`TextureRenderTarget2D.cpp:492-517`). So this is the existing call's
+last argument, not new allocation code.
+
+**The shader reads through its UAV, which is a typed UAV load.** Whether `PF_FloatRGBA` supports one
+is a driver fact queried at device creation (`D3D12Device.cpp:202-266`), exposed as
+`RHIIsTypedUAVLoadSupported` (`RHI.h:133-141`), and the D3D shader compiler rejects the load unless
+the shader opts in with `CFLAG_AllowTypedUAVLoads` (`D3DShaderCompiler.cpp:1041-1079`, the idiom at
+`SpecularProfile.cpp:125`). So:
+
+- A UAV is requested only for a format that reports typed UAV loads. The production `RTF_RGBA16f`
+  is expected to; **`RTF_RGBA8` is `PF_B8G8R8A8`, which is not in D3D12's typed-load set, so an
+  RGBA8 buffer can no longer decay.** Only three measurement tests allocate RGBA8, and nothing in
+  production does.
+- A test asserts the production format supports it on this machine, so an RHI that does not fails
+  loudly instead of silently never decaying.
+- `ApplyDecay` returns whether a pass was issued, and `DecayPassCount` counts only real passes.
+
+**RDG leaves an external texture in `SRVMask` after `Execute`** (`RenderGraphResources.h:361,454`),
+and the canvas paths transition `Unknown -> RTV` themselves (`KismetRenderingLibrary.cpp:68`), so the
+pass composes with the paint, sweep and gather draws that follow it. The target is registered with
+`FRenderTarget::GetRenderTargetTexture(FRDGBuilder&)` (`UnrealClient.cpp:193-201`). **No engine
+example does a single-texture in-place pass**; the nearest, `GeometryMaskPostProcess_Blur.cpp`, uses
+a second texture and copies back. In-place is standard HLSL, but its behaviour under RDG validation
+is established by the first test run, not by the source.
+
+#### Decided: skid decays `1 + k * E_rubber` times as fast, and the constant is `k` itself
+
+The coupling is **derived**, not chosen, and it adds no constant.
+
+`k = SaturationConstant = 3.0` already says what one unit of exposure does to a point: coverage is
+`1 - exp(-k E)`, so a point stays uncovered by a further deposit `dE` with probability
+`exp(-k dE)`. A skid mark on a point is *paved over* when fresh rubber covers that point. Under a
+steady rubber deposit of `D` exposure a second, the fraction of a mark still uncovered after `t`
+seconds is `exp(-k D t)`: **paving is a decay of rate `k D`**, on top of the shared `lambda`.
+
+A texel does not know its deposit rate, only its stored rubber. At equilibrium C10.3 already has
+`E = D / lambda`, so `D = lambda E`, and:
+
+```
+lambda_skid = lambda + k D = lambda (1 + k E_rubber)
+SkidRetention(P) = 2^(-P (1 + k E_rubber))       P = half-lives banked since the last pass
+```
+
+At the calibrated apex, `E = 1.0`, skid decays **4.0 times** as fast: a 14-lap half-life against 56
+off the line. On the straight's settled line (`E = 0.1224`, C10.4) it is 1.37 times.
+
+- **Where the constant lives.** Nowhere new. `SaturationConstant` in `SurfaceAccumulationMapping.h`
+  is passed to the shader as a parameter on every dispatch, so the HLSL has no literal to drift, the
+  same way it reaches the display material through the MPC. The formula exists twice, as
+  `RacetrackSurfaceMapping::SkidRetentionForProgress` and in the `.usf`, and a GPU test compares
+  every texel of a pass against the C++ form. That is C9's rule applied to a new pair.
+- **Limits of the proxy, stated.** Stored rubber stands in for traffic. While the line is still
+  building, `E < D / lambda`, so marks are paved *slower* than the traffic deserves. After traffic
+  stops, rubber lingers and marks keep being paved by cars that are no longer there. Both are what
+  E5 asks for, *"from that texel's own rubber"*, and neither is hidden.
+- **It multiplies exposure, not coverage**, the same approximation the shared decay already makes.
+  For a thin mark the two agree, since `1 - exp(-kS) ~ kS`.
+
+#### Decided: the coupling reads exposure, not coverage
+
+1. **The derivation lands on exposure.** Paving is linear in deposit rate, and at equilibrium
+   exposure is what is proportional to deposit rate. Coverage saturates: 0.95 and 0.99 coverage are
+   a 1.5-fold difference in traffic that coverage compresses to 4 %. In coverage terms the same law
+   is `1 - ln(1 - c)`, so reading coverage would only mean inverting it back.
+2. **It stays right under `r.RacetrackSurface.DepositionScale`.** Scaling deposits by `s` scales
+   equilibrium exposure by `s` and the true paving rate by `s`, so `k * lambda * sE = k * sD`
+   exactly. A coverage coupling would saturate, and captures run at raised deposition, so it would
+   under-pave in exactly the configuration that is looked at.
+3. **Nothing transcendental is inverted in the shader.** The stored value is read directly.
+
+**The cost of this choice: the rate is unbounded.** At 32x deposition an apex settles near
+exposure 32, a 97-fold rate, and a mark on it falls to 1 % in eighteen passes. The retention is the exact
+exponential for the pass, not a linearisation, so a large rate is a coarser visual step and not an
+error or an instability.
+
+#### Decided: rubber and marbles keep the shared rate
+
+Nothing asks for a change, and changing either would move C10.4's calibrated half-life and G's
+measured equilibria. In the compute pass a per-channel rate would be as free as it is on the
+canvas, so this is a choice rather than a limitation. R and B are multiplied by `2^(-P)`. Alpha is
+written back as read.
+
+#### Banked progress, the half-float floor, and rate 0
+
+- **Per unit of progress.** The pass takes `P`, the half-lives banked since the last one, and forms
+  both retentions from it, instead of taking a retention. That keeps a hitch exact for skid as
+  C10.3 did for the shared channels. With rubber constant across a span, the product over passes is
+  `2^(-sum(P) (1 + kE))`, which is frame-rate independent. With rubber changing, it is a left
+  Riemann sum at 1/256 of a half-life a step.
+- **The floor is inherited.** `1 + k * max(E, 0) >= 1`, so every texel's skid retention is at most
+  the shared one, and `DecayStepSurvivesHalfFloatRounding` already holds the shared one at 5.5 times
+  the `4.883e-4` threshold. The shader clamps `max(E, 0)` so that no input can reach a multiplier
+  below 1. A test asserts `SkidRetentionForProgress <= DecayRetentionForProgress` for every exposure.
+- **Rate 0 is untouched.** `ApplyDecayWhenAStepHasElapsed` returns before it reaches the buffer,
+  and `RateOfZeroNeverRunsThePass` still asserts zero passes over an hour. The UAV flag changes how
+  the texture may be bound, not a value in it, so C9 is reproduced bit for bit.
+
+#### Confirmed: the query does not change
+
+`ResolveSurfaceQueries` and `BuildSurfaceStateSample` never touch decay. They gather whatever is in
+the target and convert it with `ExposureToCoverage` (`SurfaceAccumulationSubsystem.cpp:662-823`).
+The coupling changes what is stored, not how it is read, and the query tests are the check that
+the UAV flag did not change the gather.
+
+#### E6: timed in one run, because the baseline did not reproduce
+
+Taken on 2026-09-25 before any change, on mains (`PowerOnline True`), on the committed build, with
+the `DecayAtTheProductionAtlas` test the 0.3340 ms came from:
+
+| How the test was run | Median | Minimum |
+|---|---|---|
+| Alone, first after boot | **0.7440 ms** | 0.7080 ms |
+| First of the `Performance` group | **0.7460 ms** | 0.6570 ms |
+| After the eight `Accumulator` tests | **0.4390 ms** | 0.4220 ms |
+| 48 full-suite runs in `C:/RSBuild`, 2026-09-24 and 25 | 0.3320 to 0.4140 ms | 0.2860 to 0.3200 ms |
+
+**The recorded 0.3340 ms is a warm-GPU figure, and the same pass costs 2.2 times as much cold.**
+This laptop GPU's clock state moves the answer more than most changes this project could make to the
+pass, so E6 cannot compare a new number against an old one. **Decided: the test times three passes
+interleaved, sample by sample, in one run.** The coupled pass on the production buffer; the C10
+quad, drawn exactly as `ApplyDecay` drew it, on a plain non-UAV target, which is C10's own
+configuration; and the C10 quad on the UAV-capable target, to separate the cost of the pass from
+the cost of the flag. Each is taken on an empty buffer and again on a populated one.
+
+**Predicted, so the run can contradict it.** Both passes read and write 117964800 bytes. At this
+GPU's roughly 256 GB/s that is about 0.9 ms, so the measured 0.33 ms is only possible if the empty
+target is being compressed. If the UAV flag or the populated buffer defeats that, **expect the
+coupled pass near 1 ms, and expect the populated C10 quad to rise too.** At Spa's 4504.6 s half-life
+a pass runs 0.0568 times a second of track time at 1x, so even 1 ms is 0.0009 ms a frame at 1x and
+60 Hz, and 0.019 ms a frame at 20x.
+
+#### E7: controlled traffic for the number, real cars for the look
+
+**The number is a plugin test**, `RacetrackSurface.Decay.SkidOnTheLinePavesOverAndSkidOffItPersists`.
+The coupling reads stored rubber, and the plugin cannot tell a car from a test calling the same
+paint path, so controlling the rubber is what isolates the thing being validated.
+
+- **Two identical skid marks** painted in one batch, far enough apart that nothing drawn over one
+  touches the other, centred on texel centres and off any row boundary. Both are read back
+  immediately, and the test asserts they start equal.
+- **Traffic over mark A only**: a rubber stroke much wider than the mark, drawn once per pass,
+  depositing `1.0 * (1 - 2^(-1/256))` at the centre texel. Rubber is pre-laid to that same fixed
+  point, so the pass always sees `E = 1.0`, **the apex equilibrium C10.4 calibrated the half-life
+  against.** Mark B gets nothing.
+- **Driven through the subsystem**, not the buffer: decay rate 1, ticks of exactly
+  `HalfLife / 256`, so every tick banks exactly one step and fires one pass. That exercises the
+  banked-progress path the demo runs.
+- **Read at 64, 128 and 256 passes**, a quarter, a half and one half-life, which is 14, 28 and 56 laps.
+
+**Predicted before the run**, as fractions of what each mark was laid with:
+
+| Passes | Laps | Mark A, on the rubber | Mark B, bare | Ratio |
+|---|---|---|---|---|
+| 64 | 14 | 2^-1 = **0.5000** | 2^-0.25 = **0.8409** | 1.68 |
+| 128 | 28 | 2^-2 = **0.2500** | 2^-0.5 = **0.7071** | 2.83 |
+| 256 | 56 | 2^-4 = **0.0625** | 2^-1 = **0.5000** | **8.00** |
+
+Tolerance: 256 half-float multiplies round independently, and the expected spread is under 1 %, so
+the assertion is **3 % relative**, stated here so it cannot be loosened after the run. The headline
+is the ratio at 256 passes. Mark B checks, as a side effect, that the coupled pass reduces to C10's
+exactly where there is no rubber.
+
+**A second test holds the GPU to the C++ form**:
+`RacetrackSurface.Decay.CoupledPassMatchesTheClosedFormAtEveryTexel`. Rubber at several exposures,
+skid and marbles are painted across a small buffer, read back whole, passed once at a large `P`, and
+read back again. Every texel's R, G and B must match `SharedRetention * before` and
+`SkidRetentionForProgress(P, R_before) * before` to half-float tolerance, and alpha must not move.
+
+**The capture needs real cars and deliberately placed marks, and nothing can place one today.** The
+only skid writer is a random lockup in a braking zone at 0.002 exposure, 0.6 % coverage (D7). Every
+capture is a `-game` run driven from `-ExecCmds`, which fires once at frame 1, when there is no line
+yet. So, **added for the capture and flagged because it is scope**, the same footing as C10.6 and F's
+follow camera:
+
+- **`RacetrackDemo.SkidMarkPair <track seconds> <report seconds>`.** After the first argument's worth
+  of dilated time, the circuit reads back the rubber across the track at the middle of its longest
+  apex, which is where `CountedPassesOverATexelAgainstThePrediction` samples. It lays mark A on the
+  highest-rubber texel and mark B on the lowest-rubber texel at least a quarter of the track width
+  away, clear of both edges. **"On the line" is then a measured property of the field's traffic
+  rather than of where the car model was assumed to put it.**
+- Marks go through the public `RegisterSurfaceContactInTrackSpace`, as lockup contacts on the skid
+  channel. One contact is 0.6 % coverage, so each mark is **N coincident contacts in one frame**,
+  sized to lay about 1.0 exposure. This stands in for D7's cheap half, which is not built, and is
+  stated as that.
+- It parks the observer above the pair, because no other control can point the camera once the run
+  has started, and it announces the pair on screen.
+- Every `<report seconds>` of track time it reads both mark centres back, then logs and announces
+  what fraction of its laid skid each still holds. **That makes the capture legible without
+  narration, per C10, and gives a real-car figure from the same run**, recorded beside the controlled
+  one with the caveat that its rubber is whatever the field laid.
+- A host test lays the pair on a surface with rubber painted at a known offset, and asserts that
+  mark A lands on it, mark B lands off it, and the two start identical.
+
+**Capture run**: `L_SpaHarness -game`, the field released, 20x dilation, decay rate 1, deposition 4 so
+the line builds in about twenty laps, the skid-only view. The pair is laid after 20 laps, and stills
+are taken by `PrintWindow` as the pair is laid and at about 7, 14, 28 and 56 laps after, into
+`assets/media/`.
+
+#### Tests
+
+| Test | Asserts | New or rewritten |
+|---|---|---|
+| `RacetrackSurface.Mapping.SkidRetentionIsNeverCloserToOneThanTheSharedRetention` | For exposures from -1 to 64: skid retention at most the shared one, equal at 0, and a step still clears the half-float threshold | new |
+| `RacetrackSurface.Decay.BufferDecaysInPlaceInTheProductionFormat` | The RHI reports typed UAV loads for `PF_FloatRGBA`, and the default allocation is UAV-capable | new |
+| `RacetrackSurface.Decay.CoupledPassMatchesTheClosedFormAtEveryTexel` | Every texel of one GPU pass matches the C++ form | new |
+| `RacetrackSurface.Decay.SkidOnTheLinePavesOverAndSkidOffItPersists` | E7's table above, within 3 % | new |
+| `RubberAccumDemo.Track.SkidMarkPairLandsOnAndOffTheRubber` | The capture command's placement | new |
+| `RacetrackSurface.Performance.DecayAtTheProductionAtlas` | E6's three passes, interleaved, empty and populated | rewritten |
+| `RacetrackSurface.Performance.PaintAndDecay` | Paint stays on RGBA8 so its lineage holds; the decay sample moves to an RGBA16f buffer of the same size | rewritten |
+| `RacetrackSurface.Budget.RegionAndFormatSweep` | Reports the coupled pass per format, and says so where a format cannot decay in place | rewritten |
+
+`RateOfZeroNeverRunsThePass`, `BanksProgressWithoutLosingAny` and `NeverAllocatesABufferOfItsOwn`
+are unchanged and must still pass, because rate 0, banking and allocation are unchanged. That makes
+119 tests.
+
+#### Traps carried into this work
+
+- **The editor must be closed for every build**: new shader type, new module phase, new reflection.
+  None of it survives Live Coding.
+- **The first run after the shader lands compiles it.** A test failing because a shader is missing
+  is a mapping or loading-phase fault, not a pass fault, and the log says which.
+- **Unity builds merge anonymous namespaces**, and `SurfaceDecayTests.cpp` already defines
+  `FScopedDecayRate` and `PrepareSubsystemWithASmallBuffer`. New helpers get file-specific names.
+- **`BuildPlugin` must package the `Shaders/` directory.** If it does not, the packaged plugin
+  compiles and then asserts at load, which the host build would never show.
+- **The two readbacks in the capture command stall the game thread.** Fine for a diagnostic run, and
+  the command's help text says so, as `SurfaceReport`'s does.
+
+#### Not in this work
+
+- D7 in either half. The capture's N coincident contacts are a stand-in, not the cheap half.
+- A per-channel rate for rubber or marbles.
+- Any change to the query, the display material or `EDITOR_SETUP.md`. No asset changes.
+- The phase F loose ends: the camera not restoring after `FollowTheLeader 0`, F8's missing still, and
+  the unmeasured 20x frame rate and sub-step cost. The capture run will print a frame rate as a side
+  effect, and it is recorded only as what it is.
 
 ## Phase F — Query path
 
