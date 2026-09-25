@@ -2826,3 +2826,110 @@ it.
   in the latency test. No test shrinks the count, because `EnsureGatherTarget` never shrinks the
   target, and none grows it twice in a run.
 
+---
+
+## 2026-09-25 — F5: the query overlay on screen, and a capture defect it found
+
+```
+Build:    Development, editor target run as UnrealEditor.exe -game, windowed 1600x900
+Power:    MAINS, confirmed from BatteryStatus.PowerOnline True on the day of the capture
+Scene:    /Game/Maps/L_SpaHarness, twenty cars, Spa layout
+Driven:   entirely from -ReleaseField and -ExecCmds, no keyboard. One process per still, killed
+          after the grab, 45 s after launch
+Settings: r.RacetrackSurface.DepositionScale 8, RacetrackDemo.TimeDilation 20,
+          RacetrackDemo.FollowTheLeader 1, and the full scale stated per still below
+Capture:  PrintWindow of the game window's own client area, PW_CLIENTONLY | PW_RENDERFULLCONTENT
+```
+
+**This is the look R5's lesson demands.** Every test in the F entry above is headless, and a render
+path nobody has looked at is not verified however many of them pass.
+
+| Still | Full scale | What it shows |
+|---|---|---|
+| `f5-query-overlay-leading-car-wheels` | **1.0** | The overlay as it now ships: the leading car's four wheels as four bar groups in a 2 x 2 block on clear road beside it. No text, no leader lines |
+| `f5-query-overlay-with-values` | **0.25** | The iteration before the text came out: the same block with each wheel's three values printed above it and a line from each wheel's sample point to its bars |
+
+**The shipped still reads from bar length alone.** At full scale 1.0 the two left groups' red bars
+are about a third full and the two right groups' nearly empty: the car is on the accumulated line
+with its left side and off it with its right. Skid and marbles are near zero at that moment, so the
+green and blue frames sit empty — which is the frame doing its job, an empty bar rather than a
+missing one.
+
+The values off the second still, to six decimals as the label printed them:
+
+| Wheel | Rubber | Skid | Marbles |
+|---|---|---|---|
+| FL | 0.770404 | 0.000000 | 0.001457 |
+| FR | 0.388040 | 0.000000 | 0.000000 |
+| RL | 0.768886 | 0.000000 | 0.001462 |
+| RR | 0.352536 | 0.000000 | 0.000000 |
+
+**The readout distinguishes the wheels, which is F8's point.** Both left wheels read about 0.77 and
+both right wheels about 0.37. The two wheels on each side agree with each other to within 0.04,
+which is the first thing a wrong sample position would break. Every red bar in that still is full
+because 0.25 clamps anything above it; the numbers carried the difference there and the bar length
+carries it in the shipped still.
+
+**`DrawDebugString` rendered, so `L_SpaHarness` has a HUD.** PLAN.md recorded that the text needs
+`PlayerController->MyHUD` and is silently dropped without one. The map's world settings are a binary
+asset and were not read, so this was not knowable in advance. The labels appearing in the second
+still is the evidence; the shipped overlay no longer draws text, so it no longer depends on it.
+
+### F8's marble band, observed but not kept
+
+F8's exit is that *the readout changes as a car crosses the marble band*. It was seen once, in an
+intermediate still taken with the bars still under the car:
+
+| Wheel | Marbles |
+|---|---|
+| FL | 0.153174 |
+| FR | 0.127678 |
+| RL | 0.067599 |
+| RR | 0.026179 |
+
+**That still was overwritten by a later framing change and is not kept**, so this table rests on an
+observation made in the session rather than on an image anyone can open. Three further attempts, at
+51, 57 and 62 seconds, all caught the leader on its own line with marbles below 0.014 on every
+wheel. That is structural rather than bad luck: G measured the band 66.4 cm *outside* the line a car
+drives, and the leader drives the line, so its wheels cross the band only on the way in and out of
+a corner. A still that shows it is a matter of catching that moment, and none of the three did.
+
+### Defect found by capturing: a desktop grab can photograph another application
+
+C10.5 took every still as a *"desktop grab of the client rect"*: bring the game window forward,
+copy that rectangle of the screen. **That copies whatever is on top, not the game.** Windows refuses
+`SetForegroundWindow` to a process that does not already own the foreground, so when another
+application had focus the grab returned that application's window at the game's coordinates. It
+happened once in this session. **The image was deleted within the same minute and was never staged
+or committed.**
+
+The replacement is `PrintWindow` with `PW_CLIENTONLY | PW_RENDERFULLCONTENT`, which asks the game
+window to render its own client area into a bitmap regardless of z-order. It cannot return another
+window's pixels; its failure mode is a refused call or a black frame, both visible before a still
+is kept. It also no longer takes the foreground, so a capture no longer interrupts whoever is using
+the machine.
+
+**Every C10.5 still was taken the old way** and was correct because the game happened to be in
+front. They are not suspect — each was looked at when taken — but the method was, and any future
+capture should use this one.
+
+### The overlay changed twice after the first look, both times on request
+
+The first stills drew each wheel's bars at its sample point, as PLAN.md specified, and **the car
+body sat on top of them**. They moved to a block beside the car; then the per-wheel text and the
+leader lines came out, leaving the bars alone. The query is still submitted at the true wheel
+position throughout — only the drawing moved. What that costs is written down in PLAN.md under the
+2026-09-25 amendment, and the short version is that the overlay is now a readout, not a position
+check: a sample taken in the wrong place would draw in the right place, and that property is carried
+by `Surface.GatherAgreesWithTheShaderAtTheSameRadius` instead of by the screen.
+
+### Not verified
+
+- **Only `Valid` has been seen on screen.** `NotYetResolved` lasts two query frames at the start of
+  a run and `OutsideRegion` needs a wheel off the ribbon, and neither was photographed. Their
+  colours are pinned by `Query.OverlayBarsScaleAndStatusColoursStayDistinct`, which is arithmetic
+  and not appearance.
+- **F8's marble band crossing has no kept image**, as above.
+- **Standalone `-game` only.** The follow camera and the overlay have not been run in PIE.
+- **One moment of one run per still.** Each is wherever the leader happened to be 45 seconds in.
+
