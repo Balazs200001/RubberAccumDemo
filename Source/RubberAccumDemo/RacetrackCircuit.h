@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "RacetrackSurfaceTypes.h"
 #include "RacetrackCircuit.generated.h"
 
 class ASplineFollowingCar;
@@ -38,6 +39,27 @@ public:
 	virtual void PostInitializeComponents() override;
 
 	virtual void BeginPlay() override;
+
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	virtual void Tick(float DeltaSeconds) override;
+
+	ASplineFollowingCar* FindLeadingCar() const;
+
+	const TArray<FSurfaceQueryHandle>& GetLeaderWheelQueries() const
+	{
+		return LeaderWheelQueries;
+	}
+
+	const TArray<FSurfaceStateSample>& GetLeaderWheelSamples() const
+	{
+		return LeaderWheelSamples;
+	}
+
+	const ASplineFollowingCar* GetLeadingCarLastRead() const
+	{
+		return Leader.Get();
+	}
 
 	const USplineComponent* GetCentreline() const
 	{
@@ -134,6 +156,11 @@ public:
 	int32 GetSpawnedCarCount() const
 	{
 		return SpawnedField.Num();
+	}
+
+	const TArray<TObjectPtr<ASplineFollowingCar>>& GetSpawnedField() const
+	{
+		return SpawnedField;
 	}
 
 	void SetFieldPaused(bool bPaused);
@@ -275,6 +302,12 @@ private:
 
 	void PlaceObserverAboveTrack();
 
+	void AcquireLeaderWheelQueries();
+
+	void ReleaseLeaderWheelQueries();
+
+	void ReadAndDrawTheLeadersWheels();
+
 	void SpeedUpTime();
 
 	void SlowDownTime();
@@ -322,6 +355,12 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<ASplineFollowingCar>> SpawnedField;
+
+	TArray<FSurfaceQueryHandle> LeaderWheelQueries;
+
+	TArray<FSurfaceStateSample> LeaderWheelSamples;
+
+	TWeakObjectPtr<ASplineFollowingCar> Leader;
 
 	bool bFieldPaused = false;
 

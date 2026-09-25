@@ -19,6 +19,7 @@
 #include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
+#include "SurfaceQueryDebugDraw.h"
 #include "SurfaceTrackRibbon.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -41,6 +42,10 @@ namespace RacetrackCircuitDisplay
 		TEXT("the current time dilation before it is handed over. Raise it for a still capture, where ")
 		TEXT("the surface needs laps to build and the caption has to outlast them."),
 		ECVF_Default);
+
+	constexpr double OverlayAheadOfTheCar = 60.0;
+
+	constexpr double OverlayBesideTheCar = 230.0;
 
 	void AnnounceOnScreen(const UObject* WorldContext, FName MessageName, const FString& Text)
 	{
@@ -206,7 +211,8 @@ using RacetrackLayouts::MaximumCorneringSamples;
 
 ARacetrackCircuit::ARacetrackCircuit()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup = TG_PostPhysics;
 
 	Spline = CreateDefaultSubobject<USplineComponent>(TEXT("Spline"));
 	SetRootComponent(Spline);
@@ -233,9 +239,150 @@ void ARacetrackCircuit::BeginPlay()
 
 	BindAccumulationTargetToRoad();
 	SpawnField();
+	AcquireLeaderWheelQueries();
 	SetFieldPaused(StartsPausedAfterCommandLine());
 	BindTimeControls();
 	PlaceObserverAboveTrack();
+}
+
+void ARacetrackCircuit::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ReleaseLeaderWheelQueries();
+
+	Super::EndPlay(EndPlayReason);
+}
+
+void ARacetrackCircuit::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	ReadAndDrawTheLeadersWheels();
+}
+
+ASplineFollowingCar* ARacetrackCircuit::FindLeadingCar() const
+{
+	ASplineFollowingCar* Leading = nullptr;
+	double FurthestDistanceAlongTrack = 0.0;
+
+	for (const TObjectPtr<ASplineFollowingCar>& Entry : SpawnedField)
+	{
+		ASplineFollowingCar* Car = Entry.Get();
+
+		if (!IsValid(Car) || !Car->HasPlacedItsWheels())
+		{
+			continue;
+		}
+
+		const double DistanceAlongTrack = Car->GetDistanceAlongTrack();
+
+		if (Leading == nullptr || DistanceAlongTrack > FurthestDistanceAlongTrack)
+		{
+			FurthestDistanceAlongTrack = DistanceAlongTrack;
+			Leading = Car;
+		}
+	}
+
+	return Leading;
+}
+
+void ARacetrackCircuit::AcquireLeaderWheelQueries()
+{
+	ReleaseLeaderWheelQueries();
+
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	if (Subsystem == nullptr)
+	{
+		return;
+	}
+
+	LeaderWheelQueries.Reserve(ASplineFollowingCar::WheelCount);
+
+	for (int32 Wheel = 0; Wheel < ASplineFollowingCar::WheelCount; ++Wheel)
+	{
+		LeaderWheelQueries.Add(Subsystem->AcquireSurfaceQuery());
+	}
+
+	LeaderWheelSamples.SetNum(ASplineFollowingCar::WheelCount);
+}
+
+void ARacetrackCircuit::ReleaseLeaderWheelQueries()
+{
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	if (Subsystem != nullptr)
+	{
+		for (const FSurfaceQueryHandle& Handle : LeaderWheelQueries)
+		{
+			Subsystem->ReleaseSurfaceQuery(Handle);
+		}
+	}
+
+	LeaderWheelQueries.Reset();
+	LeaderWheelSamples.Reset();
+	Leader.Reset();
+}
+
+void ARacetrackCircuit::ReadAndDrawTheLeadersWheels()
+{
+	if (LeaderWheelQueries.Num() != ASplineFollowingCar::WheelCount)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	ASplineFollowingCar* Leading = FindLeadingCar();
+
+	Leader = Leading;
+
+	if (Subsystem == nullptr || Leading == nullptr)
+	{
+		return;
+	}
+
+	const TArray<FVector>& WheelPositions = Leading->GetWheelPositions();
+
+	if (WheelPositions.Num() != ASplineFollowingCar::WheelCount)
+	{
+		return;
+	}
+
+	const double DistanceAlongTrack = Leading->GetDistanceAlongTrack();
+
+	RacetrackSurfaceQueryOverlay::FOverlayBasis Basis;
+	Basis.Along = GetWorldDirectionAtDistance(DistanceAlongTrack);
+	Basis.Across = GetWorldRightVectorAtDistance(DistanceAlongTrack);
+	Basis.Up = GetWorldUpVectorAtDistance(DistanceAlongTrack);
+
+	const FVector BesideTheCar =
+		Basis.Along * RacetrackCircuitDisplay::OverlayAheadOfTheCar
+		+ Basis.Across * RacetrackCircuitDisplay::OverlayBesideTheCar;
+
+	LeaderWheelSamples.SetNum(ASplineFollowingCar::WheelCount);
+
+	for (int32 Wheel = 0; Wheel < ASplineFollowingCar::WheelCount; ++Wheel)
+	{
+		LeaderWheelSamples[Wheel] = Subsystem->QuerySurfaceState(LeaderWheelQueries[Wheel], WheelPositions[Wheel]);
+
+		RacetrackSurfaceQueryOverlay::DrawSurfaceStateSample(
+			World,
+			WheelPositions[Wheel] + BesideTheCar,
+			Basis,
+			LeaderWheelSamples[Wheel]);
+	}
 }
 
 bool ARacetrackCircuit::StartsPausedAfterCommandLine() const
