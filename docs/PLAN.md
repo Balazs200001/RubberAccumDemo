@@ -885,7 +885,7 @@ The clearest proof the mechanism works, and the reason to prioritise it over mar
 |---|---|---|
 | E1 | Buildup channel, saturating accumulator | Approaches a ceiling rather than clipping |
 | E2 | Decay pass over real time, frequency as a cost knob | Line fades over a session |
-| E3 | Wash-out call for users to hook to rain | One call, measurable effect |
+| E3 | ~~Wash-out call for users to hook to rain~~ *Replaced 2026-09-25, [below](#e3-revised-2026-09-25-runtime-decay-control-from-code-instead-of-a-rain-wash-out)*: the decay rate set from C++ and Blueprint at runtime, per world | A host changes the rate from code, and a test shows the passes and the fade follow it; console and code sets both take effect in either order |
 | E4 | Roughness and specular change with slight darkening, verified under Lumen and baked | Reads as laid rubber under both |
 | E5 | **The coupling**: skid decay rate as a function of local buildup. *Expanded 2026-09-25, [below](#e5-to-e7-expanded-2026-09-25-before-implementing)*: an in-place compute pass, skid decaying `1 + k * RubberExposure` times as fast as the shared rate | Marks on the line are paved over, marks off it persist; the GPU pass agrees with its C++ closed form texel for texel |
 | E6 | Second profiling pass, focused on the decay pass. *Expanded*: the coupled pass and the C10 quad timed interleaved in one run, empty and populated | Numbers recorded, from the same run, with the power state |
@@ -1288,6 +1288,88 @@ RGBA32f buffer, and asserts that skid over rubber decays at exactly the shared r
 line that an RGBA8 buffer can no longer decay is now doubly wrong**: it decays, on the fallback. The
 fallback keeps C10's 5 % drift, which is stated rather than fixed because nothing in production
 reaches it on this machine.
+
+### E3, revised 2026-09-25: runtime decay control from code, instead of a rain wash-out
+
+**Decided by the user 2026-09-25.** E3 came from the proposal's M3, *"a wash-out call users can hook to
+rain"*, and was carried into this table on 2026-09-22 without being decided on its own. A wash-out
+is only a raised decay rate for a while, and a raised rate is already what `r.RacetrackSurface.DecayRate`
+does. What is missing is a way for **code** to set it. So E3 becomes that. Rain is one thing a host
+could hook to it, and the plugin does not claim a rain feature.
+
+What a host gets from a raised rate, stated so nobody over-reads it:
+
+- **Every channel fades**, and skid still fades `1 + k * E_rubber` times as fast. A rain that strips
+  rubber and leaves marbles would need a per-channel rate, which is not in this work.
+- **There is no wet look.** The roughness, specular and darkening the proposal pairs with wash-out
+  are E4's material work.
+
+#### Found while planning: a code setter on the console variable would be silently locked out
+
+The obvious implementation is a setter that writes the console variable. **That does not work, and
+the 5.8 source says why.**
+
+- Every write to a console variable carries a priority. `ECVF_SetByCode` is `0x0E000000` and
+  `ECVF_SetByConsole` is `0x10000000` (`IConsoleManager.h:183-187`).
+- `FConsoleVariableBase::CanChange` refuses any write of lower priority than the last one, and says
+  so only as a log warning: *"Setting the console variable ... was ignored as it is lower priority
+  than the previous ..."* (`ConsoleManager.cpp:275-311`).
+- Console input writes with `ECVF_SetByConsole` (`ConsoleManager.cpp:3007`, `:3228`).
+
+**So after anyone types the rate in the console, every later code write is ignored.** Whether
+`-ExecCmds` goes through that same path is **not yet confirmed** from the source, and has to be
+before this is built. Every capture this project takes sets the rate that way.
+
+**The same fault may already be live in the demo, found by reading and not reproduced.**
+`ARacetrackCircuit::ApplyDecayRate` writes with `ECVF_SetByCode` (`RacetrackCircuit.cpp:1203`), and
+so does `ApplyDepositionScale` (`:1138`). If `-ExecCmds` counts as console, then after
+`-ExecCmds="r.RacetrackSurface.DecayRate 1"` the M and N keys change nothing. That would not have
+shown up, because no capture has pressed a key after setting a variable from the command line. The
+first test below settles it.
+
+#### Proposed: the rate becomes a per-world value on the subsystem, and the console variable writes to it
+
+| Option | Verdict |
+|---|---|
+| The setter writes the console variable with `ECVF_SetByCode` | **Rejected.** Locked out by any console write, as above |
+| The setter writes it with `ECVF_SetByConsole` | **Rejected.** Code posing as console to win a priority contest. It also stays process-global, so two PIE worlds share one rate |
+| **A per-world `DecayRate` member on `USurfaceAccumulationSubsystem`, with the console variable's change callback forwarding the typed value to every live world's subsystem** | **Proposed.** One value per surface, which is what a gameplay setting is. Console and code both write the same member, last writer wins, and no priority is involved |
+
+Consequences, all to be confirmed or overturned when it is built:
+
+- `USurfaceAccumulationSubsystem::SetDecayRate(float)` and `GetDecayRate() const` replace the static
+  `GetDecayRate()`. Negative clamps to 0. 0 still skips the pass entirely and banks nothing, so C9 is
+  still reproduced exactly. There is no upper clamp in the plugin, because the banked-progress pass
+  stays exact at any rate. The host's 20x ceiling is a UI range and stays in the host.
+- **The console variable stays**, so every `-ExecCmds` capture and every test that sets it keeps
+  working. Its callback writes to every world's subsystem. **Its own value can then be stale** after
+  a code write, so `GetDecayRate()` is the truth and the console variable's help text has to say so.
+- **The on-screen announcement moves into the setter**, keyed so repeated sets replace one line.
+  C10.1's rule attaches the announcement to the value, not to how it was set. It is a
+  development-build debug message, so a host setting the rate every frame costs one replaced line.
+- **Blueprint**: `URacetrackSurfaceBlueprintLibrary::SetDecayRate` and `GetDecayRate`, with a world
+  context, like the library's other calls. Whether the half-life setter gets the same exposure is a
+  decision for the build session. It already exists in C++.
+- **The host stops working around the missing API.** `ARacetrackCircuit::ApplyDecayRate` calls the
+  setter instead of looking the variable up by name. That makes the host the first real consumer.
+
+#### Tests
+
+| Test | Asserts | New or rewritten |
+|---|---|---|
+| `RacetrackSurface.Decay.ConsoleThenCodeSetsBothTakeEffect` | Written first, against the current code: a console-priority write followed by a code write. Expected to show the lockout. Then, on the new code, both orders take effect | new |
+| `RacetrackSurface.Decay.RateSetFromCodeDrivesThePass` | A rate set through the setter fires the expected number of passes, and setting 0 stops them and clears banked progress | new |
+| `RacetrackSurface.Decay.RateIsPerWorld` | Two subsystems hold different rates, if a second world can be made cheaply in the harness; otherwise dropped and said so | new, conditional |
+| `RacetrackSurface.Blueprint.DecayRateReachesTheSubsystem` | The library call sets what the subsystem reads | new |
+| Every test using `FScopedDecayRate` or `FScopedPavingDecayRate` | Still passes through the console variable's callback, or moves to the setter, decided when built | rewritten or unchanged |
+
+#### Not in this work
+
+- **A per-channel rate**, which is what a rubber-only rain would need.
+- **`ApplyDepositionScale`'s identical `ECVF_SetByCode` write.** It is the same fault class and is
+  recorded here, but deposition is not decay and fixing it is its own change. If the first test
+  confirms the lockout, it is worth doing next.
+- E4's wet or rubbered look.
 
 ## Phase F — Query path
 
