@@ -1583,6 +1583,47 @@ Magenta is used by no channel, so three magenta outlines read instantly and cann
 red, green and blue outline at zero length. This is F5's stated requirement — `NotYetResolved` must
 not render as three zero-length bars — met by colour rather than by a shape the eye has to measure.
 
+#### Amended 2026-09-25, requested directly after seeing the capture: bars only, beside the car
+
+Two changes, both asked for after looking at the stills, and both recorded with what they cost.
+
+**The bars moved off the car.** Under the tyre, the 100 by 210 cm body sat on top of most of them.
+They are now drawn **as one block beside the car** — 60 cm ahead and 230 cm to the right, on clear
+road — in the wheels' own 2 x 2 layout, so which group is which wheel reads from position alone.
+**Only the drawing moved; the query is still submitted at the true wheel position.** The host
+passes the plugin helper the position to draw at, and the helper draws there: "beside the car" is
+a statement about a car, and the helper does not know what one is.
+
+**Then the text and the leader lines came out.** For one iteration each wheel had a label with its
+three values and a line from its real sample point to its bars. Both were removed: the bars carry
+the reading, and the 2 x 2 layout already says which wheel each group belongs to.
+`DescribeSample`, the label height and the leader went with them, and the helper now takes a
+position, a basis and a sample and nothing else.
+
+**What that costs, stated so it is not discovered later:**
+
+- **A wrong sample position is no longer visible on screen**, which was F5's stated exit. The bars
+  sit 230 cm from where they were sampled, so a sample taken in the wrong place draws in the right
+  place. That exit is now carried by the tests instead —
+  `Surface.GatherAgreesWithTheShaderAtTheSameRadius` pins the sample position to the shader's to
+  0.000342 — and the on-screen overlay is a readout rather than a position check.
+- **The bars can sit over a different surface from the one they report.** Beside the car they are
+  drawn on whatever is 230 cm to its right, so full red bars can lie on black tarmac and empty ones
+  on the line. They report the wheel, not the road under them.
+- **A rescaled bar is no longer disclosed on screen.** `r.RacetrackSurface.QueryOverlayFullScale`
+  still exists and still defaults to 1, where nothing needs saying. At any other value nothing on
+  the image says so, so a still taken there has to record its scale in `MEASUREMENTS.md`. The
+  variable's own help text now says exactly that.
+- **The numbers are gone from the screen.** Values to six decimals were the per-wheel readout F8
+  asked for. The one still that carries them is kept as `f5-query-overlay-with-values`.
+
+**Unchanged:** the three statuses still read apart, because status was always carried by the frame
+colour — magenta for unresolved, dark grey for outside — and the text only repeated it.
+
+**The follow camera was re-aimed to suit**: 40 degrees of pitch at 450 cm, aimed so the car sits
+left of centre and the bars right of it. An earlier attempt that only moved the camera was the
+wrong fix — it changed where the car sat on screen and left the bars under it.
+
 ### Decided: the leader is the greatest cumulative distance, and no lap counter is needed
 
 **`ASplineFollowingCar::DistanceAlongTrack` is never wrapped.** `SplineFollowingCar.cpp:323` does
