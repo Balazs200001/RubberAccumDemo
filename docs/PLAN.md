@@ -910,7 +910,7 @@ lines change, and what each one was should be readable next to what it became.
 | F0 | Recover `BlurredFoldedExposure`'s HLSL out of the `.uasset` and into `EDITOR_SETUP.md` | The shader the query has to agree with exists as text somewhere. **Met 2026-09-24**, and it corrected two assumptions this phase was resting on |
 | F1 | Canvas gather pass: N query points to one tiny RGBA16f target, a tent on *exposure* sized to the contact patch. *Was "gather compute pass"* | A mark painted at a known ribbon coordinate reads back at that coordinate, averaged over a patch rather than one texel — **met 2026-09-24** |
 | F2 | Readback ring on the tiny target, last-known-value cache, no game-thread flush | The ring resolves without a flush, reports the frame it answered for, and loses no submission — **met 2026-09-24**. "Answered every frame" waits on F4, which is what builds the per-frame loop |
-| F3 | Unresolved-contact overlay: contacts registered since the resolved snapshot are added on the read side. *Was "local cache for an actor's own contacts"* | A contact registered this frame is visible to a query this frame, with no double-count once the readback catches up |
+| F3 | Unresolved-contact overlay. **Dropped 2026-09-24 before F5, deliberately and with the reason recorded below** | Not built. The phase's declared cut point, taken |
 | F4 | `QuerySurfaceState` returning all three channels as coverage, with status and staleness. *Was "against the buildup channel"* | Correct and defined values, and `NotYetResolved` and `OutsideRegion` are each distinguishable from a genuine zero — **met 2026-09-24** |
 | F5 | Debug overlay: three coloured bars per tyre, drawn under the leading car's four wheels. *Narrowed 2026-09-24, see below* | A wrong sample position is visible, not assumed absent, and the three channels are legible per wheel |
 | F6 | Measured latency in frames, and query cost at 4 and at 80 points. **4 is the design target, 80 is the stress case** | The tolerance argued in the proposal demonstrated, or contradicted, on a real run |
@@ -1452,6 +1452,275 @@ lazily allocate up to 118 MB purely from being called, and
 `RacetrackSurface.Decay.NeverAllocatesABufferOfItsOwn` exists because that has already been a
 hazard once. With no buffer the answer is `NotYetResolved`.
 
+### Decided 2026-09-24: F3 is dropped, and this is the decision rather than an omission
+
+F3 was written as the phase's cut point — *"If F overruns, F3 comes out before anything else."* It
+comes out, and F did not overrun. The reason is that F4's measurement and the one-car narrowing
+between them removed the case F3 was designed for.
+
+**The 45 ms axle case does not arise in a demo that reads one car.** The proposal's argument was
+that at a 2.5 m wheelbase the rear wheels arrive at a point 45 ms after the front, so an actor's own
+contacts must not wait for the readback. That describes a caller submitting *front* wheels on one
+frame and *rear* wheels on a later one. The circuit submits all four wheel positions in the same
+tick and reads all four from the same resolved snapshot, so there is no front-to-rear disagreement
+for an overlay to correct. The four wheels are consistent with each other by construction.
+
+**The measured latency is 0.05 s of dilated world time, 2 query frames.** F3 buys back at most that,
+and only for contacts laid within a patch width of the query point since the snapshot. Against a
+field that varies along-track on the scale of a braking zone, that is a correction smaller than the
+fp16 quantisation the gather already carries.
+
+**It would add a third summation over the same data.** The gather's whole justification over a
+compute pass (above) is that it adds *no* new copy of the fold-and-tent arithmetic. F3's read-side
+overlay would have to sum recent contacts' deposited exposure within a patch width, in C++, and
+agree with what the GPU is about to produce — a fourth reader, against C9's standing risk that the
+existing readers silently disagree. That is the cost the canvas gather was chosen to avoid, paid
+back at the last step of the phase.
+
+**And it cannot be honestly validated.** `UnresolvedContactsAreNotDoubleCounted` would assert that a
+contact appears once; it could not demonstrate that anything reads *better* for it, because nothing
+in the demo is harmed by the 0.05 s. A test that pins a mechanism nobody needs is not evidence.
+
+Kept, so it is recoverable: the design in *"Decided: F3 is an unresolved-contact overlay"* stands as
+written and is the thing to build if a caller ever submits its axles on different frames, or if the
+readback latency rises. The trigger is a measured latency above one query frame at the rate a caller
+actually queries, or a caller that cannot submit its contacts together.
+
+### Decided: the bar drawing is a plugin diagnostic, the leader is host logic
+
+The split is made at the API boundary rather than at convenience, and it puts the two halves in
+different modules.
+
+**The plugin owns drawing one `FSurfaceStateSample` at one world position.**
+`RacetrackSurfaceQueryOverlay::DrawSurfaceStateSample` takes a world position, a basis to lie the bars
+in, and a sample. It knows nothing about wheels, cars or leaders. The reason it belongs here is that
+everything it encodes is a property of the plugin's own return type: which colour means which
+channel, that coverage is bounded 0 to 1 so a bar length is meaningful at all, and — the load-bearing
+one — **what each of the three statuses has to look like so that `NotYetResolved` is never mistaken
+for clean tarmac**. That last is an API contract, written down in *"What a caller does with each
+status"* above, and a diagnostic that enforces it is worth more inside the plugin than reimplemented
+per project. A second user of this plugin debugging a surprising query result wants this function and
+should not have to invent it, or invent a different colour convention for it.
+
+**The host owns everything demo-shaped**: which car is leading, where its four wheels are, and the
+four handles. Those are not plugin concepts and putting them behind the API would require the plugin
+to know what an actor is — the same argument that moved F3 off a per-actor cache.
+
+**Cost accepted:** it puts `DrawDebugHelpers.h` in the runtime module. That is an `Engine` public
+header and the module already depends on `Engine`, and the call sites need no `#if` guard: the header
+serves `inline {}` no-ops outside `ENABLE_DRAW_DEBUG` under
+`#elif !defined(SHIPPING_DRAW_DEBUG_ERROR) || !SHIPPING_DRAW_DEBUG_ERROR`
+(`DrawDebugHelpers.h:180-227`), so a Shipping build compiles the calls away rather than failing on
+them. `ENABLE_DRAW_DEBUG` is `UE_ENABLE_DEBUG_DRAWING`, `(!(UE_BUILD_SHIPPING || UE_BUILD_TEST) ||
+WITH_EDITOR)` (`EngineDefines.h:15`).
+
+### Decided: a console variable, not a key
+
+The overlay is gated by `r.RacetrackSurface.DrawQueryOverlay`, `ECVF_Default`, defaulting on, beside
+the two query variables F1 and F2 added.
+
+**A key costs an investigation this phase should not pay.** Two decay keys already failed for two
+different reasons — a `DebugExecBindings` collision in `BaseInput.ini`, and a key that Windows did
+not deliver — and the circuit has already spent `.` `,` `[` `]` `P` `M` `N` `C`. A console variable
+has neither failure mode.
+
+**And it is reachable from the only way this project takes captures.** Every still in this file was
+driven from `-ExecCmds` on a standalone command line with no keyboard, which is exactly what
+`ECVF_Default` is for and why `r.RacetrackSurface.QueryReadbackRingDepth` is already declared that
+way. `-ExecCmds` fires at frame 1, which is when an overlay wants to be on.
+
+### Decided: how the bars are drawn, and what each status looks like
+
+Three bars per wheel, lying flat in the road plane under the tyre, oriented along the track so the
+three do not collide with the neighbouring wheel's three at an 80 cm wheel track.
+
+- **Fill** is `DrawDebugSolidBox(World, Centre, Extent, Rotation, Colour, false, 0.0f, 0)`, the
+  `FQuat` overload at `DrawDebugHelpers.h:72`.
+- **Frame** is `DrawDebugBox` at full length, drawn whatever the value is. This is what makes a
+  genuine zero *visible* rather than absent: an empty outline is a reading, a missing bar is a bug.
+- **Lift.** The bars sit 6 cm above the wheel position. Wheel positions come from
+  `GetWorldPositionAtDistance`, which is on the spline, and the road mesh is `RoadHeightAboveSpline`
+  = 1 cm above it, so anything drawn at the wheel position z-fights with the road.
+- **Text** is `DrawDebugString(World, Location, Text, nullptr, Colour, 0.0f, false, FontScale)` with
+  **`Duration = 0.0f`, not the default**.
+
+**The `DrawDebugString` default is a trap and it is worth writing down.** `Duration` defaults to
+`-1.f`, and `AHUD::DrawDebugTextList` only decrements `TimeRemaining` when it is `!= -1.f`
+(`HUD.cpp:755-758`), so a default-duration string is **permanent**. Called every frame it accumulates
+until `r.DebugSafeZone.MaxDebugTextStringsPerActor`, default **128** (`HUD.cpp:53-56`), at which
+point `AddDebugText_Implementation` silently stops adding new entries (`HUD.cpp:838-844`) and the
+overlay freezes on stale numbers without erroring. `0.0f` renders exactly once — the removal pass
+runs after the draw, *"do this at the end so even small durations get at least one frame"*
+(`HUD.cpp:754`).
+
+**`DrawDebugString` needs a HUD, and that is a real precondition.** It walks the player controllers
+and requires `PlayerController->MyHUD && PlayerController->Player` (`DrawDebugHelpers.cpp:754-760`).
+In the headless automation world there is neither, so the strings are silently dropped — which is
+why the overlay's *arithmetic* is factored out and tested, and its *appearance* is verified by
+looking. The bars themselves go through the line batcher and do not need a HUD.
+
+**Bar length is linear against a stated full scale, and never auto-ranged.**
+`r.RacetrackSurface.QueryOverlayFullScale` defaults to 1.0, so by default the bar is coverage
+directly. At the demo's real deposition a skid reads **0.002637**, which on a 120 cm bar is 0.3 mm —
+invisible, exactly as the G5 capture found — so the capture will raise
+`r.RacetrackSurface.DepositionScale` as every previous capture has, and may lower the full scale.
+**When the full scale is not 1.0 the label says so on screen**, because a silently rescaled bar is a
+lie about the number.
+
+**Auto-ranging is rejected.** A bar whose full scale is chosen from the frame's own maximum cannot be
+compared between the four wheels, and comparing the four wheels is the entire point of drawing four
+of them. It would also make the overlay's reading change when nothing about the surface changed.
+
+**The three statuses, chosen so no two can be confused:**
+
+| Status | Frame | Fill | Text |
+|---|---|---|---|
+| `Valid` | the channel's own colour | the channel's own colour, length = coverage / full scale | the three values to six decimals |
+| `OutsideRegion` | dark grey | none | `outside` |
+| `NotYetResolved` | **magenta**, all three at once | none | `unresolved` |
+
+Magenta is used by no channel, so three magenta outlines read instantly and cannot be mistaken for a
+red, green and blue outline at zero length. This is F5's stated requirement — `NotYetResolved` must
+not render as three zero-length bars — met by colour rather than by a shape the eye has to measure.
+
+### Decided: the leader is the greatest cumulative distance, and no lap counter is needed
+
+**`ASplineFollowingCar::DistanceAlongTrack` is never wrapped.** `SplineFollowingCar.cpp:323` does
+`DistanceAlongTrack += SpeedCentimetresPerSecond * DeltaSeconds` and nothing folds it; every spline
+lookup folds it at the point of use through `ARacetrackCircuit::WrapDistance`
+(`RacetrackCircuit.cpp:1243-1255`). So the value already is *laps times track length plus distance*,
+which is precisely what "greatest progress" means, and **no lap counter has to be added**. This was
+worth checking rather than assuming: adding one would have been a `UPROPERTY` on the car and a Live
+Coding restart for nothing.
+
+**The leader does not flicker, and no hysteresis is added.** Every car's speed is a function of
+distance alone — `GetCorneringAmountAtDistance(DistanceAlongTrack + BrakingLookaheadCentimetres)`
+with the same profile for all of them — so the ordering by cumulative distance is preserved and the
+leader changes only when a car is destroyed. Hysteresis would be machinery guarding a case that
+cannot occur in this demo. Recomputed every tick regardless, because it is twenty comparisons.
+
+**Cars that have not placed their wheels are skipped**, on `HasPlacedItsWheels()`, and so are null
+entries in `SpawnedField`. The first tick of the field has no wheel positions yet and querying at
+`FVector::ZeroVector` would report `OutsideRegion` at the world origin.
+
+**`ARacetrackCircuit` does not tick today** — `PrimaryActorTick.bCanEverTick = false`
+(`RacetrackCircuit.cpp:209`). F5 turns it on. That is the change that forces the editor closed for
+the build, together with the new `UPROPERTY` members.
+
+### Decided: four handles on the circuit, acquired once, and what that gives F7
+
+Acquired in `BeginPlay` after `SpawnField`, released in a new `EndPlay` override. A change of leader
+is a change of submitted position and nothing else — no acquire, no release, no generation bump.
+
+**This is what makes the actor-destruction case boring, which is the point.** The handles are not
+bound to a car, so destroying the leader cannot invalidate them; the circuit simply submits a
+different car's wheels next tick. The failure mode the generation counter exists to stop —
+a destroyed actor's handle reading another wheel's grip — cannot arise here because no handle is ever
+released mid-run. F7 tests it anyway, at the demo level, because *"survives actor destruction"* is
+the claim and the claim should be demonstrated rather than argued from the design.
+
+**The demo queries in world space deliberately.** The cars hold `(distance, alpha)` and could use
+the track-space overload for free, but the world-space entry point is the one a plugin user calls, so
+the demo exercises it. Four `FindInputKeyClosestToWorldLocation` searches a frame, priced in F6.
+
+### Corrected: F5's agreement check sets `SurfaceBlurTexels` to 3.2, not 6.4
+
+The F0 amendment says F5 should set `SurfaceBlurTexels` "to the contact patch width". That is
+ambiguous and the obvious reading is wrong.
+
+`BuildTaps` computes `RadiusInTexels = ContactPatchWidth / (2 * SafeCentimetresPerTexel())`
+(`SurfaceQueryGather.cpp:55-56`), and the shader's `Radius` multiplies the same per-texel step
+(`Ribbon = UV + float2(x, y) * RibbonTexel * Radius`). So the two agree when `SurfaceBlurTexels`
+equals the query's **radius** in texels — a 20 cm patch at 3.125 cm per texel is **3.2**, which is
+half the 6.4 texels the patch spans. Setting it to 6.4 would compare a tent of one radius against a
+tent of twice that and the test would fail for a reason that is not a bug.
+
+The check is then a forced equality rather than an approximate agreement, which is what F0 bought:
+it catches a wrong sample position, a wrong fold *and* a wrong weight, where an approximate check
+catches only the first. It lives in the host module because the debug material does, and it reuses
+the `DrawMaterialToRenderTarget` + `ReadRenderTargetRawPixelArea` harness
+`RubberAccumDemo.Surface.ReadPathReturnsTheMarkWhereItWasPainted` already runs headlessly.
+
+### Decided: what F6 measures, and how the tolerance number is obtained
+
+Three numbers, in `RacetrackSurface.Performance.QueryCostAndLatency` in the shape of
+`SurfaceTrackSpaceTimingTests`, plus one test of its own.
+
+**1. Cost at 4 and at 80 points.** `SampleGpuWork` around `USurfaceAccumulationBuffer::GatherTaps`
+at 4 and 80 slots, `SampleCpuWork` around `BuildTaps` plus the per-query marshalling, and
+`SampleCpuWork` around `WorldToTrack` at 4 and 80 so the world-space entry point is priced
+separately. **4 is the design target and 80 is the stress case**, and the write-up says so: R2's
+segment-cache trigger is *"any world-space caller reaching 80 contacts per frame in a real scene"*,
+and reading one car makes it four. At R2's measured 0.1383 ms for 80 conversions, four is about
+0.007 ms. **The trigger is not approached and must not be described as the design target.**
+
+**2. Latency in frames, and whether ring depth 4 was right.** Frames-to-resolve is already reported
+by the existing latent command. F6 sweeps `r.RacetrackSurface.QueryReadbackRingDepth` across 1 to 8
+and records accepted against dropped at each, because depth 4 is engine convention copied from
+Nanite, Lumen and distance-field streaming independently, not a derived number, and this is the phase
+that checks it.
+
+**3. The number the tolerance claim now rests on.** Not "the delay is three frames" — the proposal's
+reason for tolerating the delay is wrong and PLAN.md already records why. What matters is **how much
+the returned coverage differs between the position submitted and the position the wheel occupies when
+the answer lands.**
+
+Obtained without any ground-truth path, using only the public API: drive a synthetic wheel along the
+ribbon at race speed holding one handle, and log, per frame, the coordinate submitted and the
+coverage that resolves. For a resolve belonging to submission frame `N` with latency `L`, the wheel
+is at the coordinate submitted on frame `N + L`, whose coverage is itself resolved `L` frames later
+in the same run. The error is the difference between two resolved values from one run, so it needs no
+second reader to disagree with. Reported alongside the along-track and lateral displacement over `L`
+frames, because the claim is specifically that the **lateral** coordinate barely moves and the field
+is smooth along-track.
+
+### Decided: what F7 means concretely, and what decides readback against the CPU grid
+
+Three separate tests, because level load, a hitch and actor destruction are three different failures.
+
+**Level load — `ReadbackSurvivesTeardownWithACopyInFlight`.** What a level change does to this system
+is destroy the `UWorld`, which `Deinitialize`s the subsystem while GPU copies may be in flight
+(`SurfaceAccumulationSubsystem.cpp:179-202`). The hazard is a render command writing into freed
+memory. It cannot happen, because every render command captures `AsShared()` — an owning
+`TSharedRef<FSurfaceQueryReadback, ESPMode::ThreadSafe>` — rather than `this`, at all three sites
+(`SurfaceQueryReadback.cpp:39-61, 63-72, 88-97`). The test submits a copy, calls
+`ReleaseOnRenderThread`, drops the last game-thread reference, then flushes: no crash, and the ring
+empties. A world swap is not needed to exercise the path and a standalone ring is what
+`SurfaceQueryReadbackTests` already builds.
+
+**A hitch — `SurvivesAHitch`.** Tick the subsystem with a 0.5 s delta with a gather in flight. The
+subsystem clamps nothing: `DeltaTime` flows unclamped into `ElapsedToDecayProgress`, and staleness is
+`GetTimeSeconds() - ResolvedQueryWorldTimeSeconds` with no cap. Assert the ring still resolves
+afterwards, that `SecondsSinceResolved` reports the hitch rather than hiding it, and that
+accepted plus dropped still equals submitted across it — the invariant that makes a ring which cannot
+keep up *say so*.
+
+**Actor destruction — `FourHandlesSurviveAChangeOfLeader`, in the host.** Destroy the leading car and
+assert the circuit switches to the next car and the four handles are unchanged. The plugin-level case
+is already pinned by `AStaleHandleDoesNotReadAnotherSlot`; this is the demo-level claim.
+
+**What decides readback against the CPU grid.** The fallback is a *coarse* CPU grid — PLAN.md is
+already explicit that a full-fidelity CPU shadow is not an afternoon and is rejected outright. The
+decision is taken on evidence and the evidence is: does the readback path survive all three cases
+above without a crash or a wrong answer, and is its cost at four points negligible against the
+0.3340 ms decay pass already in the frame. If both hold, the grid is not built, and *that* is the
+finding. If either fails, the grid is the fallback and F7 says which one failed. **This is run, not
+predicted, and the answer goes in `MEASUREMENTS.md` either way.**
+
+### Added for the capture, and flagged because it is scope: a follow camera
+
+`r.RubberAccumDemo.FollowTheLeader`, a host console variable defaulting to **0**, parks the observer
+pawn behind and above the leading car each tick instead of framing the whole circuit.
+
+It exists because without it F5 cannot be looked at. C10 placed the observer to frame the entire lap,
+which on the 180000 cm Spa layout is about 50 cm per pixel — a 120 cm bar is two pixels. Every
+capture in this project is a standalone `-game` run driven from `-ExecCmds` at frame 1, with no way
+to move the camera later, so the camera has to be able to find the leader by itself. The definition
+of done for this phase requires a capture; this is the smallest thing that makes one possible.
+
+Off by default, so C10's framing decision is untouched and nothing about the demo changes unless the
+variable is set.
+
 ### Traps carried into this phase
 
 - **The G-phase configuration-path bug has the same shape available here.**
@@ -1496,8 +1765,21 @@ the 11 groups and 49 plugin tests already there.
 | `QueryWithoutABufferDoesNotAllocateOne` | Mirrors `Decay.NeverAllocatesABufferOfItsOwn` |
 | `StaleHandleDoesNotReadAnotherSlot` | Release a handle, acquire a new one, confirm the old one returns `NotYetResolved`. F7's actor-destruction case |
 | `OutsideTheRibbonIsNotZero` | `OutsideRegion` and a genuine zero are distinguishable |
-| `UnresolvedContactsAreNotDoubleCounted` | F3: a contact appears once, whether it comes from the overlay or the readback |
+| ~~`UnresolvedContactsAreNotDoubleCounted`~~ | Not built. F3 is dropped, see above |
 | `QueryCostAndLatency` | F6, in the shape of `SurfaceTrackSpaceTimingTests`: `SampleGpuWork` for the gather, `SampleCpuWork` for the marshalling, at 4 and 80 points, plus frames-to-resolve |
+
+Added 2026-09-24 when F5 to F8 were expanded:
+
+| Test | What it pins | For |
+|---|---|---|
+| `Performance.QueryCostAndLatency` | GPU gather and CPU marshalling at 4 and 80 slots, world-space conversion at both, and a ring-depth sweep from 1 to 8 recording accepted against dropped | F6 |
+| `Query.LatencyCostsLessThanTheFieldVariesAlongTrack` | The coverage difference between the position submitted and the position occupied when the answer lands, from two resolved values of one run | F6 |
+| `Query.SurvivesAHitch` | A 0.5 s tick with a gather in flight still resolves, reports the staleness rather than hiding it, and loses no submission | F7 |
+| `Query.ReadbackSurvivesTeardownWithACopyInFlight` | Dropping the last game-thread reference to the ring while a copy is in flight neither crashes nor leaks the ring | F7 |
+| `Query.OverlayBarsScaleAndStatusColoursStayDistinct` | The bar arithmetic clamps and scales, and no status colour collides with a channel colour. The part of F5 a headless test can hold | F5 |
+| `Surface.GatherAgreesWithTheShaderAtTheSameRadius` | With `SurfaceBlurTexels` at 3.2, the gather and `MF_SampleRacetrackSurface` return the same number. Host module, because the debug material is | F5 |
+| `Demo.TheLeaderIsTheCarFurthestAroundTheTrack` | Leader selection on unwrapped cumulative distance, skipping null and unplaced cars | F5 |
+| `Demo.FourHandlesSurviveAChangeOfLeader` | Destroying the leading car changes which wheels are submitted and nothing else | F7 |
 
 ### What has to happen in the editor, and what does not
 
@@ -1508,6 +1790,14 @@ F1 to F4 and F6 to F8 are C++ and headless. **F0 and F5 need the editor**, and F
   the editor running.
 - **F5**'s debug draw is `DrawDebug*` from C++ with no asset involved, but judging that the numbers
   land in the right place on screen is a look, not a test.
+
+**Amended 2026-09-24 when F5 was built: the capture does not need MCP, and should not wait for it.**
+F5 changes no asset, so the "ask before changing assets" gate does not apply, and the editor is only
+needed to *look*. Every capture in this project has in fact been taken from a standalone
+`UnrealEditor.exe -game` run driven from `-ExecCmds`, grabbed off the desktop and killed — C10.5's
+entry records exactly that. With `r.RubberAccumDemo.FollowTheLeader` giving the camera a way to find
+the car, that path runs headless of the editor entirely. MCP remains the better tool for *inspecting*
+a material graph; it is not required to photograph a debug draw.
 
 **`BlurredFoldedExposure`'s HLSL is not recorded anywhere.** The C9 entry in `EDITOR_SETUP.md`
 describes it in prose — the 3x3 tent, the per-tap fold, the hand-rolled along-track bilinear,
@@ -1521,6 +1811,8 @@ F0 is for, and it should happen at the next editor session whatever else is goin
 
 - **A compute gather**, rejected above. If F6 shows the canvas gather costs more than the decay
   pass it already sits beside, that is the trigger to revisit — and not before.
+- **The unresolved-contact overlay (F3)**, dropped above with its trigger for revisiting written
+  down. The design stands; nothing needs it at a 0.05 s latency with four wheels submitted together.
 - **Raw exposure on the public API.** Coverage only.
 - **Reading `SurfaceBlurTexels` into the query.** Recorded as a known, stated divergence instead.
 - **The per-contact segment cache.** F6 checks whether the world-space query trips R2's written
