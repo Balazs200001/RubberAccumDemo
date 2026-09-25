@@ -3187,4 +3187,215 @@ bool FRacetrackCircuitFourHandlesSurviveAChangeOfLeader::RunTest(const FString& 
 	return true;
 }
 
+namespace
+{
+	constexpr double GridRunLapLength = 180000.0;
+
+	constexpr double GridRunSeconds = 300.0;
+
+	constexpr double OneCarLengthCentimetres = 220.0;
+
+	constexpr double CompressedAgreementCentimetres = 25.0;
+
+	constexpr int32 GridRunFramesBetweenSurfaceResets = 600;
+
+	constexpr double GridRunReportEverySeconds = 60.0;
+
+	struct FGridRunResult
+	{
+		double SmallestAdjacentGap = TNumericLimits<double>::Max();
+
+		int32 SmallestGapTrailingCar = INDEX_NONE;
+
+		double SmallestGapAtSeconds = 0.0;
+
+		double SmallestWorldSeparation = TNumericLimits<double>::Max();
+	};
+
+	FGridRunResult DriveTheGrid(
+		FAutomationTestBase& Test,
+		UWorld& World,
+		USurfaceAccumulationSubsystem& Subsystem,
+		float FrameSeconds,
+		const TCHAR* Label)
+	{
+		FGridRunResult Result;
+
+		ARacetrackCircuit* Track = World.SpawnActor<ARacetrackCircuit>();
+
+		if (Track == nullptr)
+		{
+			Test.AddError(TEXT("Could not spawn a circuit."));
+			return Result;
+		}
+
+		Track->SetLayout(ETrackLayout::Spa, GridRunLapLength);
+		Track->PostInitializeComponents();
+		Track->DispatchBeginPlay();
+
+		const TArray<TObjectPtr<ASplineFollowingCar>>& Field = Track->GetSpawnedField();
+		const int32 FrameCount = FMath::CeilToInt32(GridRunSeconds / FrameSeconds);
+		const int32 FramesPerReport = FMath::Max(FMath::RoundToInt32(GridRunReportEverySeconds / FrameSeconds), 1);
+
+		Test.AddInfo(FString::Printf(
+			TEXT("%s: %d cars on a %.0f cm lap, %d frames of %.4f s. Seconds | gap car 0 to 1 | speed 0 | "
+				"speed 1 | smallest adjacent gap so far"),
+			Label,
+			Field.Num(),
+			Track->GetTrackLength(),
+			FrameCount,
+			FrameSeconds));
+
+		for (int32 Frame = 1; Frame <= FrameCount; ++Frame)
+		{
+			for (const TObjectPtr<ASplineFollowingCar>& Entry : Field)
+			{
+				if (ASplineFollowingCar* Car = Entry.Get())
+				{
+					Car->Tick(FrameSeconds);
+				}
+			}
+
+			for (int32 Trailing = 1; Trailing < Field.Num(); ++Trailing)
+			{
+				const ASplineFollowingCar* Ahead = Field[Trailing - 1].Get();
+				const ASplineFollowingCar* Behind = Field[Trailing].Get();
+
+				if (Ahead == nullptr || Behind == nullptr)
+				{
+					continue;
+				}
+
+				const double Gap = Ahead->GetDistanceAlongTrack() - Behind->GetDistanceAlongTrack();
+
+				if (Gap < Result.SmallestAdjacentGap)
+				{
+					Result.SmallestAdjacentGap = Gap;
+					Result.SmallestGapTrailingCar = Trailing;
+					Result.SmallestGapAtSeconds = Frame * FrameSeconds;
+				}
+
+				Result.SmallestWorldSeparation = FMath::Min(
+					Result.SmallestWorldSeparation,
+					FVector::Dist(Ahead->GetActorLocation(), Behind->GetActorLocation()));
+			}
+
+			if (Frame % GridRunFramesBetweenSurfaceResets == 0)
+			{
+				Subsystem.ResetSurface();
+			}
+
+			if (Frame % FramesPerReport == 0 && Field.Num() > 1 && Field[0] != nullptr && Field[1] != nullptr)
+			{
+				Test.AddInfo(FString::Printf(
+					TEXT("%s: %.0f | %.1f cm | %.1f | %.1f | %.1f cm"),
+					Label,
+					Frame * FrameSeconds,
+					Field[0]->GetDistanceAlongTrack() - Field[1]->GetDistanceAlongTrack(),
+					Field[0]->GetSpeedCentimetresPerSecond(),
+					Field[1]->GetSpeedCentimetresPerSecond(),
+					Result.SmallestAdjacentGap));
+			}
+		}
+
+		Subsystem.ResetSurface();
+		DestroyTheField(*Track);
+
+		return Result;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitTheGridNeverDrivesIntoItself,
+	"RubberAccumDemo.Demo.TheGridNeverDrivesIntoItself",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitTheGridNeverDrivesIntoItself::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No editor, game or PIE world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr || !Subsystem->IsInitialized())
+	{
+		AddWarning(TEXT("Skipped: the world's accumulation subsystem is not initialised."));
+		return true;
+	}
+
+	const FGridRunResult RealTime = DriveTheGrid(*this, *World, *Subsystem, TickSeconds, TEXT("1x"));
+
+	AddInfo(FString::Printf(
+		TEXT("1x reference: smallest along track gap %.1f cm, car %d behind car %d, at %.0f s; smallest "
+			"world separation %.1f cm"),
+		RealTime.SmallestAdjacentGap,
+		RealTime.SmallestGapTrailingCar,
+		RealTime.SmallestGapTrailingCar - 1,
+		RealTime.SmallestGapAtSeconds,
+		RealTime.SmallestWorldSeparation));
+
+	TestTrue(
+		FString::Printf(
+			TEXT("In real time no car comes within a car length of the one ahead: %.1f cm"),
+			RealTime.SmallestAdjacentGap),
+		RealTime.SmallestAdjacentGap > OneCarLengthCentimetres);
+
+	struct FCompressedRun
+	{
+		float FrameSeconds;
+
+		const TCHAR* Label;
+	};
+
+	const FCompressedRun CompressedRuns[] =
+	{
+		{ 20.0f / 60.0f, TEXT("20x at 60 fps") },
+		{ 20.0f / 30.0f, TEXT("20x at 30 fps") },
+		{ 20.0f / 20.0f, TEXT("20x at 20 fps") }
+	};
+
+	for (const FCompressedRun& Run : CompressedRuns)
+	{
+		const FGridRunResult Result = DriveTheGrid(*this, *World, *Subsystem, Run.FrameSeconds, Run.Label);
+
+		AddInfo(FString::Printf(
+			TEXT("%s: smallest along track gap %.1f cm, car %d behind car %d, at %.0f s; smallest world "
+				"separation %.1f cm; %.1f cm from the real time reference"),
+			Run.Label,
+			Result.SmallestAdjacentGap,
+			Result.SmallestGapTrailingCar,
+			Result.SmallestGapTrailingCar - 1,
+			Result.SmallestGapAtSeconds,
+			Result.SmallestWorldSeparation,
+			FMath::Abs(Result.SmallestAdjacentGap - RealTime.SmallestAdjacentGap)));
+
+		TestTrue(
+			FString::Printf(
+				TEXT("%s, no car drives into the one ahead: the smallest gap is %.1f cm against a %.0f cm "
+					"car. A frame this long used to move a car further than its own braking lookahead in "
+					"one step, which let a trailing car land on the state of the car in front and stay "
+					"there"),
+				Run.Label,
+				Result.SmallestAdjacentGap,
+				OneCarLengthCentimetres),
+			Result.SmallestAdjacentGap > OneCarLengthCentimetres);
+
+		TestTrue(
+			FString::Printf(
+				TEXT("%s drives the same field as real time does, because the car integrates its motion "
+					"in steps no longer than a real time frame: %.1f cm against %.1f cm"),
+				Run.Label,
+				Result.SmallestAdjacentGap,
+				RealTime.SmallestAdjacentGap),
+			FMath::Abs(Result.SmallestAdjacentGap - RealTime.SmallestAdjacentGap) < CompressedAgreementCentimetres);
+	}
+
+	return true;
+}
+
 #endif
