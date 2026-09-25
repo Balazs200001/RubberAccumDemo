@@ -2969,3 +2969,81 @@ assertion is unchanged. Two full runs afterwards: **113 of 113 both times**.
 **This does not change what the product does.** Only the test's loop changed. The ring behaved
 correctly throughout — every submission was accepted or counted as dropped, and no resolved frame
 went backwards in any run.
+
+---
+
+## 2026-09-25 — Cars drove into each other under time compression, and sub-stepping fixed it
+
+```
+Build:    Development, editor target, UnrealEditor-Cmd.exe headless with the editor closed
+Power:    MAINS
+Scene:    ARacetrackCircuit, Spa layout, 180000 cm lap, the real 20-car grid from SpawnField,
+          1400 cm apart
+Driven:   RubberAccumDemo.Demo.TheGridNeverDrivesIntoItself, 300 s of game time per run, every car
+          ticked once per frame; plus one -game still at TimeDilation 20
+```
+
+**Seen on screen first**, reported as *the second car slowly creeps inside the first*. The bars-only
+F5 still, `f5-query-overlay-leading-car-wheels`, shows it: the leader is drawn with a second car
+inside it.
+
+**It is a frame-rate bug in the car, not in the grid.** Driven at real-time frames the grid never
+closes up; driven at the frames `TimeDilation 20` produces, it does:
+
+| Frame, in game time | What it stands for | Smallest gap, **before** | **After** |
+|---|---|---|---|
+| 0.0167 s | 1x at 60 fps | 796.4 cm | 796.4 cm |
+| 0.333 s | 20x at 60 fps | 346.6 cm | **796.4 cm** |
+| 0.667 s | 20x at 30 fps | **-100.4 cm**, a car drove through the one ahead | **796.4 cm** |
+| 1.0 s | 20x at 20 fps | **-156.7 cm**, then car 1 locked onto car 0 at **0.0 cm** | **796.4 cm** |
+
+The before column comes from a diagnostic run over 900 s rather than 300 s; every negative gap in it
+appeared within the first 78 s. After the fix, every compressed run finds the same smallest gap as
+real time, between the same two cars — car 11 behind car 10 — at the same moment, 267 s, and
+**0.0 cm from the reference**.
+
+**The mechanism.** A car integrated its speed and distance once per frame. At 20x a frame moves a
+car 1000 to 3000 cm, further than its own 2500 cm braking lookahead, and at that step size the
+update is no longer one-to-one: a car still on the straight jumps its full 3000 cm while the car
+just ahead, already braking, advances 1650, so two different positions can map onto the same next
+position. Once two cars share a position and a speed they share them from then on — the 0.0 cm row.
+In continuous time that cannot happen, because every car follows the same speed-against-distance
+curve and the car behind stays a fixed *time* behind.
+
+**The fix** is `ASplineFollowingCar::DriveAlongTrack`, run once per sub-step of at most 1/60 s of
+game time. The wheels, the contacts and the marble deposit still happen once per frame. At one
+sub-step it is the old code exactly: the real-time rows of every test in the suite are unchanged.
+
+**What it moved elsewhere**, from `Demo.StrokesDoNotSmearAcrossTheTrackUnderCompressedTime`, the
+only test whose measured output changed:
+
+| | Before | After |
+|---|---|---|
+| Real time, widest lateral span | 5.22 texels | 5.22 texels |
+| Compressed 20x, widest lateral span | 9.74 texels, 1.5x the mark | **8.86 texels, 1.4x** |
+| Compressed 20x, furthest endpoint | alpha 0.9713 | alpha 0.9976, still 0 past the edge |
+
+**A stale figure found on the way, not caused by this.** The C10 entry above records the furthest
+stroke endpoint as alpha 0.7819 in real time and 0.8589 compressed, against wheels that never pass
+0.7749. The same test now reports 0.9992 in real time both before and after this fix. That entry
+predates G's marble throw, which deposits up to 400 cm outward of a car's line by design, so the
+reach it attributed to invented lateral motion is now dominated by marbles that are meant to be
+there. The 9.74 texel smear figure in the same entry was still current until this fix.
+
+**Suite: 114 of 114**, the new test included, no GPU crash.
+
+**On screen:** `c4-leading-car-alone-at-20x-after-substepping` is the same `-game` capture as the
+F5 stills — `TimeDilation 20`, 45 s in — and shows the leader as a single car.
+
+### Not verified
+
+- **The frame rate of the `-game` captures was never measured.** Which synthetic row matches them
+  is inferred: the merge was visible by 45 s of wall time, and headless at 20x the merge only
+  happened with frames of 0.667 s or longer, so the capture ran below 60 fps. No `stat unit` or CSV
+  capture exists of it.
+- **The cost of sub-stepping is not measured.** At 20x and 60 fps it is twenty sub-steps per car
+  per frame. A sub-step is two cornering profile lookups and two interpolations, with no spline
+  search — those stay once per frame — but no timing exists for it.
+- **It does not touch the lateral extrapolation recorded against C4.** Strokes are still built from
+  one contact per frame, so the 8.86 texels of compressed smear is the same bounded approximation it
+  was, slightly smaller.
