@@ -83,6 +83,16 @@ namespace
 		return true;
 	}
 
+	int64 ProductionBytesPerTexel()
+	{
+		return GPixelFormats[GetPixelFormatFromRenderTargetFormat(USurfaceAccumulationBuffer::ProductionFormat)].BlockBytes;
+	}
+
+	int64 CommittedAccumulationBytes()
+	{
+		return FSurfaceTrackRibbon().AtlasTexelCount() * ProductionBytesPerTexel();
+	}
+
 	double TightestRadiusOverAChord(const ARacetrackCircuit& Track, double ChordCentimetres)
 	{
 		const double Length = Track.GetTrackLength();
@@ -363,7 +373,8 @@ bool FRacetrackCircuitSpaLayoutFoldsIntoFourRows::RunTest(const FString& Paramet
 
 	AddInfo(FString::Printf(
 		TEXT("Spa layout: %.1f cm of lap at %.1f cm wide, %.6f cm per texel, %d x %d texels in %d rows of %d, "
-			"allocating %d x %d for %lld bytes at RGBA16f, and a %.1f cm contact patch stores as %.2f texels"),
+			"allocating %d x %d for %lld bytes in the production format, and a %.1f cm contact patch stores as "
+			"%.2f texels"),
 		Length,
 		Ribbon.TrackWidth,
 		Ribbon.CentimetresPerTexel,
@@ -373,7 +384,7 @@ bool FRacetrackCircuitSpaLayoutFoldsIntoFourRows::RunTest(const FString& Paramet
 		Ribbon.TexelsPerRow(),
 		Ribbon.AtlasWidth(),
 		Ribbon.AtlasHeight(),
-		Ribbon.AtlasTexelCount() * 8,
+		Ribbon.AtlasTexelCount() * ProductionBytesPerTexel(),
 		MarkWidth,
 		Ribbon.WorldDistanceToTexels(MarkWidth)));
 
@@ -396,13 +407,13 @@ bool FRacetrackCircuitSpaLayoutFoldsIntoFourRows::RunTest(const FString& Paramet
 			"fraction long cannot push the ceil over the cap and refuse the allocation"),
 		Ribbon.TexelsPerRow() <= FSurfaceTrackRibbon::MaximumTexelsPerRow - 512);
 
-	const int64 CommittedBytes = 117964800ll;
-	const int64 AllocatedBytes = Ribbon.AtlasTexelCount() * 8;
+	const int64 CommittedBytes = CommittedAccumulationBytes();
+	const int64 AllocatedBytes = Ribbon.AtlasTexelCount() * ProductionBytesPerTexel();
 
 	TestTrue(
 		FString::Printf(
-			TEXT("The buffer allocates the %lld bytes C9 committed to, give or take what the measured rescale "
-				"moves the ceil by, got %lld"),
+			TEXT("The buffer allocates the %lld bytes D2 committed to, the default ribbon in the RGBA32f "
+				"production format, give or take what the measured rescale moves the ceil by, got %lld"),
 			CommittedBytes,
 			AllocatedBytes),
 		FMath::Abs(AllocatedBytes - CommittedBytes) <= CommittedBytes / 100);
@@ -1984,7 +1995,7 @@ bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FStr
 		return false;
 	}
 
-	constexpr int64 CommittedBudgetBytes = 118ll * 1024ll * 1024ll;
+	const int64 CommittedBudgetBytes = CommittedAccumulationBytes() + CommittedAccumulationBytes() / 100;
 
 	const double CentimetresPerTexel = Track->GetSurfaceCentimetresPerTexel();
 	const double MarkWidth = GetDefault<ASplineFollowingCar>()->GetContactWidth();
@@ -2000,7 +2011,7 @@ bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FStr
 		Ribbon.TrackWidth = Track->GetTrackWidth();
 		Ribbon.CentimetresPerTexel = CentimetresPerTexel;
 
-		const int64 Bytes = Ribbon.AtlasTexelCount() * 8;
+		const int64 Bytes = Ribbon.AtlasTexelCount() * ProductionBytesPerTexel();
 		const double TightestRadius = TightestRadiusOverAChord(*Track, Track->GetRoadSegmentLength());
 		const double HalfWidth = Track->GetTrackWidth() * 0.5;
 
@@ -2029,8 +2040,10 @@ bool FRacetrackCircuitBothLayoutsFitTheCapAndTheMemoryBudget::RunTest(const FStr
 
 		TestTrue(
 			FString::Printf(
-				TEXT("The %s layout stays inside the 118 MiB default C9 committed to, at %lld bytes"),
+				TEXT("The %s layout stays inside the %lld bytes D2 committed to, the default ribbon at RGBA32f "
+					"plus the 1 %% a rescale may move it, at %lld bytes"),
 				Layout == ETrackLayout::Stadium ? TEXT("Stadium") : TEXT("Spa"),
+				CommittedBudgetBytes,
 				Bytes),
 			Bytes <= CommittedBudgetBytes);
 
