@@ -15,7 +15,6 @@ namespace
 	constexpr double DesiredCarHeight = 60.0;
 
 	constexpr int32 BrakingSeedOffset = 1000003;
-	constexpr int32 MarbleSeedOffset = 2000003;
 
 	constexpr float LongestDrivingStepSeconds = 1.0f / 60.0f;
 }
@@ -94,7 +93,6 @@ void ASplineFollowingCar::PlaceOnTrack()
 	DistanceLastCornering.Reset();
 
 	BrakingRandomStream.Initialize(DriverSeed + BrakingSeedOffset);
-	MarbleRandomStream.Initialize(DriverSeed + MarbleSeedOffset);
 	bBraking = false;
 	BrakingDrawCount = 0;
 	LockedWheel.Reset();
@@ -108,45 +106,6 @@ double ASplineFollowingCar::DrawTriangularCornerDeviationAlpha()
 	const double SecondUniformDraw = DriverRandomStream.FRand();
 
 	return (FirstUniformDraw + SecondUniformDraw - 1.0) * MaxCornerDeviationAlpha;
-}
-
-double ASplineFollowingCar::DrawMarbleThrowFallingAwayFromTheLine()
-{
-	const double FirstUniformDraw = MarbleRandomStream.FRand();
-	const double SecondUniformDraw = MarbleRandomStream.FRand();
-
-	return FMath::Min(FirstUniformDraw, SecondUniformDraw) * MarbleThrowCentimetres;
-}
-
-void ASplineFollowingCar::DepositMarblesOutsideTheLine(
-	USurfaceAccumulationSubsystem& Subsystem,
-	double SignedCornering,
-	float RollingSlipAmount)
-{
-	const double CorneringHere = FMath::Abs(SignedCornering);
-
-	if (Track == nullptr || CorneringHere < CornerExitCorneringAmount)
-	{
-		return;
-	}
-
-	const double HalfTrackWidth = Track->GetTrackWidth() * 0.5;
-
-	if (HalfTrackWidth <= UE_DOUBLE_SMALL_NUMBER)
-	{
-		return;
-	}
-
-	const double AwayFromTheApex = -FMath::Sign(SignedCornering);
-	const double ThrowAlpha = DrawMarbleThrowFallingAwayFromTheLine() / HalfTrackWidth;
-
-	Subsystem.RegisterSurfaceContactInTrackSpace(
-		DistanceAlongTrack,
-		LateralOffsetAlpha + AwayFromTheApex * ThrowAlpha,
-		SpeedCentimetresPerSecond,
-		RollingSlipAmount * static_cast<float>(CorneringHere),
-		ContactWidth,
-		EAccumulationChannel::Marbles);
 }
 
 void ASplineFollowingCar::UpdateCornerCommitment(double CorneringAmount)
@@ -235,13 +194,6 @@ float ASplineFollowingCar::SlipAtWheel(int32 WheelIndex, float RollingSlipAmount
 	const bool bLocked = LockedWheel.IsSet() && static_cast<int32>(LockedWheel.GetValue()) == WheelIndex;
 
 	return bLocked ? LockedWheelSlipAmount : RollingSlipAmount;
-}
-
-EAccumulationChannel ASplineFollowingCar::ChannelAtWheel(int32 WheelIndex) const
-{
-	const bool bLocked = LockedWheel.IsSet() && static_cast<int32>(LockedWheel.GetValue()) == WheelIndex;
-
-	return bLocked ? EAccumulationChannel::SkidMark : Channel;
 }
 
 void ASplineFollowingCar::BeginPlay()
@@ -368,13 +320,10 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 			WheelPositions[Wheel],
 			WheelVelocity,
 			SlipAtWheel(Wheel, RollingSlipAmount),
-			ContactWidth,
-			ChannelAtWheel(Wheel));
+			ContactWidth);
 
 		PreviousWheelPositions[Wheel] = WheelPositions[Wheel];
 	}
-
-	DepositMarblesOutsideTheLine(*Subsystem, SignedCornering, RollingSlipAmount);
 
 	bWheelHistoryValid = true;
 }

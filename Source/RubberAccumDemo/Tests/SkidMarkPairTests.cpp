@@ -22,9 +22,11 @@ namespace RubberAccumDemoSkidMarkPairTest
 
 	constexpr float RubberContactWidth = 40.0f;
 
-	constexpr int32 LineContacts = 200;
+	constexpr float RubberSlip = 0.5f;
 
-	constexpr int32 FainterBandContacts = 40;
+	constexpr int32 LineContacts = 400;
+
+	constexpr int32 FainterBandContacts = 80;
 
 	UWorld* FindSkidMarkPairWorld()
 	{
@@ -56,9 +58,8 @@ namespace RubberAccumDemoSkidMarkPairTest
 				Distance + RubberStrokeCentimetres * 0.5,
 				Alpha,
 				RubberStrokeCentimetres / TickSeconds,
-				1.0f,
-				RubberContactWidth,
-				EAccumulationChannel::RubberBuildup);
+				RubberSlip,
+				RubberContactWidth);
 		}
 	}
 }

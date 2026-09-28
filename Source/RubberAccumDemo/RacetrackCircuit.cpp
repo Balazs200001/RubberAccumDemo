@@ -145,24 +145,6 @@ namespace RacetrackDemoCommands
 		Circuit->SetDebugView(static_cast<ESurfaceDebugView>(Requested));
 	}
 
-	void SetMarbleThrow(const TArray<FString>& Arguments, UWorld* World)
-	{
-		ARacetrackCircuit* Circuit = FindCircuit(World);
-
-		if (Circuit != nullptr && Arguments.Num() > 0)
-		{
-			Circuit->ApplyMarbleThrow(FCString::Atof(*Arguments[0]));
-		}
-	}
-
-	FAutoConsoleCommandWithWorldAndArgs MarbleThrowCommand(
-		TEXT("RacetrackDemo.MarbleThrow"),
-		TEXT("How far, in centimetres, a car throws marbles outward from its own line. The draw falls off "
-			"linearly over that distance, so raising it widens the band and thins its far end rather than "
-			"moving it. A throw wider than the remaining track is not an error: that debris leaves the "
-			"track and is discarded."),
-		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetMarbleThrow));
-
 	void ReportSurface(const TArray<FString>& Arguments, UWorld* World)
 	{
 		ARacetrackCircuit* Circuit = FindCircuit(World);
@@ -635,8 +617,7 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 				Alpha,
 				Speed,
 				1.0f,
-				ContactWidth,
-				EAccumulationChannel::SkidMark);
+				ContactWidth);
 		}
 	}
 
@@ -1295,29 +1276,6 @@ void ARacetrackCircuit::SetDebugView(ESurfaceDebugView View)
 		this,
 		TEXT("RubberAccumDemo.DebugView"),
 		FString::Printf(TEXT("Surface view: %s"), DebugViewName(DebugView)));
-}
-
-void ARacetrackCircuit::ApplyMarbleThrow(double Centimetres)
-{
-	for (ASplineFollowingCar* Car : SpawnedField)
-	{
-		if (Car != nullptr)
-		{
-			Car->SetMarbleThrowCentimetres(Centimetres);
-		}
-	}
-
-	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("%s set the marble throw to %.0f cm across %d cars, which is %.2f of the half-width"),
-		*GetName(),
-		Centimetres,
-		SpawnedField.Num(),
-		Centimetres / FMath::Max(TrackWidth * 0.5, UE_DOUBLE_SMALL_NUMBER));
-
-	RacetrackCircuitDisplay::AnnounceOnScreen(
-		this,
-		TEXT("RubberAccumDemo.MarbleThrow"),
-		FString::Printf(TEXT("Marbles now thrown up to %.0f cm outside the line"), Centimetres));
 }
 
 void ARacetrackCircuit::ReportSurfaceCoverage()

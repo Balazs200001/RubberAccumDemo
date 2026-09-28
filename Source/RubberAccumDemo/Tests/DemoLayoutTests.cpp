@@ -232,10 +232,6 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 
 	FStrokeTally Buildup;
 	FStrokeTally Skid;
-	FStrokeTally Marbles;
-
-	int32 MarbleContactsRegistered = 0;
-	int32 TicksWithAnyMarbleContact = 0;
 
 	constexpr int32 TickCount = 3000;
 
@@ -246,39 +242,15 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 			Car->Tick(RealTimeTick);
 		}
 
-		int32 MarblesThisTick = 0;
-
-		for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
-		{
-			MarblesThisTick += Contact.Channel == EAccumulationChannel::Marbles ? 1 : 0;
-		}
-
-		MarbleContactsRegistered += MarblesThisTick;
-		TicksWithAnyMarbleContact += MarblesThisTick > 0 ? 1 : 0;
-
 		Subsystem->Tick(RealTimeTick);
 
 		for (const FSurfaceBrushStroke& Stroke : Subsystem->GetStrokesResolvedThisFrame())
 		{
-			switch (Stroke.Channel)
-			{
-			case EAccumulationChannel::RubberBuildup:
-				TallyStroke(Stroke, Ribbon, Buildup);
-				break;
-			case EAccumulationChannel::SkidMark:
-				TallyStroke(Stroke, Ribbon, Skid);
-				break;
-			case EAccumulationChannel::Marbles:
-				TallyStroke(Stroke, Ribbon, Marbles);
-				break;
-			}
+			TallyStroke(Stroke, Ribbon, Stroke.Channel == EAccumulationChannel::SkidMark ? Skid : Buildup);
 		}
 	}
 
-	const int32 MarblesDiscarded =
-		Subsystem->GetContactsDiscardedOutsideRibbonInChannel(EAccumulationChannel::Marbles);
-	const int32 BuildupDiscarded =
-		Subsystem->GetContactsDiscardedOutsideRibbonInChannel(EAccumulationChannel::RubberBuildup);
+	const int32 WheelsDiscarded = Subsystem->GetContactsDiscardedOutsideRibbon();
 
 	AddInfo(FString::Printf(
 		TEXT("Demo layout: %.0f cm lap, %.0f cm wide, %d x %d atlas in %d rows. %d cars over %d ticks."),
@@ -291,49 +263,22 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 		TickCount));
 
 	AddInfo(FString::Printf(
-		TEXT("Marble contacts registered: %d over %d of %d ticks. Discarded outside the ribbon: %d marble, "
-			"%d buildup."),
-		MarbleContactsRegistered,
-		TicksWithAnyMarbleContact,
+		TEXT("Wheel contacts discarded outside the ribbon over %d ticks: %d"),
 		TickCount,
-		MarblesDiscarded,
-		BuildupDiscarded));
+		WheelsDiscarded));
 
 	AddInfo(FString::Printf(
-		TEXT("Strokes resolved | buildup %d, strongest intensity %.6f | skid %d, strongest %.6f | "
-			"marbles %d, strongest %.6f"),
+		TEXT("Strokes resolved | buildup %d, strongest intensity %.6f | skid %d, strongest %.6f"),
 		Buildup.Count, Buildup.StrongestIntensity,
-		Skid.Count, Skid.StrongestIntensity,
-		Marbles.Count, Marbles.StrongestIntensity));
+		Skid.Count, Skid.StrongestIntensity));
 
 	AddInfo(FString::Printf(
-		TEXT("Stroke geometry at a real-time tick | buildup: %.1f cm longest, %.2f texels widest lateral | "
-			"marbles: %.1f cm longest, %.2f texels widest lateral"),
-		Buildup.LongestAlongCentimetres, Buildup.WidestLateralTexels,
-		Marbles.LongestAlongCentimetres, Marbles.WidestLateralTexels));
+		TEXT("Stroke geometry at a real-time tick | buildup: %.1f cm longest, %.2f texels widest lateral"),
+		Buildup.LongestAlongCentimetres, Buildup.WidestLateralTexels));
 
 	TestTrue(
 		TEXT("The demo layout folds, so this test exercises the case the Stadium tests cannot"),
 		Ribbon.RowCount() > 1);
-
-	TestTrue(
-		TEXT("Cars on the demo layout register marble contacts at all"),
-		MarbleContactsRegistered > 0);
-
-	TestTrue(
-		TEXT("Almost every marble contact lands on the track. A few leaving it is correct rather than a "
-			"fault: the throw is not clamped to the track edge, because clamping would pile the whole "
-			"tail of the distribution onto the boundary texel and make the stripe at the kerb this phase "
-			"exists to avoid"),
-		MarblesDiscarded * 100 < MarbleContactsRegistered);
-
-	TestTrue(
-		TEXT("Marble contacts become painted strokes rather than being dropped in stroke construction"),
-		Marbles.Count > 0);
-
-	TestTrue(
-		TEXT("Marble strokes carry a non-zero intensity, so they deposit something"),
-		Marbles.StrongestIntensity > 0.0f);
 
 	UTextureRenderTarget2D* Painted = Subsystem->GetBuffer() != nullptr
 		? Subsystem->GetBuffer()->GetTarget()
@@ -734,10 +679,7 @@ bool FDemoLayoutSlipSeparatesStraightsFromCorners::RunTest(const FString& Parame
 
 		for (const FSurfaceTrackContact& Contact : Subsystem->GetPendingContacts())
 		{
-			if (Contact.Channel != EAccumulationChannel::Marbles)
-			{
-				WidestSlip = FMath::Max(WidestSlip, static_cast<double>(Contact.SlipAmount));
-			}
+			WidestSlip = FMath::Max(WidestSlip, static_cast<double>(Contact.SlipAmount));
 		}
 
 		const int32 Bin = FMath::Clamp(FMath::FloorToInt32(CorneringHere * BinCount), 0, BinCount - 1);

@@ -154,8 +154,7 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		0.0,
 		TravelCentimetres / ReadPathSeconds,
 		1.0f,
-		60.0f,
-		EAccumulationChannel::SkidMark);
+		60.0f);
 
 	Subsystem->Tick(ReadPathSeconds);
 
@@ -547,8 +546,7 @@ bool FSurfaceGatherAgreesWithTheShaderAtTheSameRadius::RunTest(const FString& Pa
 		0.0,
 		TravelCentimetres / ReadPathSeconds,
 		1.0f,
-		60.0f,
-		EAccumulationChannel::SkidMark);
+		60.0f);
 
 	Subsystem->Tick(ReadPathSeconds);
 

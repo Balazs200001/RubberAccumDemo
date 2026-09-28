@@ -3,12 +3,10 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Math/RandomStream.h"
-#include "RacetrackSurfaceTypes.h"
 #include "SplineFollowingCar.generated.h"
 
 class ARacetrackCircuit;
 class UStaticMeshComponent;
-class USurfaceAccumulationSubsystem;
 
 enum class ECarWheel : uint8
 {
@@ -136,16 +134,6 @@ public:
 		return MaxCornerDeviationAlpha;
 	}
 
-	double GetMarbleThrowCentimetres() const
-	{
-		return MarbleThrowCentimetres;
-	}
-
-	void SetMarbleThrowCentimetres(double Centimetres)
-	{
-		MarbleThrowCentimetres = FMath::Max(Centimetres, 0.0);
-	}
-
 protected:
 	UPROPERTY(EditInstanceOnly, Category = "Spline Following Car")
 	TObjectPtr<ARacetrackCircuit> Track;
@@ -204,9 +192,6 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car", meta = (ClampMin = "0.0"))
 	float ContactWidth = 20.0f;
 
-	UPROPERTY(EditAnywhere, Category = "Spline Following Car")
-	EAccumulationChannel Channel = EAccumulationChannel::RubberBuildup;
-
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "1.0"))
 	double Wheelbase = 140.0;
 
@@ -228,9 +213,6 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Wheels", meta = (ClampMin = "0.0"))
 	double SameBrakingEventSeparationCentimetres = 600.0;
 
-	UPROPERTY(EditAnywhere, Category = "Spline Following Car|Marbles", meta = (ClampMin = "0.0"))
-	double MarbleThrowCentimetres = 400.0;
-
 private:
 	void ResizeCarMesh();
 
@@ -246,16 +228,7 @@ private:
 
 	float SlipAtWheel(int32 WheelIndex, float RollingSlipAmount) const;
 
-	EAccumulationChannel ChannelAtWheel(int32 WheelIndex) const;
-
 	double DrawTriangularCornerDeviationAlpha();
-
-	double DrawMarbleThrowFallingAwayFromTheLine();
-
-	void DepositMarblesOutsideTheLine(
-		USurfaceAccumulationSubsystem& Subsystem,
-		double SignedCornering,
-		float RollingSlipAmount);
 
 	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
 	TObjectPtr<UStaticMeshComponent> CarMesh;
@@ -291,6 +264,4 @@ private:
 	TOptional<double> DistanceLastBraking;
 
 	FRandomStream BrakingRandomStream;
-
-	FRandomStream MarbleRandomStream;
 };
