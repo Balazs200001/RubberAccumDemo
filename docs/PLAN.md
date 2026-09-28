@@ -4664,8 +4664,10 @@ about 4, and nobody has counted how often that happens.
 
 ## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
 
-Requested 2026-09-28. **W1 and W1b are built, 2026-09-28; W2 and W3 are not started.** What
-building them found is under [Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b).
+Requested 2026-09-28. **W1 and W1b are built, 2026-09-28, and W2.0 is measured; the rest of W2, and
+W3, are not started.** What building them found is under
+[Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b), and W2.0's result
+[below it](#measured-on-implementing-2026-09-28-w20-confirms-the-simulation-so-d2-stands).
 Every decision in this
 section was settled by the user on 2026-09-28, the same day, by accepting each recommendation as
 written, including D2's scope expansion to an RGBA32f target. The options each decision rejected are
@@ -5393,6 +5395,28 @@ Numbers in `MEASUREMENTS.md` under W1b.
 - No lockup mark has been looked at on screen. The readback is the evidence.
 - E7's real-car capture was not re-run, as planned.
 - Everything ran on the Development editor target; nothing was packaged.
+
+### Measured on implementing, 2026-09-28: W2.0 confirms the simulation, so D2 stands
+
+`RacetrackSurface.Marbles.FanSurvivesTheBufferFormat` adds the fan's real increment, 1.4474e-5 a pass
+at the peak, 4096 times on the canvas additive path, in eight bands down the linear profile.
+**On RGBA16f the peak band freezes at exactly 0.03125**, the simulation's figure, and the profile
+stores as four flat steps at powers of two: 0.03125, 0.015625, 0.0078125, 0.00390625. **On RGBA32f
+every band is within 5e-5 of its float sum.** Numbers in `MEASUREMENTS.md` under W2.0.
+
+- **The real blend path does show the floor.** The condition this section set for stopping before
+  W2.1, that the hardware refute the simulation, did not happen. Decision D2 stands as taken, and
+  W2.1 is unblocked.
+- **One inference became a measurement.** The canvas additive blend rounds to nearest; every band sits
+  on the round-to-nearest plateau and none on the truncating one. The UAV store E5 measured
+  truncates, so the two write paths into one RGBA16f target round differently.
+- **Subnormal increments are not flushed.** Every increment is below half float's smallest normal,
+  and all of them accumulated to their plateau.
+- **The test is red on RGBA16f by design**, and its commit says so. It asserts on the format an
+  unargued `Allocate` returns, so W2.1 makes it the regression guard without editing it.
+- **Not verified:** decay was off, so the steady state under decay is not measured; the passes were
+  one batched canvas call, not one per frame; the ramp texture does not exist yet, so a solid brush
+  carried the increments.
 
 ---
 
