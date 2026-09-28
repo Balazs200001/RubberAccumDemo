@@ -3496,12 +3496,18 @@ marble sweep and then the paint, into a production-atlas buffer of each format.
 
 | Frame | Buffer | RGBA32f, median | RGBA16f, median | Ratio |
 |---|---|---|---|---|
-| 80 contacts, uniform heading | empty | 0.6400 ms | 0.6440 ms | 0.994 |
-| 80 contacts, 80 headings | empty | 0.9810 ms | 0.9580 ms | 1.024 |
-| 80 contacts, uniform heading | filled with noise | 0.6470 ms | 0.7220 ms | 0.896 |
-| 80 contacts, 80 headings | filled with noise | 0.9890 ms | 1.0000 ms | 0.989 |
+| 80 contacts, uniform heading | cleared | 0.7050 ms | 0.6760 ms | 1.043 |
+| 80 contacts, 80 headings | cleared | 0.9230 ms | 0.9090 ms | 1.015 |
+| 80 contacts, uniform heading | filled with noise | 0.7250 ms | 0.6900 ms | 1.051 |
+| 80 contacts, 80 headings | filled with noise | 0.9770 ms | 0.9530 ms | 1.025 |
 
-**Painting costs the same in either format.** A frame touches a few thousand texels, so the cost is
+**Corrected 2026-09-29, after an independent review of W2.1.** The first version of this table,
+from the suite of record, labelled its first rows "empty", but the test's warm-up had already painted
+both buffers and nothing cleared them. The test now clears both after the warm-up, so "cleared" means
+carrying only the sampled frames' own paint, and the table above is that re-run, on mains at 00:42:41
+local, plugin `d86800d`. The first run's ratios were 0.994, 1.024, 0.896 and 0.989.
+
+**Painting costs the same in either format**, within 5 %. A frame touches a few thousand texels, so the cost is
 submission and per-row flushes, not bandwidth. The 80-heading frame costs half as much again as the
 uniform one on both, which is C0's batching finding.
 
@@ -3514,6 +3520,10 @@ uniform one on both, which is C0's batching finding.
 | 256 coupled passes, mean drift from exactly half | +0.7100 % | **-0.0021 %** |
 | The same, worst either way | 0.7645 % | **0.0021 %** |
 | Marble fan, peak band after 4096 passes, against a float sum of 0.059284 | 0.031250 | **0.059281** |
+
+The same test's C10-quad comparison had silently moved to RGBA32f with the default format, found by
+the same review; it is back on RGBA16f as C10 shipped it (`6d1f1e7`), and there it keeps -5.0604 %
+more than half, as it always did.
 
 The closed-form test's tolerance tightened from 1/1024 to 1e-5 relative and every texel still agrees,
 so nothing in the pass rounds to a coarser format. The rounding tally that proved the RGBA16f pass

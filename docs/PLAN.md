@@ -5470,7 +5470,8 @@ W2.1.
   production atlas is 2.464 ms against 1.281 ms on RGBA16f, bandwidth-bound on both. Empty, it is
   1.168 against 0.259 ms, because a cleared RGBA16f surface compresses and an RGBA32f one mostly does
   not. Per frame that is 0.0023 ms at 1x and 0.047 ms at 20x. One frame's sweep and paint is within
-  10 % either way on both formats.
+  5 % on both formats, measured after an independent review found and fixed an unlabelled warm-up in
+  the first run.
 - **The RHI reports RGBA32f as typed-UAV-loadable, a blendable render target, and sampled with
   filtering.** D3D12 sets filterable from the same bit as sampled, so the flag alone does not show
   bilinear filtering; `GatherAgreesWithTheShaderAtTheSameRadius`, which depends on it across the
