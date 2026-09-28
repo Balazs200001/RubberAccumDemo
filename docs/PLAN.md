@@ -4664,10 +4664,11 @@ about 4, and nobody has counted how often that happens.
 
 ## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
 
-Requested 2026-09-28. **W1 and W1b are built, 2026-09-28, and W2.0 is measured; the rest of W2, and
-W3, are not started.** What building them found is under
-[Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b), and W2.0's result
-[below it](#measured-on-implementing-2026-09-28-w20-confirms-the-simulation-so-d2-stands).
+Requested 2026-09-28. **W1, W1b, W2.0 and W2.1 are built; W2.2 onward, and W3, are not started.**
+What building them found is under
+[Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b), W2.0's result
+[below it](#measured-on-implementing-2026-09-28-w20-confirms-the-simulation-so-d2-stands), and W2.1's
+[below that](#measured-on-implementing-2026-09-29-w21-the-rgba32f-target).
 Every decision in this
 section was settled by the user on 2026-09-28, the same day, by accepting each recommendation as
 written, including D2's scope expansion to an RGBA32f target. The options each decision rejected are
@@ -5417,6 +5418,67 @@ every band is within 5e-5 of its float sum.** Numbers in `MEASUREMENTS.md` under
 - **Not verified:** decay was off, so the steady state under decay is not measured; the passes were
   one batched canvas call, not one per frame; the ramp texture does not exist yet, so a solid brush
   carried the increments.
+
+### Measured on implementing, 2026-09-29: W2.1, the RGBA32f target
+
+**Built and committed:** plugin `0e7cd2c` (the format, the decay pass without rounding, and the tests
+bound to RGBA16f) and `19192e5` (the interleaved cost measurements); host `f2fa508` (the bump) and
+`52d1784` (the layout budget tests). Both build paths clean at both plugin commits, and the first
+commit's own state passed the 17 tests it touches. **The suite: 124 tests, 122 pass**, the two
+failures being the host marble tests red until W2.3. `FanSurvivesTheBufferFormat` passes on the new
+production format without being edited, as W2.0 intended. W2.1's exit is met: the fan test passes,
+and the closed-form decay test passes at the tighter tolerance. Numbers in `MEASUREMENTS.md` under
+W2.1.
+
+**Decisions taken while building it, for defending:**
+
+- **One named production format.** `USurfaceAccumulationBuffer::ProductionFormat`, RGBA32f, is the
+  default of both `Allocate` overloads. Every test that computed bytes at 8 a texel now derives them
+  from it, so the next format change moves one constant.
+- **In-place decay is RGBA32f only.** RGBA16f no longer gets a UAV: its UAV store truncates (E5), and
+  the hand-rounding that corrected for that is gone. An RGBA16f buffer now always decays on the canvas
+  fallback, and `BufferWithoutAUavDecaysUniformlyOnTheCanvas` uses RGBA16f as its fixture where it used
+  RGBA32f.
+- **The closed-form test is tightened, not loosened.** Its per-texel tolerance goes from 1/1024 to
+  1e-5 relative, and its half-life drift bound from 1 % to 0.01 %. The rounding tally is removed,
+  because on RGBA32f there is nothing to round, and a tally left in place would have passed with every
+  value in "neither". The tight tolerance is what would now catch half-float rounding creeping back.
+- **The RGBA16f decay cost is measured with the same shader.** It is dispatched directly on an RGBA16f
+  target with a UAV, a configuration production no longer uses, so the RGBA32f-to-RGBA16f ratio
+  comes from one interleaved run rather than from comparing against E6's run.
+- **Paint cost has its own test at the production atlas.** `PaintAndDecay` painted into RGBA8 and
+  decayed an RGBA16f buffer, which after this change would have timed the canvas fallback under the
+  name of the coupled pass. Its decay buffer moved to the production format.
+- **The layout budget is derived, not typed in.** D2's commitment is the default ribbon at the
+  production format, 235929600 bytes, plus the 1 % margin the Spa test already allowed. The Spa layout
+  rescales to 14401 texels and 225.02 MiB, so a bare "225 MiB" literal would have failed it.
+- **The half-float threshold stays.** `HalfFloatGuaranteedChangeThreshold` and its three mapping tests
+  now describe the RGBA16f canvas fallback, the coarsest format decay still runs on. Their messages
+  say so.
+- **The query gather target stays RGBA16f.** It was not in D2's scope and nothing measured asks for it.
+
+**What it found:**
+
+- **Every figure with a closed form moved onto it.** E7's paving ratio after 256 passes read 8.053 on
+  RGBA16f and reads 8.000, the coupling's exact prediction; the 0.053 was half-float rounding. The
+  lockup ripple, the rubber mean and the skid-mark pair all now read their predictions to the last
+  printed digit.
+- **The rubber channel's rounding near exposure 1, recorded above as unmeasured, is now measured**:
+  the demo layout's steady-state rubber peak fell 1.24 %, 0.8779 to 0.8670. Rounding to nearest had
+  held it high. C10.4's calibrated half-life is CPU arithmetic and does not move. Nothing was retuned.
+- **Decay costs about twice as much, and painting costs the same.** The coupled pass on a filled
+  production atlas is 2.464 ms against 1.281 ms on RGBA16f, bandwidth-bound on both. Empty, it is
+  1.168 against 0.259 ms, because a cleared RGBA16f surface compresses and an RGBA32f one mostly does
+  not. Per frame that is 0.0023 ms at 1x and 0.047 ms at 20x. One frame's sweep and paint is within
+  10 % either way on both formats.
+- **The RHI reports RGBA32f as typed-UAV-loadable, a blendable render target, and sampled with
+  filtering.** D3D12 sets filterable from the same bit as sampled, so the flag alone does not show
+  bilinear filtering; `GatherAgreesWithTheShaderAtTheSameRadius`, which depends on it across the
+  track, does, at 0.000340.
+
+**Not verified:** no frame time in a running scene at RGBA32f; filtering only through that one
+agreement test; the gather target's precision against an RGBA32f source beyond the same figure; one
+GPU and driver.
 
 ---
 
