@@ -3411,3 +3411,154 @@ smallest power of two above `increment x 2^10`.
   value in draw order, so this should equal one pass a frame, but one pass a frame was not run.
 - **The ramp texture is not in this test.** A solid brush carried the increments; the fan's bilinear
   ramp does not exist until W2.3.
+
+---
+
+## 2026-09-29 — W2.1: the RGBA32f target, what it costs, and what moved when half-float storage went
+
+```
+Build:    Development, editor target, headless through UnrealEditor-Cmd.exe with the editor closed
+Power:    MAINS. PowerLineStatus Online at 23:57:00 local on 2026-09-28, immediately before the suite
+          of record, and again at 23:58:46 when it finished
+Scene:    The engine OpenWorld template map, no actors. Timing at the production atlas, the default
+          ribbon: 180000 cm of lap at 800 cm, 14400 x 1024 texels in four rows
+Tests:    124 run, 122 pass. The two failures are the host marble tests PLAN.md says are red until
+          W2.3. Both build paths clean at both plugin commits, and the intermediate commit's own state
+          built on both paths and passed the 17 decay, performance and ribbon tests it touches
+Method:   RHI timestamp queries bracketing each pass, 64 samples per pass, the passes interleaved
+          sample by sample as in E6, so clock state moves all of them together
+Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+          -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+```
+
+The change is PLAN.md section W, decision D2 and task W2.1: the accumulation target is RGBA32f, and
+the in-place decay pass stores its product without rounding it to a half float.
+
+### What the RHI reports for each format, read at runtime
+
+`RacetrackSurface.Decay.BufferDecaysInPlaceInTheProductionFormat`, from `EPixelFormatCapabilities`,
+which D3D12 fills per format from `CheckFeatureSupport` at device creation:
+
+| Format | Typed UAV loads | Render target | Blendable | Sampled and filterable |
+|---|---|---|---|---|
+| FloatRGBA, RGBA16f | yes | yes | yes | yes |
+| **A32B32G32R32F, RGBA32f** | **yes** | **yes** | **yes** | **yes** |
+| B8G8R8A8 | yes | no | yes | yes |
+
+D3D12 sets "filterable" together with "sampled" from one bit, `D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE`
+(`D3D12Device.cpp:250`), so the flag says the format can be sampled, not that bilinear filtering was
+observed. The filtering itself is exercised end to end by
+`RubberAccumDemo.Surface.GatherAgreesWithTheShaderAtTheSameRadius`, which samples the material's
+bilinear taps across the track over the RGBA32f target and agrees with the C++ gather to 0.000340.
+
+### Memory
+
+| | Bytes | MiB |
+|---|---|---|
+| Production atlas, RGBA16f, before | 117964800 | 112.50 |
+| **Production atlas, RGBA32f, now** | **235929600** | **225.00** |
+| Spa layout as rescaled, 14401 x 1024, RGBA32f | 235945984 | 225.02 |
+
+This laptop's GPU has 7948 MB dedicated, so the target is 2.8 % of it, as PLAN.md said.
+
+### The decay pass, RGBA32f against RGBA16f, interleaved
+
+`RacetrackSurface.Performance.DecayAtTheProductionAtlas`. The RGBA16f coupled pass is the same shader
+dispatched directly on an RGBA16f target with a UAV, so the two differ only in bytes per texel. The
+C10 quad on a plain RGBA16f target is E6's reference.
+
+| Pass | Empty, median | Filled with noise, median |
+|---|---|---|
+| **Coupled compute pass, RGBA32f production target** | **1.1680 ms** | **2.4640 ms** |
+| Coupled compute pass, RGBA16f with a UAV, same shader | 0.2590 ms | 1.2810 ms |
+| C10 quad, RGBA16f plain target, E6's reference | 0.3670 ms | 1.2460 ms |
+| C10 quad, RGBA32f production target | 1.6010 ms | 2.3860 ms |
+
+- **Filled, RGBA32f costs 1.92 times RGBA16f**, 2.464 against 1.281 ms. Twice the bytes, read and
+  written once each, at 191 GB/s, inside the 162 to 207 GB/s E6 measured. The pass is bandwidth-bound
+  on both formats, as E6 found.
+- **Empty, RGBA32f costs 4.51 times RGBA16f.** An empty RGBA16f target is cheap for the reason E6
+  gave, compression of a cleared surface; the RGBA32f target gets much less of that. E6's empty
+  figure described a best case, and that case has mostly gone.
+- **The RGBA16f figures reproduce E6's.** 0.2590 and 1.2810 ms against E6's 0.2350 and 1.4570 ms,
+  inside the 44 % run-to-run spread E6 recorded. The reference quad sits at 0.3670 and 1.2460 ms
+  against E6's 0.3430 and 1.4270 ms.
+- **Per frame it is still small.** At Spa's 4504.6 s half-life a pass runs 0.05683 times a second of
+  track time. Filled, that is 0.0023 ms a frame at 1x and 60 Hz, and 0.047 ms a frame at 20x. E6's
+  RGBA16f figures were 0.0014 and 0.0276 ms.
+
+### One frame's paint, RGBA32f against RGBA16f, interleaved
+
+`RacetrackSurface.Performance.PaintCostByFormat`. One frame of 80 contacts spread over the four rows,
+grouped by row as the flush issues them, each sample running the flush's two canvas passes, the
+marble sweep and then the paint, into a production-atlas buffer of each format.
+
+| Frame | Buffer | RGBA32f, median | RGBA16f, median | Ratio |
+|---|---|---|---|---|
+| 80 contacts, uniform heading | empty | 0.6400 ms | 0.6440 ms | 0.994 |
+| 80 contacts, 80 headings | empty | 0.9810 ms | 0.9580 ms | 1.024 |
+| 80 contacts, uniform heading | filled with noise | 0.6470 ms | 0.7220 ms | 0.896 |
+| 80 contacts, 80 headings | filled with noise | 0.9890 ms | 1.0000 ms | 0.989 |
+
+**Painting costs the same in either format.** A frame touches a few thousand texels, so the cost is
+submission and per-row flushes, not bandwidth. The 80-heading frame costs half as much again as the
+uniform one on both, which is C0's batching finding.
+
+### Precision
+
+| | RGBA16f, W2.0's suite | **RGBA32f, now** |
+|---|---|---|
+| Coupled pass against the C++ closed form, worst relative error, 1/256 half-life | 3.723e-4 | **9.605e-8** |
+| The same at 1/4 half-life | 4.296e-4 | **1.146e-7** |
+| 256 coupled passes, mean drift from exactly half | +0.7100 % | **-0.0021 %** |
+| The same, worst either way | 0.7645 % | **0.0021 %** |
+| Marble fan, peak band after 4096 passes, against a float sum of 0.059284 | 0.031250 | **0.059281** |
+
+The closed-form test's tolerance tightened from 1/1024 to 1e-5 relative and every texel still agrees,
+so nothing in the pass rounds to a coarser format. The rounding tally that proved the RGBA16f pass
+rounded to nearest is gone, because there is nothing left to round. The canvas fallback, now tested on
+RGBA16f because RGBA16f no longer gets a UAV, keeps its rubber within 1.362e-4 of the shared
+retention.
+
+### What moved, old and new, not retuned
+
+PLAN.md said the rubber channel's own rounding and E7's figures might move when RGBA32f landed, and
+that anything that moved would be reported. The same tests in W2.0's suite on RGBA16f, against this
+suite on RGBA32f, both on this machine. Nothing below was retuned; every test passes as it did.
+
+| Test and figure | RGBA16f | RGBA32f | Closed form |
+|---|---|---|---|
+| `Decay.SkidOnTheLinePavesOverAndSkidOffItPersists`, laid skid | 0.666504 | 0.666667 | 2/3 |
+| The same, bare mark kept after 64 passes | 0.8462 | **0.8409** | 0.8409 |
+| The same, off against on ratio after 256 passes | 8.053 | **8.000** | 8.000 |
+| `Write.LockupWritesAFullSkidMarkOnly`, single texels at 30 m/s | 1.42578 | **1.42654** | 1.42654 |
+| The same, double texels | 2.85156 | **2.85308** | 2.85308 |
+| `Write.SlipBelowOneWritesRubberOnly`, mean rubber | 0.0009994 | **0.0010000** | 0.0010000 |
+| `Track.SkidMarkPairLandsOnAndOffTheRubber`, each mark | 1.872070 | **1.872335** | 1.872333 |
+| `Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay`, steady-state rubber peak | 0.877930 | **0.867046** | none |
+| `Demo.MarblesReachTheBufferOnTheFoldedLayout`, rubber peak after 3000 ticks | 0.287354 | 0.287550 | none |
+| `Surface.GatherAgreesWithTheShaderAtTheSameRadius`, worst disagreement | 0.000270 | 0.000340 | 0 |
+
+- **Every figure with a closed form moved onto it.** The E7 paving ratio of 8.053 was half-float
+  rounding, not the coupling; the coupling's prediction was exactly right. E7's measured real-car
+  ratio came from a separate run and was not re-taken.
+- **The steady-state rubber peak on the demo layout fell 1.24 %**, 0.8779 to 0.8670, with deposition
+  and decay both at 16. This is the rubber channel's rounding near exposure 1 that PLAN.md recorded
+  as unmeasured: increments there are about one half-float ulp, and rounding to nearest had been
+  holding the peak 1.2 % high. C10.4's calibrated half-life is CPU arithmetic from a counted deposit
+  and does not move.
+- **The agreement test's worst point moved from 0.000270 to 0.000340**, still six times inside its
+  2e-3 tolerance. Both of its reads still end in an RGBA16f target, the query's gather target and the
+  one the material is drawn into, so each carries half-float rounding. Why the worst point moved by
+  7e-5 was not investigated. The gather target was not in D2's scope.
+
+### Not verified
+
+- **No frame time was measured in a running scene.** Everything above is per pass. `stat GPU` on the
+  demo map at RGBA32f was not taken.
+- **Filtering is shown by one test's agreement, not by a filtering test.** See the capability note.
+- **One GPU, one driver**, as before.
+- **The query gather target stays RGBA16f.** Its precision relative to the RGBA32f source was not
+  measured beyond the agreement figure above.
+- **E7's real-car capture was not re-run.**
