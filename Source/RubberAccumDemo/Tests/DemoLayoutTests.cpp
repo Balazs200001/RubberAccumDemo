@@ -904,4 +904,213 @@ bool FDemoLayoutStrokesDoNotSmearUnderCompressedTime::RunTest(const FString& Par
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDemoLayoutCurvatureProfile,
+	"RubberAccumDemo.Demo.CurvatureProfileOnTheDemoLayout",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDemoLayoutCurvatureProfile::RunTest(const FString& Parameters)
+{
+	constexpr double StraightCorneringAmount = 0.01;
+	constexpr double CornerCorneringAmount = 0.5;
+	constexpr double MarbleGateInPhaseG = 0.05;
+	constexpr double HorizontalRightVectorTolerance = 1.0e-4;
+
+	UWorld* World = FindDemoWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+
+	if (Subsystem == nullptr)
+	{
+		AddError(TEXT("No USurfaceAccumulationSubsystem available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Failed to spawn the circuit."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, DemoLapLength);
+
+	const USplineComponent* Spline = Track->GetCentreline();
+
+	if (Spline == nullptr || Subsystem->GetCentreline() != Spline)
+	{
+		AddError(TEXT("The demo circuit did not hand its centreline to the subsystem."));
+		Track->Destroy();
+		return false;
+	}
+
+	const double Length = Track->GetTrackLength();
+	const double Spacing = RacetrackSurfaceMapping::CurvatureSampleSpacing;
+	const double Threshold = RacetrackSurfaceMapping::MinimumMarbleCurvature;
+	const int32 SampleCount = FMath::FloorToInt32(Length / Spacing);
+
+	double SteepestRightVector = 0.0;
+	TArray<double> StraightMagnitudes;
+	int32 CornerSamples = 0;
+	int32 CornerCount = 0;
+	int32 FlipsInsideCorners = 0;
+	int32 DipsBelowTheThresholdInsideCorners = 0;
+	int32 AgreesWithTheHostProfile = 0;
+	int32 ComparedWithTheHostProfile = 0;
+	double LastSignInThisCorner = 0.0;
+	bool bInACorner = false;
+	int32 InsidePhaseGGate = 0;
+	int32 InsidePhaseGGateBelowTheThreshold = 0;
+	int32 OutsidePhaseGGateAboveTheThreshold = 0;
+	FString FirstFlip;
+
+	for (int32 Sample = 0; Sample < SampleCount; ++Sample)
+	{
+		const double Distance = Spacing * Sample;
+		const FVector Right = Spline->GetRightVectorAtDistanceAlongSpline(
+			static_cast<float>(Distance), ESplineCoordinateSpace::World);
+
+		SteepestRightVector = FMath::Max(SteepestRightVector, FMath::Abs(Right.Z));
+
+		const double Curvature = Subsystem->GetSignedCurvatureAtDistance(Distance);
+		const double HostCornering = Track->GetSignedCorneringAtDistance(Distance);
+		const double HostAmount = FMath::Abs(HostCornering);
+
+		if (HostAmount < StraightCorneringAmount)
+		{
+			StraightMagnitudes.Add(FMath::Abs(Curvature));
+		}
+
+		const bool bAboveTheThreshold = FMath::Abs(Curvature) >= Threshold;
+
+		if (HostAmount >= MarbleGateInPhaseG)
+		{
+			++InsidePhaseGGate;
+			InsidePhaseGGateBelowTheThreshold += bAboveTheThreshold ? 0 : 1;
+		}
+		else
+		{
+			OutsidePhaseGGateAboveTheThreshold += bAboveTheThreshold ? 1 : 0;
+		}
+
+		const bool bCornerHere = HostAmount >= CornerCorneringAmount;
+
+		if (bCornerHere && !bInACorner)
+		{
+			++CornerCount;
+			LastSignInThisCorner = 0.0;
+		}
+
+		bInACorner = bCornerHere;
+
+		if (!bCornerHere)
+		{
+			continue;
+		}
+
+		++CornerSamples;
+
+		if (FMath::Abs(Curvature) < Threshold)
+		{
+			++DipsBelowTheThresholdInsideCorners;
+			continue;
+		}
+
+		const double Sign = FMath::Sign(Curvature);
+
+		if (LastSignInThisCorner != 0.0 && Sign != LastSignInThisCorner)
+		{
+			if (FlipsInsideCorners == 0)
+			{
+				FirstFlip = FString::Printf(TEXT("%.0f cm, curvature %.3e"), Distance, Curvature);
+			}
+
+			++FlipsInsideCorners;
+		}
+
+		LastSignInThisCorner = Sign;
+
+		++ComparedWithTheHostProfile;
+		AgreesWithTheHostProfile += Sign == FMath::Sign(HostCornering) ? 1 : 0;
+	}
+
+	StraightMagnitudes.Sort();
+
+	const double NoiseFloor = StraightMagnitudes.Num() > 0 ? StraightMagnitudes.Last() : 0.0;
+	const double NinetyNinth = StraightMagnitudes.Num() > 0
+		? StraightMagnitudes[FMath::Min(FMath::FloorToInt32(0.99 * StraightMagnitudes.Num()), StraightMagnitudes.Num() - 1)]
+		: 0.0;
+
+	AddInfo(FString::Printf(
+		TEXT("Demo layout, %.0f cm of lap sampled every %.0f cm: %d samples. The steepest right vector has a Z of "
+			"%.3e."),
+		Length,
+		Spacing,
+		SampleCount,
+		SteepestRightVector));
+
+	AddInfo(FString::Printf(
+		TEXT("Straights, where the host's cornering amount is below %.2f: %d samples. The plugin's curvature there "
+			"peaks at %.3e per cm, a %.0f m radius, with a 99th percentile of %.3e, against a marble threshold of "
+			"%.1e, which is %.2f times the peak"),
+		StraightCorneringAmount,
+		StraightMagnitudes.Num(),
+		NoiseFloor,
+		NoiseFloor > 0.0 ? 0.01 / NoiseFloor : 0.0,
+		NinetyNinth,
+		Threshold,
+		NoiseFloor > 0.0 ? Threshold / NoiseFloor : 0.0));
+
+	AddInfo(FString::Printf(
+		TEXT("Corners, where the host's cornering amount is at least %.2f: %d runs over %d samples. %d sign changes "
+			"inside a corner%s%s, %d samples inside a corner below the threshold, and the plugin's sign agrees with "
+			"the host's on %d of %d compared"),
+		CornerCorneringAmount,
+		CornerCount,
+		CornerSamples,
+		FlipsInsideCorners,
+		FlipsInsideCorners > 0 ? TEXT(", the first at ") : TEXT(""),
+		*FirstFlip,
+		DipsBelowTheThresholdInsideCorners,
+		AgreesWithTheHostProfile,
+		ComparedWithTheHostProfile));
+
+	AddInfo(FString::Printf(
+		TEXT("Phase G threw marbles where the host's cornering amount reached %.2f: %d samples. Of those, %d fall "
+			"below the plugin's threshold and would throw nothing now, and %d samples outside that gate are above "
+			"it and would now throw"),
+		MarbleGateInPhaseG,
+		InsidePhaseGGate,
+		InsidePhaseGGateBelowTheThreshold,
+		OutsidePhaseGGateAboveTheThreshold));
+
+	TestTrue(
+		TEXT("Every right vector on the demo layout is horizontal, so the layout's elevation cannot leak into the "
+			"curvature's sign"),
+		SteepestRightVector < HorizontalRightVectorTolerance);
+
+	TestTrue(TEXT("The demo layout has straights to measure the noise floor on"), StraightMagnitudes.Num() > 0);
+	TestTrue(TEXT("The demo layout has corners to look for sign changes in"), CornerCount > 0);
+
+	TestEqual(
+		TEXT("The curvature never changes sign inside a corner, so no part of a corner throws its fan to the inside"),
+		FlipsInsideCorners,
+		0);
+
+	TestTrue(
+		TEXT("The marble threshold sits at least twice the straights' noise floor, so a straight throws nothing"),
+		NoiseFloor * 2.0 <= Threshold);
+
+	Track->Destroy();
+
+	return true;
+}
+
 #endif
