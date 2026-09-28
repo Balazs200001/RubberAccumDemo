@@ -2408,8 +2408,9 @@ distribution is a measured profile rather than an impression.*
 
 *To be superseded in mechanism by [W2](#w2--marbles-as-a-smooth-fan-outside-the-line), planned
 2026-09-28: the plugin throws a deterministic fan from every contact instead of the host placing
-one random deposit per car. The honest claim below survives word for word. Until W2 lands this is
-what the code does.*
+one random deposit per car. The honest claim below survives word for word. **This is no longer what
+the code does**: W1.3 deleted the host deposit on 2026-09-28 (host `97375cf`), and until W2's fans
+land the demo throws no marbles at all.*
 
 **G2's original premise is rejected.** Reading the buildup in adjacent cells to decide where marbles
 go is worse than the alternative on three counts, and only the first is about phase F not existing
@@ -2464,9 +2465,10 @@ This is the one place in G where the cheap option is also the rigorous one.
 
 ### Decided: the write is the existing track-space contact at a displaced offset (D-B)
 
-*To be superseded entirely by [W1](#w1--one-write-call-per-tyre-and-no-channel-on-it) and W2,
-planned 2026-09-28: the write API loses `Channel`, so this call cannot exist, and marbles stop being
-a contact at all. Until then this is what the code does.*
+*Superseded entirely by [W1](#w1--one-write-call-per-tyre-and-no-channel-on-it) and W2, planned
+2026-09-28: the write API loses `Channel`, so this call cannot exist, and marbles stop being a
+contact at all. **W1 landed the same day** (plugin `7c7af3e`, host `97375cf`), so this call is gone
+from the code.*
 
 No new plugin API. `RegisterSurfaceContactInTrackSpace` with `Channel = EAccumulationChannel::Marbles`.
 
@@ -3465,9 +3467,9 @@ this file, not a licence to expand scope. If the measured figure is bad, it is r
 
 ### Per-wheel slip, and what makes a wheel lock
 
-*The per-wheel channel is to be superseded by [W1](#w1--one-write-call-per-tyre-and-no-channel-on-it),
-planned 2026-09-28: the plugin derives the channel from slip, and `ChannelAtWheel` goes. The slip
-model and the lockup trigger below stay.*
+*The per-wheel channel is superseded by [W1](#w1--one-write-call-per-tyre-and-no-channel-on-it),
+built 2026-09-28: the plugin derives the channel from slip, and `ChannelAtWheel` is gone (host
+`97375cf`). The slip model and the lockup trigger below stay.*
 
 Each wheel carries its own `SlipAmount` and its own `EAccumulationChannel`. Three wheels keep the
 existing `Lerp(StraightSlipAmount, CorneringSlipAmount, CorneringAmount)` on `RubberBuildup`; a
@@ -4588,9 +4590,9 @@ and a capture needs no keyboard.*
 
 ## D7 — A lockup writes a full mark and a repeat lockup refreshes it
 
-Requested 2026-09-24 after looking at `c10-view-skid-marks`. **Not implemented. Not started.**
-Recorded here with the constraint measured, because it is a change to the write path and belongs to
-phase D rather than to C10.
+Requested 2026-09-24 after looking at `c10-view-skid-marks`. **The cheap half is built, by W1b on
+2026-09-28. The expensive half is not started.** Recorded here with the constraint measured, because
+it is a change to the write path and belongs to phase D rather than to C10.
 
 The proposal: a locked wheel should take the skid channel straight to full coverage, and a second
 lockup over the same texel should *refresh* that mark rather than deepen it, while decay continues
@@ -4646,15 +4648,25 @@ busiest texel and is the natural place to count lockups the same way. That measu
 *Exit: a lockup mark reads as full on the frame it is laid, and the decision on refresh-versus-
 accumulate is taken on a counted figure rather than on appearance.*
 
-*Taken into [W1b](#w1b--a-lockup-writes-a-full-mark-d7s-cheap-half) on 2026-09-28. The cheap half
-is planned there and not yet built; this section is updated when it lands. The expensive half and
-its counted figure stay here and stay open.*
+*Taken into [W1b](#w1b--a-lockup-writes-a-full-mark-d7s-cheap-half) on 2026-09-28.*
+
+**Updated 2026-09-28: the cheap half has landed, and its half of the exit condition is met.** A slip-1
+contact now deposits `LockupExposure()`, 1.99715, on the skid channel and nothing on rubber, whatever
+`DepositionScale` is (plugin `0af1495`, host `ceef32e`). "A lockup mark reads as full on the frame it
+is laid" is measured, not asserted:
+`RacetrackSurface.Write.LockupWritesAFullSkidMarkOnly` reads every texel of a swept lockup back on
+the frame it is laid and finds none below 0.95 coverage, at 30 and at 15 m/s; the thinnest texels
+read 0.986 and 0.964 (`MEASUREMENTS.md`, W1b). **The expensive half is still open, unbuilt, and
+still waits on its counted figure**: a second lockup on a texel still adds, taking it from about 2 to
+about 4, and nobody has counted how often that happens.
 
 ---
 
 ## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
 
-Requested 2026-09-28. **Planned, not started. Nothing below is built.** Every decision in this
+Requested 2026-09-28. **W1 and W1b are built, 2026-09-28; W2 and W3 are not started.** What
+building them found is under [Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b).
+Every decision in this
 section was settled by the user on 2026-09-28, the same day, by accepting each recommendation as
 written, including D2's scope expansion to an RGBA32f target. The options each decision rejected are
 kept below with their grounds. This is a scope change. It reworks finished work in
@@ -5298,6 +5310,89 @@ the line, measured as a profile and shown in a screenshot for the user to judge;
 linear by the agreed definition, measured by the harness; every test passes in both build paths;
 this section, D7, `EDITOR_SETUP.md` and `MEASUREMENTS.md` are updated, including what was not
 verified.*
+
+### Measured on implementing, 2026-09-28: W1 and W1b
+
+**Built and committed:** plugin `7c7af3e` (W1.1), `2227a3a` (W1.2), `0af1495` (W1b.1); host
+`97375cf` (W1.3 with the first bump), `ceef32e` (W1b.2 with the second bump), `b9b52cb` (the read-path
+tests' dead deposition scale). Both build paths are clean at every commit. **The suite at the end of
+W1b: 122 tests, 120 pass.** The two that fail are the two this section said would, for the reason it
+gave, and both commits that leave them red name them: `RubberAccumDemo.Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay`
+(marble coverage above 0.05) and `RubberAccumDemo.Demo.MarblesReachTheBufferOnTheFoldedLayout` (B
+non-zero after a run). The host throws no marbles and the plugin's fans do not exist until W2.3.
+Numbers in `MEASUREMENTS.md` under W1b.
+
+**Where building it departed from or added to the plan:**
+
+- **W1.0 checked more than one Blueprint.** `BP_SurfaceRegionDisplay`'s two graphs call neither write
+  wrapper. It is also the only Blueprint under `/Game`, the plugin's content is three material assets,
+  and neither map depends on `/Script/RacetrackSurface`, so no level script calls the library either.
+  Reading its graphs over MCP left the asset reporting dirty in memory; it was not saved and the file
+  on disk is the committed one.
+- **One interim state between W1.1 and W1.2.** They are separate commits as planned. For the one
+  commit between them the per-channel discard array was fed the slip-derived channel. W1.2 removed it.
+- **The unity build caught two collisions that `BuildPlugin` did not**: a file-scope `RubberSlip` in
+  one test file shadowing locals in two others (C4459), and a new `RaceSpeedCentimetresPerSecond`
+  ambiguous with the helper header's (C2872). Both were renamed before commit.
+- **The new tests use the engine's `FScopedCVar`** (`Misc/ScopedCVar.h`) rather than a sixth
+  hand-written scoped console variable. It sets at `ECVF_SetByTemp`, which outranks the `SetByCode`
+  values other tests write and is itself outranked only by a console-set value.
+- **The lockup readback runs at two speeds, not one.** 30 m/s is the plan's case; 15 m/s is added
+  because it puts the single-covered texels at 0.556 E, nearer the E/2 bound the 0.95 target was
+  derived from. `LockupIgnoresDepositionScale` also carries a control: the same raised deposition
+  scales a rubber mark by exactly 32.000, so the setting was in force when the lockup ignored it.
+- **`ConvertsWidthAndIntensity`'s "five hundred full-slip contacts" narrative is rebuilt around a
+  rubber contact**, because one lockup now saturates; it also checks slip 0.999 stays rubber.
+- **The two rewritten deposition tests paint rubber at their stated deposition**, as decided.
+  `ReturnsCoverageNotExposure` now reads rubber 0.410 at deposition 400. The latency test's band is
+  at slip 0.5 and deposition 100, half its old exposure, so its mean coverage is 0.252 where it was
+  0.440 on skid. Its tolerances are relative and still hold.
+- **The read-path tests' `DepositionScale 200` went at W1b, not W3.** The E2 text puts it with the
+  probe switch; W1b is what made it a no-op, so it went in its own commit then. The probe switch
+  stays in W3.2. `GatherAgreesWithTheShaderAtTheSameRadius` still spans a mark edge at E about 2:
+  12 of its 20 points carry a value, worst disagreement 0.000270.
+- **The skid-mark-pair tool lost its "Deposition is off" guard**, which keyed off `DepositionScale`
+  and would have refused to lay a pair the lockup path lays regardless, and its sizing constants
+  `LaidExposure` and `MaximumContactsPerMark`. `FSkidMarkPairPlacement::ContactsPerMark`, always 1
+  now, is replaced by the mark's length and contact width, so the test computes `E_lock L/(L+W)`
+  itself rather than reading the tool's own figure back: 1.872070 read, 1.872333 predicted.
+- **Tests not in the table that had to change at W1.3:** `SlipSeparatesStraightsFromCornersOnTheDemoLayout`
+  lost a marble-contact filter, behaviour unchanged. `MarblesReachTheBufferOnTheFoldedLayout` lost its
+  marble-contact count and its marble-stroke tally, which fans can never feed because they are not
+  strokes; its fan count is W2.3's. `MarblesGatherOutsideTheLineAndThinTowardTheEdge` was deleted with
+  the host symbols it read; its replacement is W2's `MarbleBandLiesOutsideTheLine`.
+- **`EveryChannelIsVisibleAtSteadyStateUnderDecay` passes one assertion by accident while B is empty**:
+  "the band does not peak where the rubber does" compares against a band index that never leaves 0.
+  The test is red on its coverage assertion regardless, and after W2 both are live again. Not changed.
+- **A lock now depends on the car reporting exactly full slip.** `LockedWheelSlipAmount` is
+  `EditAnywhere` in [0, 1] with default 1.0. Set below 1.0, a locked wheel would lay rubber. Nothing
+  guards it; the default satisfies the rule.
+
+**Found for later steps, not acted on:**
+
+- *W2.1.* Six tests are bound to RGBA16f and none is in the table: `DecayAtTheProductionAtlas` asserts
+  117964800 bytes; `BufferDecaysInPlaceInTheProductionFormat` asserts RGBA16f is production;
+  `BufferWithoutAUavDecaysUniformlyOnTheCanvas` uses RGBA32f as its no-UAV fixture, which W2.1 makes
+  false; `CoupledPassMatchesTheClosedFormAtEveryTexel`'s rounding tally would pass vacuously once
+  nothing rounds; host `SpaLayoutFoldsIntoFourRows` and `BothLayoutsFitTheCapAndTheMemoryBudget`, and
+  plugin `FoldsIntoRowsBeyondTheUnfoldedLimit`, compute bytes at 8 a texel. The query-cost harness
+  allocates RGBA16f explicitly, so its gather figure would silently stay a pre-W2.1 number. Typed UAV
+  load, filtering and blending of `PF_A32B32G32R32F` are each queried per format from the driver at
+  device creation (`D3D12Device.cpp:202-270`), independently of RGBA16f, so W2.1 checks them at
+  runtime on this machine rather than assuming parity.
+- *W2.3.* The ramp texture must also set `SRGB = false`. `UTexture2D` defaults to `SRGB = true`
+  (`Texture2D.cpp:69`), and the sampler would gamma-decode the "exactly linear" ramp. The existing
+  brush and solid already clear it. This is what "exactly linear" requires, not a new decision.
+- *W3.2.* The probe material must expose `SurfaceBlurTexels`, which the agreement test sets so the
+  two kernels match.
+
+**Not verified:**
+
+- **The Blueprint recompile after W1.1.** The editor has not been open since; it is owed at the W3.2
+  editor session. The read-only check above is the only evidence until then.
+- No lockup mark has been looked at on screen. The readback is the evidence.
+- E7's real-car capture was not re-run, as planned.
+- Everything ran on the Development editor target; nothing was packaged.
 
 ---
 
