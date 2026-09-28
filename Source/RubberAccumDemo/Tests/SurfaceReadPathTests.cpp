@@ -3,7 +3,6 @@
 #include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
-#include "HAL/IConsoleManager.h"
 #include "Kismet/KismetMaterialLibrary.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Materials/Material.h"
@@ -28,7 +27,6 @@ namespace
 
 	constexpr double ReadPathLapCentimetres = 62500.0;
 	constexpr float ReadPathSeconds = 1.0f;
-	constexpr float ReadPathDepositionScale = 200.0f;
 
 	UWorld* FindReadPathWorld()
 	{
@@ -136,16 +134,6 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 	TestEqual(TEXT("The target is as wide as one row"), Accumulation->SizeX, Ribbon.AtlasWidth());
 	TestEqual(TEXT("The target stacks every row"), Accumulation->SizeY, Ribbon.AtlasHeight());
 
-	IConsoleVariable* DepositionScale = IConsoleManager::Get().FindConsoleVariable(
-		RacetrackSurfaceMapping::DepositionScaleVariableName);
-
-	const float RestoreDepositionScale = DepositionScale != nullptr ? DepositionScale->GetFloat() : 1.0f;
-
-	if (DepositionScale != nullptr)
-	{
-		DepositionScale->Set(ReadPathDepositionScale);
-	}
-
 	const double PaintedCentre = (PaintedAlongTrackStart + PaintedAlongTrackEnd) * 0.5;
 	const double TravelCentimetres = (PaintedAlongTrackEnd - PaintedAlongTrackStart) * Ribbon.TrackLength;
 
@@ -157,11 +145,6 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		60.0f);
 
 	Subsystem->Tick(ReadPathSeconds);
-
-	if (DepositionScale != nullptr)
-	{
-		DepositionScale->Set(RestoreDepositionScale);
-	}
 
 	const TArray<FSurfaceBrushStroke>& Painted = Subsystem->GetStrokesResolvedThisFrame();
 
@@ -529,16 +512,6 @@ bool FSurfaceGatherAgreesWithTheShaderAtTheSameRadius::RunTest(const FString& Pa
 		return false;
 	}
 
-	IConsoleVariable* DepositionScale = IConsoleManager::Get().FindConsoleVariable(
-		RacetrackSurfaceMapping::DepositionScaleVariableName);
-
-	const float RestoreDepositionScale = DepositionScale != nullptr ? DepositionScale->GetFloat() : 1.0f;
-
-	if (DepositionScale != nullptr)
-	{
-		DepositionScale->Set(ReadPathDepositionScale);
-	}
-
 	const double TravelCentimetres = (PaintedAlongTrackEnd - PaintedAlongTrackStart) * Ribbon.TrackLength;
 
 	Subsystem->RegisterSurfaceContactInTrackSpace(
@@ -549,11 +522,6 @@ bool FSurfaceGatherAgreesWithTheShaderAtTheSameRadius::RunTest(const FString& Pa
 		60.0f);
 
 	Subsystem->Tick(ReadPathSeconds);
-
-	if (DepositionScale != nullptr)
-	{
-		DepositionScale->Set(RestoreDepositionScale);
-	}
 
 	const double BlurRadiusInTexels =
 		USurfaceAccumulationSubsystem::GetQueryContactPatchWidth() / (2.0 * Ribbon.SafeCentimetresPerTexel());
