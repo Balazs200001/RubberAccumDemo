@@ -2406,6 +2406,11 @@ distribution is a measured profile rather than an impression.*
 
 ### Decided: marbles are displaced deposits, not a field read (D-A)
 
+*To be superseded in mechanism by [W2](#w2--marbles-as-a-smooth-fan-outside-the-line), planned
+2026-09-28: the plugin throws a deterministic fan from every contact instead of the host placing
+one random deposit per car. The honest claim below survives word for word. Until W2 lands this is
+what the code does.*
+
 **G2's original premise is rejected.** Reading the buildup in adjacent cells to decide where marbles
 go is worse than the alternative on three counts, and only the first is about phase F not existing
 yet.
@@ -2458,6 +2463,10 @@ correct *whatever* the convention turns out to be, because the apex is the insid
 This is the one place in G where the cheap option is also the rigorous one.
 
 ### Decided: the write is the existing track-space contact at a displaced offset (D-B)
+
+*To be superseded entirely by [W1](#w1--one-write-call-per-tyre-and-no-channel-on-it) and W2,
+planned 2026-09-28: the write API loses `Channel`, so this call cannot exist, and marbles stop being
+a contact at all. Until then this is what the code does.*
 
 No new plugin API. `RegisterSurfaceContactInTrackSpace` with `Channel = EAccumulationChannel::Marbles`.
 
@@ -3455,6 +3464,10 @@ optimisation work that was not asked for and the trigger is a recommendation to 
 this file, not a licence to expand scope. If the measured figure is bad, it is reported as bad.
 
 ### Per-wheel slip, and what makes a wheel lock
+
+*The per-wheel channel is to be superseded by [W1](#w1--one-write-call-per-tyre-and-no-channel-on-it),
+planned 2026-09-28: the plugin derives the channel from slip, and `ChannelAtWheel` goes. The slip
+model and the lockup trigger below stay.*
 
 Each wheel carries its own `SlipAmount` and its own `EAccumulationChannel`. Three wheels keep the
 existing `Lerp(StraightSlipAmount, CorneringSlipAmount, CorneringAmount)` on `RubberBuildup`; a
@@ -4632,6 +4645,659 @@ busiest texel and is the natural place to count lockups the same way. That measu
 
 *Exit: a lockup mark reads as full on the frame it is laid, and the decision on refresh-versus-
 accumulate is taken on a counted figure rather than on appearance.*
+
+*Taken into [W1b](#w1b--a-lockup-writes-a-full-mark-d7s-cheap-half) on 2026-09-28. The cheap half
+is planned there and not yet built; this section is updated when it lands. The expensive half and
+its counted figure stay here and stay open.*
+
+---
+
+## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
+
+Requested 2026-09-28. **Planned, not started. Nothing below is built.** Every decision in this
+section was settled by the user on 2026-09-28, the same day, by accepting each recommendation as
+written, including D2's scope expansion to an RGBA32f target. The options each decision rejected are
+kept below with their grounds. This is a scope change. It reworks finished work in
+C8, phase G, D7 and C10.2 rather than advancing H or I, so it pushes both further out, and it is
+recorded here before any code as the working agreement asks. It sits after D7 because it absorbs
+D7's cheap half.
+
+| # | Change | Touches |
+|---|---|---|
+| W1 | The public write API loses `Channel`; the plugin derives the channel from slip | Plugin API and Blueprint library, stroke build, discard counter, host car, about twenty tests |
+| W1b | A locked tyre writes a full skid mark in one pass (D7's cheap half) | `SurfaceAccumulationMapping.h`, stroke build, the skid-mark-pair tool and its test |
+| W2 | Every contact on a curve throws a smooth marble fan outward, built and painted by the plugin | Curvature profile, a fan primitive, a ramp texture, the flush order, host marble code deleted |
+| W3 | The debug view's brightness becomes linear in the channel value | `M_SurfaceAccumulationDebug` only, a measurement harness, the two host read-path tests |
+
+**Three things found while planning changed what was asked for, and each became a decision rather
+than something quietly absorbed:** RGBA16f cannot hold the marble fan without terracing it (W2,
+decision D2); "the outer tyre clears what the inner tyres threw" is not what happens in one frame
+(W2); and no material setting can bypass the exposure, tonemapper and bloom that make the debug view
+bright (W3).
+
+### What this supersedes, and what it does not
+
+- **C8's host-side channel choice** (`### Per-wheel slip, and what makes a wheel lock`).
+  `ASplineFollowingCar::ChannelAtWheel` and the `Channel` property go. The per-wheel slip model, the
+  braking trigger, front-only locking, the second random stream and `LockedWheelSlipAmount = 1.0`
+  all stay. The locked wheel still reports 1.0; the plugin now reads that as a lockup instead of
+  being told.
+- **D-A, in mechanism.** The host no longer places marbles and the `min(u1, u2)` draw goes. **D-A's
+  honest claim survives word for word**: the line the marbles gather around is not chosen by any
+  number, because every fan starts at a tyre; how far they scatter still is; the side is still the
+  sign of the curvature. D-A's *rejected alternative* is reversed on D-A's own grounds. It refused to
+  derive the side independently because the handedness of `GetRightVectorAtDistanceAlongSpline` was
+  asserted nowhere. W2 takes the curvature's sign against that same right vector, which makes the
+  handedness irrelevant rather than assumed, and a test asserts the outside on a circle.
+- **D-A's "one deposit per car, not one per wheel"**, and the objection is answered rather than
+  dropped. It rejected four *random samples of one distribution* as a rate multiplier in a physical
+  costume, and it rejected doubling the contact count. W2 throws four *deterministic* fans whose
+  per-tyre amount is calibrated so the four carry exactly what G's one deposit carried, and it adds
+  no contacts: the fans ride on the four wheel contacts that already exist. The plugin cannot know
+  which contacts share a car, so per contact is the only form that keeps the API engine-agnostic.
+- **D-B entirely.** No marble call exists any more, in track space or otherwise, and with it goes
+  the zeroed `LateralOffsetAlphaPerSecond` subtlety, which existed only because the host redrew a
+  random displacement every tick.
+- **G6's `MarbleThrowCentimetres = 400` and `RacetrackDemo.MarbleThrow`**, replaced by a plugin
+  console variable.
+- **The per-channel discard counters.** A contact no longer has one channel and a marble deposit is
+  no longer a contact, so the array collapses to the single total it already sums to.
+- **D7's cheap half**, implemented by W1b. D7 is updated when W1b lands.
+- **C10.2's "the all-channels view is provably the image C9 captured".** W3 changes the display
+  curve on purpose, so no capture before W3 is comparable pixel for pixel with one after it. The
+  mask multiply itself stays.
+- **B6's format, by D2.** The accumulation target becomes RGBA32f. B6's one target and its channel
+  packing, R buildup, G skid, B marbles, A unused, survive; only the precision changes. With it go
+  the parts of E5 that exist because the target is half float: the in-place pass's hand-written
+  rounding to half floats, and `SurfaceDecayFormatTests` naming RGBA16f as the production format.
+  E6's decay cost and the paint cost are re-measured at the new format. C9's retirement of the 32 MiB
+  ceiling is the precedent this rests on.
+
+**Not superseded, explicitly:** D-C, which W2 reinforces because a fan is smooth by construction;
+G6's sweep and its 0.5 retention; D-E and E5's shared decay rate for rubber and marbles, which D2
+leaves alone by taking the format rather than a faster marble decay; the E5 coupling and E7's
+measured result; the G5 dot
+nodes, which stay disconnected; R4's finding that additive canvas writes ignore alpha, which W2 is
+built around; `MF_SampleRacetrackSurface` and its `Coverage` output, which W3 does not touch; and
+`EAccumulationChannel`, which the read side, `FSurfaceBrushStroke` and the channel view still use.
+
+### W1 — One write call per tyre, and no channel on it
+
+**Removed from the public write surface:** `FSurfaceContact::Channel`, `FSurfaceTrackContact::Channel`,
+the `Channel` parameter of both `RegisterSurfaceContact` overloads and both
+`RegisterSurfaceContactInTrackSpace` overloads, and the `Channel` pin of the two Blueprint write
+wrappers. `QuerySurfaceCoverage` and `GetSurfaceStateChannel` keep theirs; they choose which resolved
+channel to return, which is read side.
+
+**The derivation, settled by the request:**
+
+| Slip, after the existing clamp to [0, 1] | Tyre stroke | Exposure |
+|---|---|---|
+| `< 1` | rubber (R) only | `slip x ExposurePerUnitSlip x DepositionScale`, unchanged |
+| `>= 1` | skid (G) only, no rubber | the lockup exposure of W1b |
+| any, on a curve above the threshold | also a marble fan (B) | W2 |
+
+A lockup lays no rubber because the E5 coupling would pave a mark with rubber the same lockup laid,
+and E7's on-line against off-line comparison would stop meaning anything.
+
+**Where the rule lives.** `AppendStroke` sets `Stroke.Channel` from `Contact.SlipAmount` instead of
+copying `Contact.Channel`, and that is the only place. `FSurfaceTrackContact` is both the public
+track-space struct and the pending-contact record, so the queue loses the field too.
+
+**The discard counter.** `ContactsDiscardedOutsideRibbon[AccumulationChannelCount]`,
+`GetContactsDiscardedOutsideRibbonInChannel` and `RecordContactDiscardedOutsideRibbon(Channel)`
+become one `int32` behind the existing `GetContactsDiscardedOutsideRibbon()`, which already returns
+the sum. Every reader today is a test separating "a wheel fell off", which must be zero, from "a
+marble deposit left the track", which was expected. After W2 the second kind cannot happen, because
+a fan that runs past the edge is clipped, not discarded. The total *is* the wheel count. Two host
+tests call the per-channel getter by name and stop compiling, so they change in the same commit.
+
+**Blueprint.** Changing a `UFUNCTION`'s parameters breaks any Blueprint node that calls it. The A7
+note says nothing calls `RegisterSurfaceContact` from Blueprint; that is checked over MCP before the
+change by opening `BP_SurfaceRegionDisplay` read-only, and it is compiled after, rather than trusted.
+
+**Host.** `ASplineFollowingCar::Tick` makes exactly one
+`RegisterSurfaceContact(Position, Velocity, SlipAtWheel(Wheel), ContactWidth)` per wheel per tick,
+four a tick on a straight and in a corner alike. Deleted: `ChannelAtWheel`, the `Channel` property,
+`DepositMarblesOutsideTheLine`, `DrawMarbleThrowFallingAwayFromTheLine`, `MarbleRandomStream` and its
+seed offset, `MarbleThrowCentimetres` with its getter and setter, `ARacetrackCircuit::ApplyMarbleThrow`
+and `RacetrackDemo.MarbleThrow`. The throw distance comes back as a plugin console variable (W2), so a
+capture that set it keeps a way to.
+
+### W1b — A lockup writes a full mark (D7's cheap half)
+
+The locked case stops going through `ExposurePerUnitSlip` and deposits its own exposure, derived
+from a target coverage the same way `SaturationConstant` is: `E = -ln(1 - coverage) / k` with
+`k = 3`. The constant and its derivation go in `SurfaceAccumulationMapping.h` as code rather than as
+a comment — a named target coverage and an inline function that computes the exposure from it — so
+the derivation is readable where the number is.
+
+#### Found while planning: one pass reads at the target only on average
+
+The request assumed that because `PaintStrokes` scales each stroke by the swept share
+`T / (T + W)`, one lockup pass reads at the target coverage on the frame it is laid. **It reads at
+the target on average, not at every texel.** Each quad is `T + W` long and extends `W/2` past both
+ends of its stroke, so consecutive frames overlap by exactly `W` at every joint. For `T >= W` a
+fraction `W/T` of the texels along a mark take two deposits and the rest take one:
+
+| Along the mark | Exposure | Share of texels |
+|---|---|---|
+| single-covered | `E x T/(T+W)` | `(T - W)/T` |
+| double-covered | `2E x T/(T+W)` | `W/T` |
+| mean | exactly `E` | |
+
+The minimum is bounded below by `E/2`, approached as `T -> W`; for `T < W` more quads overlap and
+the worst texel is always better than `E/2`. Checked by hand, by simulation, and by an independent
+review against `SurfaceAccumulationBuffer.cpp:676-685` and `BuildStrokes`. **Nobody has measured
+this before:** `FSurfaceDepositPerPassIsIndependentOfFrameRate` asserts only a mean over 120 texels,
+and the fault-two entry in `MEASUREMENTS.md` fixed and verified the mean only. It is not a lockup
+defect — rubber strokes carry the same pattern and average it out over traffic — but a lockup is a
+single pass, so here it is visible.
+
+At a lockup at 3000 cm/s and 60 fps (`T = 50`, `W = 20`): 60 % of texels read `0.714 E` and 40 %
+read `1.43 E`. At 1200 cm/s the same car reaches `T = W` and the worst texel approaches `E/2`, and a
+lockup that brakes from 30 m/s passes through that speed on its way down.
+
+#### Decided 2026-09-28 (G): every texel of a lockup at least 0.95, and `DepositionScale` does not apply
+
+| Target | `E_lock` | At 30 m/s: single / double texels | Worst texel anywhere (`E/2`) | Extra half-lives before the mean dips below 0.95 |
+|---|---|---|---|---|
+| 0.95 mean | 0.999 | 0.882 / 0.986 | 0.776 | 0 |
+| **every texel >= 0.95 (decided)** | **1.997** | 0.986 / 0.9998 | **0.950** | 1.0 |
+| 0.9999 mean | 3.070 | 0.9986 / 1.0000 | 0.990 | 1.6 |
+
+**Decided: 2.0**, derived from the bound rather than chosen: `E = (-ln 0.05 / 3) / 0.5`, the
+exposure at which the thinnest-covered texel of any swept mark still reads 0.95. D7's exit condition
+is "a lockup mark reads as full on the frame it is laid"; at 0.95 mean, 60 % of a fast lockup's
+texels read 0.88 and a slow one's worst reads 0.78, which does not meet it. 0.9999 meets it with
+margin but holds a mark at full for 1.6 half-lives before any fade shows, 90 laps off the line at
+the calibrated rate, and that is the "extra half-life to fade" D7 rejected the read-time clamp for.
+
+**Decided: `DepositionScale` does not apply to a lockup.** `DepositionScale` exists to compress
+a session's accumulation into a few laps. A lockup is not accumulation; it is one mark. At the 32x
+the C10.5 stills used, a scaled lockup would deposit 64, six extra half-lives before it fades, and
+every capture would show marks that never go. Unscaled, a time-lapse shows real marks being paved at
+a time-lapsed rate, which is what the E5 coupling means.
+
+**A repeat lockup still adds.** Refresh instead of accumulate needs `dst = max(dst, value)`, which
+`FCanvas` cannot express (D7). A second lockup on a texel takes it from 2 to 4, one more half-life
+before it fades. That waits on D7's counted figure, as before.
+
+#### The skid-mark-pair tool, `SurfaceSkidPavingTests` and E7
+
+- **`RacetrackDemo.SkidMarkPair`** sizes its contact count through `SlipToExposure` to reach about
+  1.0 exposure: `ceil(1.0 / (0.002 x Scale x 0.9375))`, which is the 134 coincident contacts E7's
+  capture used at `DepositionScale 4`. With a lockup exposure each contact lays `E_lock` and the tool
+  overshoots. **Rework:** one lockup contact per mark. Both marks are laid identically in the same
+  frame, so their intensity is equal by construction and known: `E_lock x 300/320`, 1.87 at the
+  recommended value. `SkidMarkPairLandsOnAndOffTheRubber` keeps every assertion except the target:
+  `G` equals that value to half-float tolerance instead of `1.0 +- 0.1`, and `On == Off` stays. Its
+  `LayRubberBand` helper registers slip 1.0 *on the rubber channel*, which the new rule makes
+  impossible; it moves to slip 0.5 with twice the contacts, so the band holds the same exposure.
+- **Decided 2026-09-28 (G2): the tool's marble throw is accepted.** The pair is laid across the longest apex, which is on
+  a curve, so each lockup contact also throws a slip-1 fan into B. With one contact per mark that is
+  one fan pass, about `5e-5` exposure at its peak, `1.5e-4` coverage: invisible, and in a channel the
+  capture does not read, while E5 reads only R. **Decided: accept it**, state it in the capture's
+  entry, and add nothing to suppress it.
+- **`SurfaceSkidPavingTests` does not go through the lockup path.** It paints with
+  `Buffer->PaintStrokes` directly, channel and intensity 1.0 explicit, one layer below the write API,
+  so neither W1 nor W1b touches it and its predicted ratios stand. **E7's real-car capture did go
+  through it**, via `RacetrackDemo.SkidMarkPair`. Its predicted ratio does not change, because both
+  marks decay multiplicatively from the same start and the ratio of what each keeps is independent
+  of the start. What changes is the coverage each mark shows at each checkpoint, because it starts at
+  1.87 rather than 1.0. Nothing is re-run unless the user wants the capture again.
+
+### W2 — Marbles as a smooth fan outside the line
+
+**The goal as given:** in the blue channel, on the outside of each corner, a smooth gradient
+brightest just outside the racing line and fading to nothing toward the edge. No tyre-shaped streaks
+in blue. Nothing on the inside of the corner.
+
+#### Decided 2026-09-28 (C): the plugin's own curvature profile, and a 1 km straight-line threshold
+
+**No UE 5.8 API returns spline curvature.** Grepped `SplineComponent.h`, `Curves/Spline.h`,
+`GeometryCore/Public/Splines/*.h` and `InterpCurve.h`: the only related accessor is
+`FInterpCurve::EvalSecondDerivative` (`InterpCurve.h:93`), with respect to input key rather than
+distance, and `USplineComponent` never calls it.
+
+**Decided: the plugin builds its own signed-curvature profile in `ConfigureTrackRibbon`**, the way
+the host's `BuildCorneringProfile` already does and on the same spacing: one sample per 150 cm, a
+central difference of `GetDirectionAtDistanceAlongSpline` at plus and minus one spacing. One
+deliberate difference from the host's reference: **the sign is taken against the ribbon's own right
+vector**, `kappa = dot(DirectionAhead - DirectionBehind, RightVector(s)) / (2 x Spacing)`, not the Z
+component of a cross product. So a positive value means "bends toward positive
+`LateralOffsetAlpha`" by construction, and the throw goes to `-sign(kappa)` whatever the engine's
+handedness. The host's profile is normalised to its 75th percentile and clamped; the plugin's stays
+in physical units, per centimetre, because a plugin threshold must not depend on one layout's
+percentile.
+
+Checked in source: the demo's centreline never sets a per-point rotation, so
+`GetRightVectorAtDistanceAlongSpline` is always horizontal (`MakeFromXZ(Direction, WorldZ)`), and
+Spa's elevation cannot leak into the sign. A banked corner would break that, and nothing asserts it
+today, so a host test asserts it on the demo layout.
+
+**Decided threshold: 1 km radius, `1.0e-5` per cm.** Below it a contact throws nothing, which is
+phase G's Sign(0) lesson: noise-level curvature on a sampled straight has an arbitrary sign. It sits
+14 % below the gate G actually used on the demo layout, `0.05 x 0.00023151 = 1.16e-5` per cm or
+864 m, so G's marble corners stay marble corners. It is chosen, not derived, and it is only valid
+above the noise floor of the plugin's own profile on the demo's straights, which nobody has
+measured. The profile test reports that floor; if it is above `0.5e-5` the threshold rises to twice
+the floor, and that is recorded.
+
+Two known ways the sign can be wrong, both measured rather than assumed:
+
+- **Authored kinks.** C8 recorded kinks tighter than the corners they sit in; the tightest sample on
+  Spa is a 5.06 m radius against a 43 m sustained curvature. A kink in the same direction is harmless;
+  a wiggle that flips the sign inside a corner would put a few metres of fan on the inside. The
+  profile test counts sign changes inside corners on the demo layout and asserts none. If it finds
+  any, the difference window widens from one spacing to three, and that is recorded.
+- **Time compression.** A stroke piece uses the sign at its midpoint. At 20x one frame's travel is
+  about 550 cm, so a piece can straddle an S-bend's inflection and throw its whole fan to one side.
+  Bounded at one frame's travel, invisible at 1x, recorded against C4 with the lateral-extrapolation
+  limit already there, and not fixed.
+
+#### The fan
+
+One fan per tyre-stroke piece, so the row and lap-seam splits `BuildStrokes` already makes carry
+over. **Fans are a separate primitive, built by a separate `BuildMarbleFans` and held in a separate
+list**, not `FSurfaceBrushStroke`s with the channel set to B. That keeps every existing stroke-count
+assertion meaning exactly what it means today, which matters because every plugin test circuit is a
+circle and would otherwise sprout a marble stroke per contact.
+
+| Axis | Extent |
+|---|---|
+| Along the track | the tyre stroke's along-track span plus `W/2` at each end, scaled by the same swept share, with travel measured along the track only |
+| Across the track | from the tyre's outer edge outward by `D(slip)` |
+| Intensity | `I(slip)` at the tyre's edge, falling to zero at `D` |
+| Side | `-sign(kappa)` at the piece's midpoint |
+
+**Along-track travel only**, because the tyre stroke's `Travel` is the hypotenuse including lateral
+drift, and using it would inflate the fan's share mid-corner exactly where the mass calibration must
+hold. **The same span as the tyre stroke, not the travel alone**, because a travel-only quad tiles
+only if velocity times time equals the change in centreline distance, and for a wheel off the
+centreline it does not: `WorldVelocityToTrackRates` has no `(1 - kappa y)` term, so on a curve
+travel-only quads would leave gaps on the outside. The `W/2` caps cover them, at the cost of the
+same 1x/2x ripple W1b describes, which traffic averages out.
+
+**No fan when along-track travel is zero.** A stationary tyre throws nothing, and at zero travel the
+swept share is 1, which would throw a full fan every frame under a parked car.
+
+**Drawn with `K2_DrawTexture`, unrotated, from a ramp texture whose falloff is in RGB.** Canvas
+additive is `TStaticBlendState<CW_RGB, BO_Add, BF_One, BF_One>` (`BatchedElements.cpp:486-488`) and
+the element shader is `texture x vertex colour` (`SimpleElementPixelShader.usf:83-86`), so alpha
+never lands, which is R4's finding and the reason today's strokes are hard-edged. The existing brush
+is not changed: its alpha falloff doing nothing is recorded fact that the tyre strokes' measured
+widths rest on. The ramp is a new transient texture: 256 texels, B8G8R8A8, value `255 - i`, which
+is exactly linear, with **`AddressX` and `AddressY` set to `TA_Clamp` and `Filter` to
+`TF_Bilinear` before `UpdateResource`**. The default address mode is `TA_Wrap`
+(`Texture2D.cpp:71-72`), which would bilinear-blend the ramp's zero end into its bright end and put a
+bright sliver on the fan's far edge — a ridge. The fan is flipped for the negative side with a
+negative `CoordinateSize`, which `FCanvasTileItem` honours (`CanvasItem.cpp:454-473`).
+
+*Rejected: vertex-coloured triangles.* `FCanvasTriangleItem` with `SE_BLEND_Additive` would give an
+exactly linear ramp with no texture (`CanvasItem.cpp:1697-1722`). It fixes the profile to linear
+forever and needs a second canvas item type; the texture keeps the profile a data choice.
+
+**Clipped at the track edge, never clamped.** The fan pass sets the same per-row scissor
+`PaintStrokes` does, so on the folded atlas a fan that runs past the lateral edge cannot paint into
+the neighbouring row; unfolded, the target edge clips it. Phase G's kerb stripe came from clamping
+out-of-range deposits onto the boundary texel, and nothing here clamps. **The row-clip loop is
+extracted into one helper used by the sweep, the tyre pass and the fan pass**, instead of a third
+copy: the pattern depends on flushing before each scissor change, because the flush-deferral guard
+disables auto-flush for the whole call, and a copy that got the order wrong would clip fans to the
+previous row's rect silently. That extraction is its own commit.
+
+#### Decided 2026-09-28 (D): a linear profile, 800 cm and `5e-5` at slip 1
+
+**Decided profile: linear, `I x (1 - u)` for `u` from 0 at the tyre's edge to 1 at `D`.** It is the
+expected value of the scatter phase G measured: `min(u1, u2)` has density `2(1 - x)`, a linear
+ramp, and G measured its mean throw at 66.40 cm against a predicted `D/3 = 66.67`. The fan is that
+distribution's mean field, written in closed form instead of sampled, so G's band shape carries
+over. A quadratic `(1 - u)^2` would fade more softly at the far edge; the linear kink there is
+blurred by slip varying between contacts.
+
+**Decided throw distance: `D = slip x 800 cm`, a console variable
+`r.RacetrackSurface.MarbleThrowAtFullSlip`.** Tuned, not derived: at the demo's full-cornering slip
+of 0.5 it reproduces G6's 400 cm, which G6 chose so the band reaches to within 50 cm of the edge.
+
+**Decided amount: `I = slip x 5.0e-5 x DepositionScale`, `MarbleExposurePerUnitSlip` in
+`SurfaceAccumulationMapping.h`.** Derived: G deposited one 20 cm stroke per car at
+`0.002 x 0.5 = 0.001`, which is `0.02` exposure-centimetres per centimetre of travel. Four fans at
+slip 0.5 carry `4 x (0.5 x 5e-5) x 400 / 2 = 0.02`. Checked independently. `DepositionScale`
+applies, because marbles accumulate the way rubber does. With both `D` and `I` linear in slip, the
+mass a fan carries goes as slip squared, so a locked tyre in a corner throws four times what a tyre
+at full cornering does.
+
+#### Found while planning, and decided 2026-09-28 (D2): the fan does not survive RGBA16f, so the target becomes RGBA32f
+
+Spreading G's marble mass over a 400 cm fan instead of a 20 cm stroke makes each pass's increment
+at the fan's peak about 40 times smaller: at full cornering and 60 fps, `2.5e-5 x 0.58 = 1.45e-5`.
+The canvas additive blend is taken to round to nearest half float. That is an inference: B6's
+figures on this path, 0.19714 against 0.20000 after 200 passes, are consistent with it, but no test
+has measured the canvas path's rounding mode the way E5 measured truncation on the separate UAV
+store. **An increment smaller than half an ulp of the stored value is
+lost.** In `[2^-5, 2^-4)` half an ulp is `1.53e-5`, so **B stops growing at exactly 0.03125, which
+is 8.9 % coverage, and the resting profile is a staircase at powers of two**: 0.031, 0.016, 0.008 and
+down. Whatever the amount, the steady state and the increment scale together, so what decides it is
+how many fan passes land on a texel per e-folding time, about 60 a lap at the peak times 81 laps at
+the calibrated half-life. Nothing before this change ever operated there: G's increments were 70
+times larger.
+
+Simulated, with round-to-nearest-even half floats, the 1x/2x ripple, and decay applied in banked
+steps as the pass does. The scripts ran in a temporary session directory and are not kept; W2.0's GPU
+test is what replaces them as evidence.
+
+| Configuration | Peak stored / ideal | Texels stuck on a flat step, of 63 | Local maxima |
+|---|---|---|---|
+| RGBA16f, G's mass, 56-lap half-life | 0.062 / 0.124 | 57 | 0 |
+| RGBA16f, 4x mass, marbles at a 14-lap half-life | 0.124 / 0.124 | 52 | 0 |
+| RGBA16f, 16x mass, marbles at a 3.5-lap half-life | 0.124 / 0.124 | 33 | 0 |
+| RGBA16f, G's mass, dithered one pass in 32 | 0.132 / 0.124 | 0 | 17 |
+| **RGBA32f, G's mass, 56-lap half-life** | **0.124 / 0.124** | **0** | **0** |
+
+The sweep protects the racing line itself — under traffic the simulated value settles about 400
+times below the floor — so the floor binds exactly where the feature's payoff is: off the line, which
+nothing sweeps. With decay off, the cvar's default, every texel freezes within about 2000 to 3000
+fan passes regardless.
+
+**The options:**
+
+| | What it costs | What it buys |
+|---|---|---|
+| **A. RGBA32f target (decided)** | +112.5 MiB, 225 MiB total at the 14401 x 1024 atlas, 2.8 % of this laptop's VRAM. Reopens B6's format decision. E5's in-place decay rounds to half floats by hand and needs a path that does not; `SurfaceDecayFormatTests` names RGBA16f as production. E6's decay cost and the paint cost must be re-measured. The material's 128-bit float filtering must be confirmed on the RHI | A clean ramp at any decay rate. It also removes a quieter version of the same effect in the rubber channel, whose increments at `DepositionScale 1` are about one ulp near exposure 1 — invisible because coverage is saturated there, and not measured |
+| B. RGBA16f, marbles decay faster and deposit more | One shader line and the canvas fallback's retention become per channel; E5's "rubber and marbles keep the shared rate" is superseded. Needs decay on | **Rejected.** Partial: even at a 3.5-lap marble half-life half the fan's texels still sit on steps, and with decay off it freezes as before |
+| C. RGBA16f, dithered fan | A noise pattern in the ramp and a per-throw offset; the clever option | **Rejected.** No steps, but grain with local maxima at texel scale, which fails a texel-level "no ridge" check and passes only after the material's read blur |
+| D. Accept the floor | Nothing | **Rejected.** A dim, stepped fan at 1x. Captures at raised deposition show the same steps higher up, because the steps are scale-free |
+
+**Decided: A**, as its own step W2.1 before the fan is built, because it is the obvious
+implementation and the only one that meets the goal as written. C9 already retired the 32 MiB
+ceiling on its own premise ("the plugin is not being published"), and this is the same argument. It
+is a scope expansion on top of the one requested, taken by the user knowing that. **W2.0 comes
+first anyway:** a GPU test that adds the fan's real increment to today's RGBA16f target and reads it
+back, B6-style, because the table above is a simulation of the ROP, not a measurement of it. If W2.0
+contradicts the simulation — the increments survive on the real blend path — W2.1 stops and the
+decision returns to the user with the number, rather than a format change being made on a
+prediction the hardware refuted. Otherwise the same test, run on RGBA32f, becomes the regression
+guard at a tight tolerance.
+
+#### The flush order, and what it does and does not do
+
+`FlushPendingContacts` becomes: build tyre strokes and fans; **paint this frame's fans**; sweep B
+under this frame's tyre strokes; paint the tyre strokes.
+
+**The request expected this to make the outer tyre clear what the inner tyres threw, so the band
+starts outside the car without the plugin knowing which contacts share a car. In one frame it does
+not.** The wheels sit at plus and minus 40 cm with 20 cm contacts, so their footprints are
+`[-50, -30]` and `[+30, +50]` about the car's centre, with a 60 cm gap between them that no wheel of
+that car ever covers. The inner tyre's fan starts at its outer edge, crosses that gap, and at slip
+0.5 runs 400 cm. The outer tyre's footprint covers 20 cm of it, 5 %, and halves it there, twice
+counting the rear. The 60 cm under the car keeps the inner fans at full strength, and that strip is
+where the racing line is.
+
+**What does put the band outside the line is G6's mechanism, unchanged: other cars' tyres sweeping
+it.** G's own deposit peaked *at* the car's centre, more marble under the car than the fan puts
+there, and G6 still measured the band peak 200 cm outside the rubber peak with the line holding 6 %
+of the band's peak (`MEASUREMENTS.md`, "Where the marble band actually lands", 2.18 against 35.04 in
+the 42 corner columns folded by curvature sign, at steady state under deposition 16 and decay 16).
+With the field's lateral spread the two wheel bands close up and cover the gap
+statistically (C8). So the design stands, the reorder stays as requested — it is free and it does
+halve the inner fans under the frame's own outer tyres — but the claim moves from "one frame" to
+"steady state under traffic", and it is measured there, not asserted per frame.
+
+#### Decided 2026-09-28 (F): track-space callers with no centreline throw no marbles
+
+With no spline there is no curvature, so there is no side and no threshold.
+**Decided: no fans, and the existing "configured without a centreline" warning says so.** Rubber
+and skid are unaffected. A caller-supplied curvature — a field on `FSurfaceTrackContact`, or a
+profile handed to `ConfigureTrackRibbon` — would give track-space-only hosts marbles, but it grows
+the API and hands the host back the side decision this change removes, so it is rejected. Both
+host read-path tests configure without a centreline and rely on this.
+
+#### Constants and console variables
+
+| Name | Where | Value | Derived or tuned |
+|---|---|---|---|
+| `LockupTargetCoverage` and `LockupExposure()` | mapping header | 0.95 on the thinnest texel, 2.0 | derived (G) |
+| `MarbleExposurePerUnitSlip` | mapping header | `5.0e-5` | derived from G's mass (D) |
+| `MarbleThrowAtFullSlip` | mapping header, `r.RacetrackSurface.MarbleThrowAtFullSlip` | 800 cm | tuned to G6 (D) |
+| `MinimumMarbleCurvature` | mapping header | `1.0e-5` per cm | chosen, checked against a measured floor (C) |
+| `CurvatureSampleSpacing` | mapping header | 150 cm | the host's reference spacing |
+
+The threshold is not a console variable: tuning it live would move where marbles land, which is the
+thing G refused to let `DepositionScale` do.
+
+### W3 — The debug view's brightness
+
+#### What makes it bright, predicted from the engine source and not yet measured
+
+Emissive is `Coverage x DebugChannelMask`, unlit (`EDITOR_SETUP.md`, G5 bypassed). Between that and
+the screen, four stages, each read from the 5.8 source:
+
+1. **The curve.** `1 - exp(-3E)` is 63 % at `E = 0.33` and 35 % at `E = 0.14`.
+2. **A fixed 2.4x exposure.** `r.DefaultFeature.AutoExposure=0` does not turn exposure off: it sets
+   min and max to the same EV100, `log2(1/1.2)` (`SceneView.cpp:2060-2069`), which forces the
+   target, and `AutoExposure.Bias = 1` multiplies by 2. `2 x 1.2 = 2.4`, applied every frame
+   whatever is on screen. Local exposure is also active at contrast 0.8 and shifts a flat field
+   uniformly.
+3. **The filmic curve and a gamut boost on pure primaries.** The filmic path treats scene colour as
+   AP1 and converts back to sRGB after the curve, which amplifies a saturated primary.
+4. **Unthresholded bloom.** `BloomThreshold = -1`, intensity 0.675; every pixel feeds it linearly.
+   Order of magnitude for a large uniform field: about +9 % before tonemapping.
+
+Predicted 8-bit output for the rubber view, a pure red channel:
+
+| Coverage | 0.18 | 0.25 | 0.33 | 0.50 |
+|---|---|---|---|---|
+| Red, predicted | 210 | 234 | 251 | 255, clipped |
+
+**So the view is flat out by coverage 0.35, which is `E = 0.14`.** The curve and the post chain are
+roughly equal contributors; bloom is secondary; `DepositionScale` in captures only moves where on
+that curve a capture lands. **No setting on an Unlit surface material bypasses exposure, the
+tonemapper or bloom.** The real levers are a post-process material replacing the tonemapper, or the
+view's `Tonemapper` show flag, which falls back to a plain gamma curve and also removes bloom, is
+whole-view, and is fixed on in Shipping. "Change only the host material" therefore means
+compensating in the material for a measured response, not switching the chain off.
+
+#### Measured before the material is touched: a response harness
+
+A new host test, `RubberAccumDemo.Surface.DebugViewResponse`. It fills its own texture with bands of
+known exposure, binds it to an instance of the debug material on a plane, captures the plane with a
+`SceneCapture2D` in final-colour LDR, and reads the band centres back. Separately it draws the
+material with `DrawMaterialToRenderTarget` into RGBA16f, which runs no post-processing and reads raw
+emissive (`KismetRenderingLibrary.cpp:164-229`). The chain is split with the capture's own
+`PostProcessSettings` at weight 1: bloom off, local exposure contrast 1, exposure bias `-0.263` so
+exposure is 1; the tonemapper's share is what remains.
+
+Two traps in the obvious method, found in source: the `Tonemapper` show flag cannot isolate the
+tonemapper, because the gamma-only path it selects also drops bloom and forbids local exposure; and
+the `EyeAdaptation` show flag is a no-op in a project already on fixed exposure. A one-off capture
+has no view state, so exposure comes from a CPU fallback that matches fixed-exposure maths — it
+happens to be right here and would not be under automatic exposure. Scene captures force 100 %
+screen percentage, the project's default anyway, and anti-aliasing is off in this project. The
+capture does not bit-match the 10-bit back buffer. All of that goes in the measurement's entry.
+
+#### Decided 2026-09-28 (E): linear in coverage, on screen
+
+| | Linear quantity | Consequence |
+|---|---|---|
+| **1 (decided)** | coverage | The view shows what `QuerySurfaceState` returns and what the overlay bars already draw linearly, so surface and bars agree by eye. Coverage 0.5 reads half bright |
+| 2 | exposure clamped to [0, 1] | **Rejected.** The view stops matching the query. `E = 1` is coverage 0.95, and everything above it is flat |
+
+**Either way the view also has to be linear on screen, not just in emissive**, or exposure 0.2
+still reads 48 % from sRGB encoding alone. **Decided:** linear in the encoded pixel value, which
+is roughly linear to the eye, achieved by the material emitting the inverse of the harness's
+measured response for each primary, in a Custom node recorded verbatim in `EDITOR_SETUP.md` like
+G5's and F0's. Honest limits: exact for the single-channel views; approximate for the all-channels
+view, because the tonemapper is not separable across mixed colours; blind to bloom halos around
+bright features; and valid only while exposure stays fixed. The harness then asserts end-to-end
+linearity, so a later post-process change fails a test rather than silently bending the view. If the
+harness shows bloom's share is not small, turning bloom off is a `Config/` change and is asked for
+separately.
+
+#### Decided 2026-09-28 (E2): the read-path tests draw a probe material
+
+`GatherAgreesWithTheShaderAtTheSameRadius` compares the material's `G` against the C++ query at a
+`2e-3` tolerance and would fail by a wide margin. `ReadPathReturnsTheMarkWhereItWasPainted` uses
+`G` as centroid weights and a 5 % leak ratio; a nonlinear display curve changes that ratio and it
+could fail, or pass, for a reason unrelated to its name.
+
+| | How | Risk |
+|---|---|---|
+| **1 (decided)** | A test-only probe material, `/Game/Materials/M_SurfaceCoverageProbe`: `MF_SampleRacetrackSurface.Coverage` straight to emissive, unlit. Both tests switch to it and fail loudly if it cannot load. A new test checks the debug material's own mapping at known coverages through the raw-emissive path | One more asset |
+| 2 | A scalar parameter on the debug material that the tests set to 0 for "raw coverage" | **Rejected.** The tests exercise a branch production never uses, and a wrong default passes them |
+| 3 | The tests invert the display curve in C++ | **Rejected.** Couples two tests to a fitted curve |
+
+The tests were only ever testing the function; the debug material was the nearest thing that drew
+it. Option 1 makes that dependency explicit.
+
+Both host tests also force `DepositionScale 200` on a slip-1 mark, which W1b makes a no-op. Their
+assertions are positional and self-consistent, so they keep passing, but the setup line stops doing
+anything and is removed rather than left looking meaningful.
+
+**This is an asset session.** The user is asked before it so the repositories can be committed
+first. Changed: `/Game/Materials/M_SurfaceAccumulationDebug`; new:
+`/Game/Materials/M_SurfaceCoverageProbe`. Not touched: `MF_SampleRacetrackSurface`,
+`MPC_RacetrackSurface`. Both saved, both logged in `EDITOR_SETUP.md`.
+
+### Decisions, settled 2026-09-28
+
+All eight were settled by the user on the day of planning, each as recommended.
+
+| | Decision | Decided |
+|---|---|---|
+| C | Curvature source and straight-line threshold | The plugin's own profile at 150 cm, signed against the ribbon's right vector; 1 km radius, raised to twice the measured noise floor if needed |
+| D | Fan profile, throw distance and amount at slip 1 | Linear; 800 cm at slip 1; `5e-5` at slip 1 |
+| D2 | Storage precision for the fan | RGBA32f as its own step W2.1, after W2.0 has measured RGBA16f on the GPU; back to the user if W2.0 refutes the simulation |
+| E | What linear means in the debug view | Coverage, linear in the encoded pixel value, by a material-side inverse of the measured response |
+| E2 | How the read-path tests keep testing coverage | A probe material |
+| F | Track-space callers without a centreline | No fans, stated in the existing warning |
+| G | Lockup target and `DepositionScale` | Every texel at least 0.95, `E_lock = 2.0`; `DepositionScale` does not apply |
+| G2 | The skid-mark-pair tool's marble throw | Accept; one fan pass, 1.5e-4 coverage, in a channel the capture does not read |
+
+The two extra decisions carry the letter of the change they belong to rather than H and I, which
+are phase names in this file.
+
+### Tasks, in build order
+
+| # | Task | Exit |
+|---|---|---|
+| W1.0 | Over MCP, open `BP_SurfaceRegionDisplay` read-only and confirm nothing in Blueprint calls either write wrapper | Confirmed before W1.1; the Blueprint recompiles clean after it |
+| W1.1 | Channel derived from slip in `AppendStroke`; `Channel` gone from both structs, all four overloads and the Blueprint library; plugin tests updated | Plugin write-API tests green |
+| W1.2 | One discard counter | Both host tests that named the per-channel getter compile and read the total |
+| W1.3 | Host: one contact per wheel, no channel; host marble code and `RacetrackDemo.MarbleThrow` deleted | Four pending contacts a tick in a corner and on a straight |
+| W1b.1 | Lockup exposure as a derived constant; slip 1 writes G only at `E_lock`, unscaled | Readback test below |
+| W1b.2 | Skid-mark-pair tool: one contact per mark; its test's target becomes `E_lock x 300/320` | `SkidMarkPairLandsOnAndOffTheRubber` green |
+| W2.0 | GPU precision test at the fan's real increment, run on today's RGBA16f target first | A measured number in `MEASUREMENTS.md`, confirming or refuting the simulation before any format change |
+| W2.1 | RGBA32f target, in-place decay without half-float rounding, format and budget tests, the material's float filtering confirmed on the RHI; skipped and returned to the user if W2.0 refutes the simulation | W2.0's test passes on the new format; decay closed-form tests green at the tighter tolerance |
+| W2.2 | Curvature profile in `ConfigureTrackRibbon`, signed against the right vector | Profile tests below, noise floor and sign flips reported |
+| W2.3 | Ramp texture, `BuildMarbleFans`, the fan pass, the row-clip helper, the flush reorder | Fan tests below |
+| W2.4 | Marble console variable and constants | Defaults in the table above |
+| W3.1 | Response harness, before any material change | Measured table in `MEASUREMENTS.md`; decision E confirmed against it |
+| W3.2 | Asset session, asked for first: the debug material's inverse curve and the new probe material | Harness asserts linearity; both read-path tests on the probe |
+
+**Builds and tests.** Every task's exit includes both build paths, `BuildPlugin` to a short package
+path and `Build.bat` on the editor target, because they have disagreed before. Tests run headless
+through `UnrealEditor-Cmd.exe` with the editor closed and **without `-nullrhi`**, which crashes 5.8
+before any test runs. That matters more than usual here: the response harness and the fan tests
+render, and a rendering test is exactly where the flag is tempting.
+
+**Commits.** One logical change per commit, plugin first, then the submodule bump in the host. The
+lockup exposure is its own plugin commit, separate from the channel removal, as asked. Every plugin
+commit builds under `BuildPlugin` on its own. Two couplings force some bundling on the host side and
+are stated rather than hidden: the host cannot compile against the channel-free API until its own
+`Channel` arguments and its marble call are gone, so the first bump carries W1.3; and the two host
+tests that named the per-channel getter change in that same commit. Every host commit builds under
+`Build.bat`. **The full suite is not green at every intermediate commit, and this says so:** between
+W1.3 and W2.3 the demo throws no marbles, so the host marble tests fail in that window until W2's
+commits rewrite them. Each such commit names the tests it leaves red. The suite is run in full, and
+must be green, at the end of W1b, W2 and W3.
+
+### Tests
+
+| Test | Asserts | New or rewritten |
+|---|---|---|
+| `RacetrackSurface.Write.SlipBelowOneWritesRubberOnly` | slip 0.5: R at the derived mean, G and B exactly 0, no centreline | new |
+| `RacetrackSurface.Write.LockupWritesAFullSkidMarkOnly` | slip 1 over several frames: R exactly 0; every interior texel at least 0.95 coverage; mean `E_lock`; single and double texels at `E_lock T/(T+W)` and twice that, in the predicted fractions | new |
+| `RacetrackSurface.Write.LockupIgnoresDepositionScale` | the same mark at scale 1 and 32 reads the same | new |
+| `RacetrackSurface.Stroke.ConvertsWidthAndIntensity` | slip 0.5 gives the rubber exposure; slip 1.7 gives `E_lock` on G | rewritten, it asserted the old clamp into the rubber formula |
+| `RacetrackSurface.Curvature.SignFollowsTheRightVector` | on a circle, fans land at a larger radius than the tyre, checked in world space through `TrackToWorld` | new |
+| `RacetrackSurface.Marbles.NoneOnTheInside` | on a circle, B is exactly 0 inside the tyre's inner edge | new |
+| `RacetrackSurface.Marbles.NoneBelowTheThreshold` | a straight spline and a 1.5 km circle throw nothing; an 800 m circle does | new, needs a straight-spline helper |
+| `RacetrackSurface.Marbles.ProfileFallsMonotonically` | at an apex, B across the track does not rise from the tyre's outer edge to `D`, within half-float tolerance, has no local maximum, and matches the linear closed form | new |
+| `RacetrackSurface.Marbles.ThrowAndAmountScaleWithSlip` | slip 0.25 against 0.5: last non-zero texel at `D(slip)` to a texel; peak ratio 2 | new |
+| `RacetrackSurface.Marbles.OuterTyreSweepsTheInnerFanInItsFootprint` | one flush, two contacts 80 cm apart: B under the outer footprint is the inner fan times the retention; between the wheels it is untouched; beyond, both fans | new, and named for what happens rather than for "clears" |
+| `RacetrackSurface.Marbles.NoStripeAtTheKerb` | a fan thrown past the edge: the last on-track texel is not above its inner neighbour; the neighbouring row of the folded atlas is untouched | new |
+| `RacetrackSurface.Marbles.NoneWithoutACentreline` | track-space contacts on a ribbon with no spline throw nothing | new |
+| `RacetrackSurface.Marbles.FanSurvivesTheBufferFormat` | the fan's real increment added to the production format for the passes a steady state needs reads back within tolerance of the float sum | new, the W2.0 measurement |
+| `RacetrackSurface.Query.GatherIsolatesChannels` | paints B with a directly built stroke, as the marble-channel test already does | rewritten, it asked the write API for a marble stroke |
+| `RacetrackSurface.Query.ReturnsCoverageForEveryChannelAtOnce` | `Marbles == 0` held on a straight fixture | rewritten, its circle would now throw |
+| `RacetrackSurface.Query.ReturnsCoverageNotExposure` and `...LatencyCostsLessThanTheFieldVariesAlongTrack` | their mark is painted with a rubber contact at the stated deposition, so the deposition still does what their names say | rewritten — both would stay green by accident, because deposition no longer scales a slip-1 mark |
+| `RubberAccumDemo.Car.RegistersFourContactsATick` | four pending contacts on a straight and in a corner; fans present only in the corner | rewritten from `RegistersMoreSlipInACornerThanOnAStraight`'s count assertions, slip assertions kept |
+| `RubberAccumDemo.Car.LocksOneFrontWheelUnderBraking` | classifies by `SlipAmount >= 1` instead of `Channel` | rewritten |
+| `RubberAccumDemo.Track.NoWheelFallsOffTheRibbon` | the single total is zero | rewritten |
+| `RubberAccumDemo.Demo.MarbleBandLiesOutsideTheLine` | on the demo layout at steady state, folded by corner sign as G measured it: B's peak lies outside rubber's peak, B at rubber's peak is a stated fraction of B's peak, and B is zero inside the innermost tyre band | new, it replaces `MarblesGatherOutsideTheLineAndThinTowardTheEdge`, whose hypothesis was a random draw that no longer exists |
+| `RubberAccumDemo.Demo.MarblesReachTheBufferOnTheFoldedLayout` | counts fans, not marble contacts; the buffer readback is unchanged | rewritten |
+| `RubberAccumDemo.Demo.CurvatureProfileOnTheDemoLayout` | right vectors horizontal everywhere; no sign change inside a corner; reports the straights' noise floor | new |
+| `RubberAccumDemo.Surface.DebugViewResponse` | W3.1's measurement, then end-to-end linearity by the agreed definition | new |
+| `RubberAccumDemo.Surface.DebugMaterialMapsCoverageLinearly` | raw emissive at known coverages matches the inverse curve | new |
+| `RubberAccumDemo.Track.SkidMarkPairLandsOnAndOffTheRubber` | target `E_lock x 300/320`; rubber band at slip 0.5 | rewritten |
+
+`RacetrackSurface.Accumulator.MarbleStrokeWritesOnlyTheMarbleChannel` keeps passing but paints a
+marble *stroke*, which nothing constructs any more. It stays, as a test that `PaintStrokes` is
+channel-generic, and its description says so.
+
+### Measurements owed
+
+- The fan's increment in the production format on the GPU, and, if W2.1 is built, RGBA32f's
+  memory, decay pass cost against E6, and paint cost.
+- **The extra paint cost of the fan pass**, interleaved E6-style against the current flush, 80
+  contacts uniform and fanned, empty and populated, Development editor target headless, mains
+  confirmed. The fans are a third canvas pass, and C0 showed cost is per pass rather than per quad,
+  so the pass is what is timed. `r.RacetrackSurface.TimePaint` brackets `PaintStrokes` only, so it
+  is extended to the whole flush, which also closes G's "the sweep pass is not timed".
+- The lockup readback against the ripple prediction.
+- The demo layout's curvature noise floor and sign-flip count.
+- The marble band's steady-state profile on the demo layout, folded by corner sign, against G's
+  table.
+- The debug view's response before and after W3.
+- **A screenshot of the blue channel on the demo layout**, taken by the C10.5 method and saved to
+  the learning log's `assets/media`, for the user to judge. Whether it looks right is not measured.
+
+### Traps carried into this work
+
+- **The wrap default on transient textures.** Setting `AddressX`/`AddressY` after `CreateTransient`
+  does nothing until `UpdateResource` rebuilds the sampler (`Texture2DResource.cpp:84-96`).
+- **The flush-before-scissor order** inside the row-clip loop, above.
+- **Live Coding and static array sizes.** `ContactsDiscardedOutsideRibbon` changes from an array to
+  a scalar, which is the kind of layout change `EDITOR_SETUP.md` recorded rendering garbage under
+  Live Coding. Build with the editor closed.
+- **The editor open during headless tests** can write actors into the open map. Close it.
+- **Tests that pass by accident.** The four named in the table would all stay green after W1b while
+  no longer testing what they say. Each is rewritten deliberately, not just recompiled.
+
+### Not in this work
+
+- **D7's expensive half**, refresh instead of accumulate, which still waits on its counted figure.
+- **Re-taking E7's real-car capture** at the new lockup exposure. It went through the lockup path,
+  but its predicted ratio does not change, because both marks decay multiplicatively from the same
+  start; only the coverage each shows at each checkpoint does. Re-run on request, and recorded as
+  not re-run until then.
+- A caller-supplied curvature for track-space-only hosts (F).
+- Splitting stroke pieces at curvature sign changes, for the time-compression case (C).
+- The G5 dots, which stay disconnected.
+- Per-channel decay. D2 took the format instead, so rubber and marbles keep the shared rate.
+- Turning bloom off, which is a `Config/` change asked for separately if the harness calls for it.
+- Measuring the rubber channel's own rounding near exposure 1. RGBA32f removes it as a side effect,
+  so C10.3's calibrated half-life and E7's figures may move slightly when W2.1 lands; any test that
+  moves is reported with its old and new number rather than retuned silently.
+- Anything under the learning log's `_v1`, `_v2` or `_v3`.
+
+*Exit: the host makes one write call per tyre per tick with no channel; a lockup writes a full skid
+mark and no rubber; the host's marble code is gone; the blue channel shows a smooth gradient outside
+the line, measured as a profile and shown in a screenshot for the user to judge; the debug view is
+linear by the agreed definition, measured by the harness; every test passes in both build paths;
+this section, D7, `EDITOR_SETUP.md` and `MEASUREMENTS.md` are updated, including what was not
+verified.*
 
 ---
 
