@@ -207,11 +207,7 @@ namespace RacetrackSkidMarkPair
 {
 	constexpr double MarkLengthCentimetres = 300.0;
 
-	constexpr float LaidExposure = 1.0f;
-
 	constexpr double EdgeMarginCentimetres = 50.0;
-
-	constexpr int32 MaximumContactsPerMark = 4096;
 
 	constexpr double ObserverPitchDegrees = 60.0;
 
@@ -509,18 +505,6 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 		return;
 	}
 
-	const float ExposurePerContact =
-		RacetrackSurfaceMapping::SlipToExposure(1.0f, USurfaceAccumulationSubsystem::GetDepositionScale());
-
-	if (ExposurePerContact <= 0.0f)
-	{
-		RacetrackCircuitDisplay::AnnounceOnScreen(
-			this,
-			TEXT("RubberAccumDemo.SkidMarkPair"),
-			TEXT("Deposition is off, so a skid mark pair would lay nothing"));
-		return;
-	}
-
 	const FSurfaceTrackRibbon& Ribbon = Subsystem->GetRibbon();
 	const int32 AcrossTexels = Ribbon.AcrossTrackTexels();
 	const double Distance = FindLongestApexDistance();
@@ -591,7 +575,6 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 	}
 
 	const double MarkLength = RacetrackSkidMarkPair::MarkLengthCentimetres;
-	const double SweptShare = MarkLength / (MarkLength + ContactWidth);
 
 	FSkidMarkPairPlacement Placement;
 	Placement.DistanceAlongCentreline = Distance;
@@ -599,10 +582,8 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 	Placement.OffTheLineAlpha = RacetrackSkidMarkPair::LateralTexelCentreAlpha(Ribbon, OffTheLine);
 	Placement.OnTheLineRubber = Band[OnTheLine].R;
 	Placement.OffTheLineRubber = Band[OffTheLine].R;
-	Placement.ContactsPerMark = FMath::Clamp(
-		FMath::CeilToInt32(RacetrackSkidMarkPair::LaidExposure / (ExposurePerContact * SweptShare)),
-		1,
-		RacetrackSkidMarkPair::MaximumContactsPerMark);
+	Placement.MarkLengthCentimetres = MarkLength;
+	Placement.ContactWidth = ContactWidth;
 
 	const double Speed = MarkLength / FMath::Max(static_cast<double>(DeltaSeconds), UE_DOUBLE_SMALL_NUMBER);
 	const double EndDistance = Distance + MarkLength * 0.5;
@@ -610,15 +591,7 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 
 	for (const double Alpha : MarkAlphas)
 	{
-		for (int32 Contact = 0; Contact < Placement.ContactsPerMark; ++Contact)
-		{
-			Subsystem->RegisterSurfaceContactInTrackSpace(
-				EndDistance,
-				Alpha,
-				Speed,
-				1.0f,
-				ContactWidth);
-		}
+		Subsystem->RegisterSurfaceContactInTrackSpace(EndDistance, Alpha, Speed, 1.0f, ContactWidth);
 	}
 
 	SkidMarkPair = Placement;
@@ -630,16 +603,15 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("%s laid a skid mark pair %.0f cm round the lap, at the middle of the longest apex: on the line at "
-			"alpha %.4f over rubber %.6f, off it at alpha %.4f over rubber %.6f, each %.0f cm long and made of "
-			"%d coincident lockup contacts"),
+			"alpha %.4f over rubber %.6f, off it at alpha %.4f over rubber %.6f, each %.0f cm long and laid by "
+			"one lockup contact"),
 		*GetName(),
 		Distance,
 		Placement.OnTheLineAlpha,
 		Placement.OnTheLineRubber,
 		Placement.OffTheLineAlpha,
 		Placement.OffTheLineRubber,
-		MarkLength,
-		Placement.ContactsPerMark);
+		MarkLength);
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		this,

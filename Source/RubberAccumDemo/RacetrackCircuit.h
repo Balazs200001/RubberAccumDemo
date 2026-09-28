@@ -38,7 +38,9 @@ struct FSkidMarkPairPlacement
 
 	float OffTheLineRubber = 0.0f;
 
-	int32 ContactsPerMark = 0;
+	double MarkLengthCentimetres = 0.0;
+
+	float ContactWidth = 0.0f;
 };
 
 UCLASS()

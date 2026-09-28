@@ -134,10 +134,14 @@ bool FRacetrackCircuitSkidMarkPairLandsOnAndOffTheRubber::RunTest(const FString&
 		return false;
 	}
 
+	const float SweptShare = static_cast<float>(
+		Pair->MarkLengthCentimetres / (Pair->MarkLengthCentimetres + Pair->ContactWidth));
+	const float LaidExposure = RacetrackSurfaceMapping::LockupExposure() * SweptShare;
+
 	AddInfo(FString::Printf(
 		TEXT("Longest apex %.0f cm round a %.0f cm lap. Rubber painted at alpha %.4f and a fainter band at %.4f. "
 			"The pair went on the line at alpha %.4f over rubber %.6f and off it at alpha %.4f over rubber "
-			"%.6f, each of %d contacts, and reads back skid %.6f and %.6f"),
+			"%.6f, each one %.0f cm lockup contact, and reads back skid %.6f and %.6f against a predicted %.6f"),
 		Apex,
 		Ribbon.TrackLength,
 		LineAlpha,
@@ -146,9 +150,10 @@ bool FRacetrackCircuitSkidMarkPairLandsOnAndOffTheRubber::RunTest(const FString&
 		Pair->OnTheLineRubber,
 		Pair->OffTheLineAlpha,
 		Pair->OffTheLineRubber,
-		Pair->ContactsPerMark,
+		Pair->MarkLengthCentimetres,
 		OnTheLine.G,
-		OffTheLine.G));
+		OffTheLine.G,
+		LaidExposure));
 
 	TestTrue(
 		TEXT("The mark meant for the line lands on the most rubbered texel, within two texels of where the "
@@ -174,8 +179,9 @@ bool FRacetrackCircuitSkidMarkPairLandsOnAndOffTheRubber::RunTest(const FString&
 		OffTheLine.G);
 
 	TestTrue(
-		TEXT("Each mark is laid at about the full-mark exposure the command sizes it for"),
-		FMath::IsNearlyEqual(OnTheLine.G, 1.0f, 0.1f));
+		TEXT("Each mark is one lockup, so it reads the lockup exposure times the share of its quad the contact "
+			"swept, to half-float precision"),
+		FMath::IsNearlyEqual(OnTheLine.G, LaidExposure, LaidExposure * 1.0e-3f));
 
 	TestTrue(
 		TEXT("Laying the marks does not disturb the rubber under them"),
