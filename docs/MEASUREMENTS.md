@@ -3341,3 +3341,73 @@ bias as above. Nothing in skid, nothing in marbles, nothing outside the mark.
   D7's counted figure, was not measured.
 - **E7's real-car capture was not re-run.** Its predicted ratio does not depend on the laid exposure;
   the coverage each mark shows at each checkpoint does, and that is not re-measured.
+
+---
+
+## 2026-09-28 — W2.0: the marble fan's real increment on the canvas blend path, RGBA16f against RGBA32f
+
+```
+Build:    Development, editor target, headless through UnrealEditor-Cmd.exe with the editor closed
+Power:    MAINS. PowerLineStatus Online, read at 23:21:33 local immediately before the run
+Scene:    The engine OpenWorld template map, no actors. Two 128 x 128 accumulation buffers, one
+          allocated with no format argument, which is today's production format, and one in the
+          other float format
+Driven:   RacetrackSurface.Marbles.FanSurvivesTheBufferFormat. Eight bands, each an 8 x 8 texel
+          zero-length stroke on the marble channel, so the swept share is exactly 1 and the stored
+          value is the canvas additive blend and nothing else. 4096 passes per band, all issued in
+          one PaintStrokes call in pass order, so each band takes 4096 sequential blends
+Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+          -ExecCmds="Automation RunTests RacetrackSurface.Marbles"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+```
+
+The increment is the fan's own, from PLAN.md section W, decision D: slip 0.5 x `5.0e-5` x the swept
+share of a 20 cm contact at 1650 cm/s and 60 fps, 27.5 / 47.5. That is **1.4474e-5 per pass at the
+fan's peak**. The eight bands step down the linear profile from the peak to one eighth of it. 4096
+passes carries every band's float sum past both predicted plateaus, so a frozen band is unambiguous.
+
+| Band | Increment per pass | Float sum | **RGBA16f stored** | Plateau predicted, round to nearest | Plateau predicted, truncating | **RGBA32f stored** |
+|---|---|---|---|---|---|---|
+| 0, peak | 1.4474e-5 | 0.059284 | **0.031250** | 0.031250 | 0.015625 | **0.059281** |
+| 1 | 1.2664e-5 | 0.051874 | **0.031250** | 0.031250 | 0.015625 | **0.051876** |
+| 2 | 1.0855e-5 | 0.044463 | **0.031250** | 0.031250 | 0.015625 | **0.044464** |
+| 3 | 9.0461e-6 | 0.037053 | **0.031250** | 0.031250 | 0.015625 | **0.037053** |
+| 4 | 7.2368e-6 | 0.029642 | **0.015625** | 0.015625 | 0.007812 | **0.029641** |
+| 5 | 5.4276e-6 | 0.022232 | **0.015625** | 0.015625 | 0.007812 | **0.022232** |
+| 6 | 3.6184e-6 | 0.014821 | **0.007812** | 0.007812 | 0.003906 | **0.014820** |
+| 7 | 1.8092e-6 | 0.007411 | **0.003906** | 0.003906 | 0.001953 | **0.007410** |
+
+The predicted plateaus are closed forms, not a simulation: under round to nearest, an increment
+stops landing once it is no more than half an ulp, so a value freezes at the smallest power of two
+at least `increment x 2^11`; under truncation it freezes once the increment is below one ulp, at the
+smallest power of two above `increment x 2^10`.
+
+- **PLAN.md's simulation is confirmed, not refuted.** The peak band freezes at exactly 0.03125, which
+  is 8.9 % coverage, at 53 % of its float sum. This is the number decision D2 rests on, and it is
+  now measured rather than simulated.
+- **The fan's ramp becomes four flat steps.** Bands 0 to 3 sit on one plateau, 4 and 5 on the next,
+  then 6, then 7, each half the one before. A linear profile stored in RGBA16f is a staircase at
+  powers of two, as predicted.
+- **The canvas additive blend rounds to nearest.** Every band sits on the round-to-nearest plateau
+  and none on the truncating one. PLAN.md recorded this as an inference from B6's figures; it is
+  now measured. It is the opposite of the UAV store, which E5 measured truncating. Two writes into
+  the same RGBA16f target round differently depending on which path does the writing.
+- **Increments below half float's smallest normal are not flushed.** Every increment here is below
+  2^-14, 6.1e-5, and every band still accumulated up to its plateau. Had the blender flushed
+  subnormal sources to zero, the channel would have read 0.
+- **RGBA32f tracks the float sum.** The worst band is 5e-5 relative out, 0.059281 against 0.059284,
+  twenty times inside the test's 1e-3 tolerance.
+- **The assertion fails on today's production format, 8 bands of 8 out of tolerance,** as intended:
+  the test asserts on whatever format an unargued `Allocate` gives, so W2.1 turns it into the
+  regression guard without editing it.
+
+### Not verified
+
+- **One GPU, one driver**, the RTX 4070 Laptop GPU on D3D12. Round to nearest and subnormal handling
+  in the blender are this hardware's.
+- **Decay was off.** The steady state under decay, and the banked-step interaction the simulation
+  included, are not measured here. With decay off the freeze is the whole story.
+- **The passes were batched into one canvas call.** Each blend still reads and writes the stored
+  value in draw order, so this should equal one pass a frame, but one pass a frame was not run.
+- **The ramp texture is not in this test.** A solid brush carried the increments; the fan's bilinear
+  ramp does not exist until W2.3.
