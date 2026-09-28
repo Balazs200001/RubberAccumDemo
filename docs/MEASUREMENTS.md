@@ -3260,3 +3260,84 @@ its footprint rather than by the single highest texel, which had picked the band
   paint figures are in the same range as before, which is not the same claim.
 - **Nothing was run in PIE.** The captures are standalone `-game`.
 - **The looks of the stills are not judged.** They render, and whether they read is the user's call.
+
+---
+
+## 2026-09-28 — W1 and W1b: a lockup read back against the ripple prediction, and rubber against its derived mean
+
+```
+Build:    Development, editor target, headless through UnrealEditor-Cmd.exe with the editor closed
+Power:    MAINS. PowerLineStatus Online and BatteryStatus.PowerOnline True, read at 22:50:38 local,
+          during the suite of record, which started at 22:49:34 local (20:49:34 in the log's UTC)
+Scene:    The engine OpenWorld template map, no actors. The subsystem configured with no centreline
+          on a 1024 x 64 ribbon at 2.5 cm per texel, so a 20 cm contact is exactly 8 texels wide
+Driven:   C++ automation, the world's subsystem ticked by hand at 1/60 s; the whole target read back
+          with UKismetRenderingLibrary::ReadRenderTargetRaw, which returns full precision for both
+          float formats (KismetRenderingLibrary.cpp:347-357)
+Format:   RGBA16f, today's production format
+Tests:    122 run, 120 pass. The two failures are the host marble tests PLAN.md says are red between
+          W1.3 and W2.3. Both build paths clean at every commit
+Command:  UnrealEditor-Cmd.exe RubberAccumDemo.uproject
+          -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo"
+          -TestExit="Automation Test Queue Empty" -unattended -nopause -nosplash -nosound
+```
+
+The design is in PLAN.md section W, W1 and W1b. The lockup deposits `LockupExposure()`, derived as
+`-ln(1 - 0.95) / 3 / 0.5` = **1.99715**, on the skid channel, and nothing on rubber.
+
+### The lockup mark, texel by texel, on the frame it is laid
+
+`RacetrackSurface.Write.LockupWritesAFullSkidMarkOnly`. 24 frames of one slip-1 contact sweeping
+along the centre of the ribbon. Travel per frame `T` and the contact width `W` are whole texels and
+the quad edges fall on texel boundaries, so every texel of the mark is covered once or twice and the
+shares are exact.
+
+| Speed | T, W texels | Single texels, read and predicted `E T/(T+W)` | Double texels, read and predicted | Single share, read and predicted `(T-W)/T` | Mean over whole periods, read and `E` | Thinnest texel's coverage |
+|---|---|---|---|---|---|---|
+| 30 m/s | 20, 8 | 1.42578, 1.42654 | 2.85156, 2.85308 | 0.6000, 0.6000 | 1.99609, 1.99715 | **0.98612** |
+| 15 m/s | 10, 8 | 1.10938, 1.10953 | 2.21875, 2.21906 | 0.2000, 0.2000 | 1.99687, 1.99715 | **0.96414** |
+
+- **Every texel of both marks reads one value or the other**, none in between, and none reads below
+  0.95 coverage. That is D7's cheap-half exit condition, measured.
+- **The ripple PLAN.md derived by hand is what the GPU draws**, to four decimal places in the shares.
+  This is the first measurement of it; the earlier frame-rate test asserted only a mean.
+- **Every read value is at or just below its prediction**, by 5e-4 relative at most: 1.42578 is the
+  half float below 1.42654. The rounding bias is downward on this path.
+- **No rubber texel and no marble texel** anywhere in the target, and no skid outside the mark.
+
+### A lockup ignores deposition, and rubber does not
+
+`RacetrackSurface.Write.LockupIgnoresDepositionScale`, at 30 m/s:
+
+| | Deposition 1 | Deposition 32 |
+|---|---|---|
+| Lockup mark, mean skid | 1.99609 | identical, **0 texels differ** |
+| Rubber mark at slip 0.5, ratio of means | 1 | **32.000** |
+
+The rubber row is the control: the same setting was in force and did scale the rubber mark.
+
+### Rubber against its derived mean
+
+`RacetrackSurface.Write.SlipBelowOneWritesRubberOnly`: slip 0.5, the same 24-frame sweep at 30 m/s,
+deposition 1. **Mean rubber 0.0009994 against the derived 0.0010000**, 6e-4 low, the same downward
+bias as above. Nothing in skid, nothing in marbles, nothing outside the mark.
+
+### The other figures W1b moved
+
+| Test | Before, today's baseline suite | After |
+|---|---|---|
+| `Track.SkidMarkPairLandsOnAndOffTheRubber`, each mark's skid | 1.029297, from 534 coincident contacts at deposition 1 | **1.872070** from one lockup contact, against `E_lock x 300/320` = 1.872333 |
+| `Query.ReturnsCoverageNotExposure`, the mark's coverage at deposition 400 | skid 0.652209, from a slip-1 mark | **rubber 0.410262**, from a slip-0.5 mark, skid and marbles 0 |
+| `Query.LatencyCostsLessThanTheFieldVariesAlongTrack`, band mean coverage along the track | skid 0.440, slip 1 at deposition 100 | **rubber 0.252**, slip 0.5 at deposition 100 |
+| `Surface.GatherAgreesWithTheShaderAtTheSameRadius`, worst disagreement | 0.000342 at E about 0.4 | **0.000270** at E about 2, 12 of 20 points carrying a value |
+| `Car.LocksOneFrontWheelUnderBraking` | classified by channel | 662 ticks with all eight contacts, **662 full-slip wheels and 1986 below**, exactly one in four |
+
+### Not verified
+
+- **One GPU, one driver.** The rounding direction above is this RTX 4070 Laptop GPU's on the canvas
+  additive path into RGBA16f.
+- **The marks were not looked at on screen.** The readback is the evidence.
+- **A repeat lockup still adds**, from about 2 to about 4. How often that happens on the demo layout,
+  D7's counted figure, was not measured.
+- **E7's real-car capture was not re-run.** Its predicted ratio does not depend on the laid exposure;
+  the coverage each mark shows at each checkpoint does, and that is not re-measured.
