@@ -5524,6 +5524,17 @@ Demo.MarbleBandLiesOutsideTheLine, the fan count in MarblesReachTheBufferOnTheFo
 pass's paint cost; the marble band's steady-state profile against phase G's table; the blue-channel
 screenshot. W2.4's console variable is not started.
 
+### Measured on implementing, 2026-09-29: W3.1's first run contradicts the prediction
+
+On branch `w3-debug-view` of the host, so `main` stays at the demo state. The response harness,
+`RubberAccumDemo.Surface.DebugViewResponse`, is built and passes its fixture checks. Its numbers are
+in `MEASUREMENTS.md` under W3.1. **They contradict W3's predicted table by a factor of about five,
+and the exposure bias override has no effect in a one-off capture**, so the harness does not yet
+measure the exposure the screen gets. Per the standing rule, work stops here and the number goes back
+to the user: no material has been touched, and decision E is neither confirmed nor refuted. The next
+step proposed is the same harness with a persistent view state, checked against one real screenshot
+of the view.
+
 ---
 
 ## Standing rules for this backlog

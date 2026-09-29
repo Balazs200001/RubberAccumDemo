@@ -3572,3 +3572,58 @@ suite on RGBA32f, both on this machine. Nothing below was retuned; every test pa
 - **The query gather target stays RGBA16f.** Its precision relative to the RGBA32f source was not
   measured beyond the agreement figure above.
 - **E7's real-car capture was not re-run.**
+
+---
+
+## 2026-09-29 — W3.1: the debug view's response, through a one-off scene capture
+
+`RubberAccumDemo.Surface.DebugViewResponse`, one headless run of the Development editor target,
+`L_SpaHarness` loaded, log `C:/RSBuild/w31-response.log`. The accumulation texture is replaced by a
+16 x 16 RGBA32f target cleared to one uniform exposure per row, `E = -ln(1 - c) / 3`, bound to a
+dynamic instance of `M_SurfaceAccumulationDebug` on the engine's 100 cm plane, 5 km up. A
+`SceneCapture2D` 100 cm above it, 20 degree field of view, show-only list holding the plane, reads
+final-colour LDR into a 64 x 64 RGBA8 target; each figure is the mean of the centre 8 x 8 bytes. The
+raw emissive column is the same instance drawn with `DrawMaterialToRenderTarget` into RGBA16f.
+
+Stages are cumulative, set on the capture's own post-process settings at weight 1: *tonemapper only*
+is bloom 0, local exposure contrast 1 and exposure bias `log2(1/1.2)`; *+ local exposure* restores
+the project's 0.8 contrast; *+ project exposure* restores the bias; *+ bloom* is no override at all.
+
+Red, the rubber view:
+
+| Coverage | Raw emissive | Target 255c | 255 sRGB(raw) | Tonemapper only | + local exposure | + project exposure | + bloom, as shown |
+|---|---|---|---|---|---|---|---|
+| 0.05 | 0.0500 | 12.8 | 63 | 0.4 | 2.2 | 2.2 | 3.3 |
+| 0.10 | 0.1000 | 25.5 | 89 | 5.1 | 13.8 | 13.8 | 16.3 |
+| 0.18 | 0.1799 | 45.9 | 118 | 24.2 | 36.3 | 36.3 | 42.2 |
+| 0.25 | 0.2500 | 63.8 | 137 | 43.8 | 55.2 | 55.2 | 63.4 |
+| 0.33 | 0.3298 | 84.2 | 155 | 66.7 | 76.5 | 76.5 | 84.6 |
+| 0.50 | 0.5000 | 127.5 | 188 | 114.7 | 117.0 | 117.0 | 128.0 |
+| 0.75 | 0.7500 | 191.2 | 225 | 174.0 | 164.3 | 164.3 | 176.8 |
+| 0.95 | 0.9497 | 242.2 | 249 | 208.2 | 191.9 | 191.9 | 204.2 |
+
+Green, the skid view, as shown: 7.0, 28.0, 63.1, 89.2, 113.4, 151.5, 184.7, 201.4. Blue, the marble
+view, as shown: 5.6, 24.8, 57.3, 80.5, 102.7, 137.5, 166.8, 181.9. The two channels not in the mask
+read 0.2 everywhere. The full per-stage tables for green and blue are in the log.
+
+**What it found:**
+
+- **The capture contradicts W3's prediction by a factor of about five.** PLAN.md predicted red 210 at
+  coverage 0.18 and clipping by 0.35. The capture reads 42 at 0.18 and 128 at 0.50. Between 0.18 and
+  0.50 the red view as captured is within 4 of 255c; it falls short below 0.10 and above 0.50,
+  reaching 204 against 242 at 0.95.
+- **The exposure bias override changed nothing.** *+ project exposure* is identical to *+ local
+  exposure* in every cell of all three tables, so in a one-off capture the bias either is not applied
+  or is not what sets exposure. **This harness therefore does not yet reproduce the exposure of the
+  on-screen view**, and the tonemapper's share cannot be separated from exposure's.
+- **Local exposure lifts the low end and pulls the top down**: red at 0.18 goes 24.2 to 36.3, at 0.95
+  208.2 to 191.9.
+- **Bloom adds about 6 to 12 levels** on a uniform field: red +5.9 at 0.18, +11.0 at 0.50, +12.3 at
+  0.95.
+- **The fixture reads what it says:** the raw emissive equals the coverage to 1e-3 in all 24 cells,
+  and every stage rises with coverage.
+
+**Not verified:** the on-screen view itself; whether a capture with a persistent view state
+(`bAlwaysPersistRenderingState`, several frames) applies the project exposure and matches the
+screen; a non-uniform field, so bloom halos around a bright feature are not measured; the 10-bit
+back buffer, which an RGBA8 capture does not bit-match. Decision E is **not** confirmed by this run.
