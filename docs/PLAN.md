@@ -4665,7 +4665,8 @@ about 4, and nobody has counted how often that happens.
 ## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
 
 Requested 2026-09-28. **W1, W1b, W2.0, W2.1 and W2.2 are built. W2.3's fans are built and committed
-without their tests, which are owed. W2.4 and W3 are not started.**
+without their tests, which are owed. W2.4 is not started. W3.1's harness is built; W3.2 is dropped
+by the user's decision of 2026-09-29 to keep the measured response.**
 What building them found is under
 [Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b), W2.0's result
 [below it](#measured-on-implementing-2026-09-28-w20-confirms-the-simulation-so-d2-stands), and W2.1's
@@ -5526,7 +5527,7 @@ screenshot. W2.4's console variable is not started.
 
 ### Measured on implementing, 2026-09-29: W3.1's first run contradicts the prediction
 
-On branch `w3-debug-view` of the host, so `main` stays at the demo state. The response harness,
+Built on branch `w3-debug-view` of the host, so `main` stayed at the demo state. The response harness,
 `RubberAccumDemo.Surface.DebugViewResponse`, is built and passes its fixture checks. Its numbers are
 in `MEASUREMENTS.md` under W3.1. **They contradict W3's predicted table by a factor of about five,
 and the exposure bias override has no effect in a one-off capture**, so the harness does not yet
@@ -5534,6 +5535,16 @@ measure the exposure the screen gets. Per the standing rule, work stops here and
 to the user: no material has been touched, and decision E is neither confirmed nor refuted. The next
 step proposed is the same harness with a persistent view state, checked against one real screenshot
 of the view.
+
+**Decided 2026-09-29, by the user, on seeing the table: the measured response is the one wanted, and
+the current material stands.** No inverse curve is built, so W3.2's asset session is not needed:
+`M_SurfaceAccumulationDebug` is unchanged, and `M_SurfaceCoverageProbe` is not created, because E2's
+reason for it was the curve that is now not coming. The read-path tests keep drawing the debug
+material. Merged to `main` as a fast-forward. **Still open:** the harness's exposure is not shown to
+be the screen's, so the decision rests on the user's by-eye check in the demo, not on a measurement
+of the screen; the harness asserts only its fixture and monotonicity, not the response itself; and
+the `BP_SurfaceRegionDisplay` recompile check owed since W1.1, which was to happen in that asset
+session, is still owed.
 
 ---
 
