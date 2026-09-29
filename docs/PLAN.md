@@ -4664,7 +4664,8 @@ about 4, and nobody has counted how often that happens.
 
 ## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
 
-Requested 2026-09-28. **W1, W1b, W2.0 and W2.1 are built; W2.2 onward, and W3, are not started.**
+Requested 2026-09-28. **W1, W1b, W2.0, W2.1 and W2.2 are built. W2.3's fans are built and committed
+without their tests, which are owed. W2.4 and W3 are not started.**
 What building them found is under
 [Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b), W2.0's result
 [below it](#measured-on-implementing-2026-09-28-w20-confirms-the-simulation-so-d2-stands), and W2.1's
@@ -5480,6 +5481,48 @@ W2.1.
 **Not verified:** no frame time in a running scene at RGBA32f; filtering only through that one
 agreement test; the gather target's precision against an RGBA32f source beyond the same figure; one
 GPU and driver.
+
+### Measured on implementing, 2026-09-29: W2.2 and W2.3, fans built ahead of their tests
+
+**Built and committed:** plugin `d757d93` (the signed curvature profile), `f39a0af` (the row-clip
+helper), `1aa3e68` (the stroke-piece iterator) and `ec4209e` (the fan pass); host `00a808b` measures the
+profile on the demo layout. The fans went in without their W2.3 tests, requested on 2026-09-29 so the
+implementation could be shown in a demo that afternoon. The only check for the demo is by eye in the
+editor. **The W2.3 test list below is owed in full, and nothing about the fans' shape, side,
+threshold, clipping or sweep is verified by an automated test yet.** A draft of the plugin fan tests
+exists outside the repo and was not built. The existing suite ran on the fan code: 126 of 126 pass,
+the two host marble tests red since W1.3 among them, which shows marbles reach the buffer again and
+nothing else.
+
+**Decisions taken while building it, for defending:**
+
+- **A fan is its own primitive.** `BuildMarbleFans` walks the same pieces as `BuildStrokes`, through
+  `ForEachStrokePiece`, and produces `FSurfaceMarbleFan`s in their own list. A fan is a quad from the
+  tyre's outer edge to D(slip) beyond it, textured with a 256-texel falling ramp, rather than a stroke
+  with a channel, because its profile is not the tyre's.
+- **One flush order: fans, then the sweep, then the tyre strokes.** `PaintFrame` owns that order and
+  the paint timer, so `r.RacetrackSurface.TimePaint` now brackets all three. An outer tyre therefore
+  sweeps the inner tyre's fan in the same flush that throws it.
+- **The throw side is minus the sign of the curvature**, taken at the piece's midpoint, and nothing is
+  thrown below 1e-5 per cm or without a centreline. The warning for a ribbon configured without a
+  centreline now says so.
+- **Constants:** `MarbleExposurePerUnitSlip` 5e-5 and `MarbleThrowAtFullSlip` 800 cm, both in
+  `SurfaceAccumulationMapping.h`. The intensity carries the swept share, like a stroke's.
+
+**What the profile measured (`Demo.CurvatureProfileOnTheDemoLayout`, one run, 2026-09-28):** 1200
+samples every 150 cm; the steepest right vector's Z is 5.6e-17. On the 20 straight samples the
+plugin's curvature peaks at 2.249e-6 per cm, a 4447 m radius, so the 1e-5 threshold is 4.45 times the
+straights' noise floor. In the 29 corner runs, 498 samples: no sign change inside a corner, none below
+the threshold, and the sign agrees with the host's on all 498. Of the 1081 samples where phase G threw
+marbles, none now falls below the threshold, and 17 outside G's gate are above it and now throw.
+
+**Not verified:** every W2.3 test (Curvature fan-level radius check, Marbles.NoneOnTheInside,
+NoneBelowTheThreshold, ProfileFallsMonotonically, ThrowAndAmountScaleWithSlip,
+OuterTyreSweepsTheInnerFanInItsFootprint, NoStripeAtTheKerb, NoneWithoutACentreline,
+Query.ReturnsCoverageForEveryChannelAtOnce, Car.RegistersFourContactsATick with fans only in corners,
+Demo.MarbleBandLiesOutsideTheLine, the fan count in MarblesReachTheBufferOnTheFoldedLayout); the fan
+pass's paint cost; the marble band's steady-state profile against phase G's table; the blue-channel
+screenshot. W2.4's console variable is not started.
 
 ---
 
