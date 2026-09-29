@@ -5546,6 +5546,22 @@ of the screen; the harness asserts only its fixture and monotonicity, not the re
 the `BP_SurfaceRegionDisplay` recompile check owed since W1.1, which was to happen in that asset
 session, is still owed.
 
+**Contradicted the same day by the screen, so the decision above is reopened.** The user's screenshot
+of the skid view during the demo (`assets/media/w3-skid-view-on-screen-7-and-25-percent.png` in the
+learning log) shows the skid-mark pair 17.4 laps after laying, one mark keeping 7 % of its laid
+exposure and the other 25 %, and both read close to full brightness with little between them. At a
+laid exposure near `E_lock`, 2.0, those are exposures of about 0.13 and 0.47, **coverages of about
+0.33 and 0.76**, by arithmetic from the on-screen report rather than a readback. The capture's green
+table puts those at 113 and 185; the screen does not look like that, and matches W3's original
+prediction of a view flat out by 0.35 much better. **So the one-off capture does not measure the
+screen**, which the bias override's lack of effect had already suggested, and W3.2's inverse curve
+is needed after all, built on a measurement that does reproduce the screen.
+
+A live lever found in the source, not yet tried: every frame the view's settings are reset to a
+freshly constructed `FPostProcessSettings` (`Scene.h:2692-2694`), whose constructor reads
+`r.DefaultFeature.AutoExposure.Bias` (`Scene.cpp:516`). Setting it from the console should therefore
+change the view's exposure on the next frame without touching `Config/`.
+
 ---
 
 ## Standing rules for this backlog
