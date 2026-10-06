@@ -886,7 +886,7 @@ The clearest proof the mechanism works, and the reason to prioritise it over mar
 | E1 | Buildup channel, saturating accumulator | Approaches a ceiling rather than clipping |
 | E2 | Decay pass over real time, frequency as a cost knob | Line fades over a session |
 | E3 | ~~Wash-out call for users to hook to rain~~ *Replaced 2026-09-25, [below](#e3-revised-2026-09-25-runtime-decay-control-from-code-instead-of-a-rain-wash-out)*: the decay rate set from C++ and Blueprint at runtime, per world | A host changes the rate from code, and a test shows the passes and the fade follow it; console and code sets both take effect in either order |
-| E4 | Roughness and specular change with slight darkening, verified under Lumen and baked. *Expanded 2026-10-06, [below](#e4-expanded-2026-10-06-before-implementing-a-lit-asphalt-view-switchable-against-the-debug-view)*: a lit asphalt material switchable against the debug view, specular not driven | Reads as laid rubber under both. *Proposed: Lumen only, because the road cannot take baked lighting* |
+| E4 | Roughness and specular change with slight darkening, verified under Lumen and baked. *Expanded 2026-10-06, [below](#e4-expanded-2026-10-06-before-implementing-a-lit-asphalt-view-switchable-against-the-debug-view)*: a lit asphalt material switchable against the debug view, specular not driven | Reads as laid rubber under both. *Decided 2026-10-06: Lumen only, because the road cannot take baked lighting without costing the Lumen view* |
 | E5 | **The coupling**: skid decay rate as a function of local buildup. *Expanded 2026-09-25, [below](#e5-to-e7-expanded-2026-09-25-before-implementing)*: an in-place compute pass, skid decaying `1 + k * RubberExposure` times as fast as the shared rate | Marks on the line are paved over, marks off it persist; the GPU pass agrees with its C++ closed form texel for texel |
 | E6 | Second profiling pass, focused on the decay pass. *Expanded*: the coupled pass and the C10 quad timed interleaved in one run, empty and populated | Numbers recorded, from the same run, with the power state |
 | E7 | Validation: two identical marks, traffic over one only, compare intensity. *Expanded*: a headless test with controlled traffic against a closed form, and a real-car capture laid by a console command | A number, not an impression, predicted before it was measured |
@@ -1478,7 +1478,28 @@ independent reasons found in the source:**
    from the road even with static lighting on.
 
 Meeting it would take a config change and converting the generated road into a static mesh asset.
-**Proposed, awaiting the user: the exit becomes Lumen only, for these reasons.**
+That was costed before deciding, and it is more than those two steps:
+
+- **Turning static lighting on degrades the Lumen view.** The setting's own tooltip
+  (`RendererSettings.h:722`) says disabling static lighting is what lets Material AO work with Lumen
+  GI. Enabling it would cost the asphalt its AO under Lumen, project-wide. It also needs an editor
+  restart and recompiles every material's static-lighting permutations.
+- **Lumen discards baked lighting.** With Lumen GI active the renderer zeroes
+  `PrecomputedIndirectLightingColorScale` (`SceneRendering.cpp:2054`), and with Lumen reflections it
+  drops reflection captures the same way (`:2063`). Seeing baked lighting at all needs a second
+  lighting setup with Lumen off, static or stationary lights, a reflection capture and a lighting
+  build, which commits a `MapBuildData` asset.
+- **No MCP tool converts the road.** `static_mesh.py` in `EditorToolset` has no create or convert
+  call. The engine's *Create StaticMesh* button (`ProceduralMeshComponentDetails.cpp:83`) does it,
+  generating lightmap UVs into UV1, but behind a modal dialog, so by hand.
+- **The result is a snapshot of one configuration.** Lap length, width and segment spacing have
+  changed in C8, C9 and the 960 m override, and each change would mean regenerating the asset and
+  rebuilding lighting. The circuit only binds the target into its procedural road, so the static
+  copy would also need its own binding in C++.
+
+**Decided by the user 2026-10-06: the exit is Lumen only, for these reasons.** A non-Lumen dynamic
+view, sky light and screen-space reflections with no config change, was offered as a middle option
+and not taken.
 
 What a run can verify: the material compiles, the switch changes the road's material, both views have
 the target bound, and a `-game` capture with deposition raised shows rubber on the asphalt. What it
