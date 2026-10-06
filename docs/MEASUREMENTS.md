@@ -6,6 +6,8 @@ A number without its build configuration, hardware and scene is not evidence. Ed
 recorded only when explicitly labelled as such, because editor frame-rate smoothing hides the
 spikes the project's claim is about.
 
+Mentions of `PLAN.md` below refer to the plan as it stood when the entry was written. Since 2026-10-06 the plan lives in GitHub issues, starting from [Plan overview](https://github.com/Balazs200001/RubberAccumDemo/issues/1); the file itself is in this repo's history up to commit `ba81300`.
+
 ## Format
 
 ```
@@ -93,7 +95,7 @@ shipping configuration's decay cost — for that, read the 2048 RGBA16f row of t
 
 ### Gate: PASSED
 
-The gate in [PLAN.md](PLAN.md) is *four contact points at 60 Hz within roughly 0.5 ms GPU on a
+The gate in [phase B](https://github.com/Balazs200001/RubberAccumDemo/issues/3) is *four contact points at 60 Hz within roughly 0.5 ms GPU on a
 4070 without batching*. Four contacts cost **0.3610 ms** median, 0.2760 ms best case. That is
 inside the budget with about 28 % headroom, unbatched, as specified.
 
@@ -430,7 +432,7 @@ states, same per-stroke geometry.
 
 ### C0 exit condition: MET
 
-The exit condition in [PLAN.md](PLAN.md) is *eighty contacts within the four-contact budget*. The
+The exit condition in [C0](https://github.com/Balazs200001/RubberAccumDemo/issues/32) is *eighty contacts within the four-contact budget*. The
 four-contact budget before the change was 0.2620 to 0.2820 ms. Eighty contacts now cost **0.0890 to
 0.1150 ms**, so eighty contacts are not merely inside the old four-contact budget — they cost less
 than four contacts used to. Against the 80-contact baseline it is a **40 to 50 times** reduction.
@@ -583,7 +585,7 @@ Treat the two as agreeing to about a factor of two, not better.
 
 ## 2026-09-22 — R2, world to track-space conversion cost
 
-The gate on [phase R](PLAN.md). Track-space storage introduces a cost the square world-XY region
+The gate on [phase R](https://github.com/Balazs200001/RubberAccumDemo/issues/5). Track-space storage introduces a cost the square world-XY region
 did not have: every world-space contact has to be located on the centreline spline before it can
 be painted. `USplineComponent::FindInputKeyClosestToWorldLocation` is a search, and eighty of them
 per frame is the density C3 and E7 need.
@@ -2468,7 +2470,7 @@ Peak coverage: rubber 0.0899, skid 0.0000, marbles 0.0000
 
 **Exactly zero, not small.** Four hypotheses had been offered before this and all four were wrong;
 every one was reasoned from the test harness. The first live read settled it in one command. The
-cause and its four symptoms are in [PLAN.md](PLAN.md): `CorneringProfile` is not a `UPROPERTY` and
+cause and its four symptoms are in [phase G](https://github.com/Balazs200001/RubberAccumDemo/issues/9#issuecomment-6014356537): `CorneringProfile` is not a `UPROPERTY` and
 `OnConstruction` does not re-run for a map-loaded actor in PIE, so the profile was empty and
 `GetSignedCorneringAtDistance` returned zero everywhere.
 

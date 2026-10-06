@@ -5,6 +5,8 @@ This is the reproducible record of the half of the project that does not appear 
 
 Append entries. Do not rewrite history here.
 
+Mentions of `PLAN.md` below refer to the plan as it stood when the entry was written. Since 2026-10-06 the plan lives in GitHub issues, starting from [Plan overview](https://github.com/Balazs200001/RubberAccumDemo/issues/1); the file itself is in this repo's history up to commit `ba81300`.
+
 ## Format
 
 ```
@@ -56,7 +58,7 @@ Two capabilities confirmed absent after enabling, which shaped the phase B metho
 
 - No console-command or CVar-set tool exists in any toolset, so `stat GPU`, `CsvProfile` and
   `FreezeRendering` cannot be driven over MCP. B3 was re-specified around RHI timestamp queries
-  in an automation test instead. See [PLAN.md](PLAN.md).
+  in an automation test instead. See [phase B](https://github.com/Balazs200001/RubberAccumDemo/issues/3).
 - No render-target asset tool exists. The accumulation target is created in C++ at runtime, sized
   from the region config, which is where it belongs for a plugin anyway.
 
@@ -469,7 +471,7 @@ Track width stays at 1200 cm rather than scaling with the layout. Scaled properl
 spread to observe. This is stated as the harness convenience it is: the circuit is Spa's *shape* at
 21 % with a proportionally wide track, not a scale model of Spa.
 
-> **Superseded 2026-09-23 by [C8](PLAN.md). The reasoning above is not wrong; it answers a
+> **Superseded 2026-09-23 by [C8](https://github.com/Balazs200001/RubberAccumDemo/issues/14). The reasoning above is not wrong; it answers a
 > question that is no longer the one being asked.** It solved for the largest round lap that fits
 > the cap *at a fixed density of 9.7656 cm per texel*, and 1500 m is the right answer to that. C8
 > removes the fixed density from the question: the texel size is chosen first, for what a corner
@@ -546,7 +548,7 @@ consumed by another.
 ### `/Game/Blueprints/BP_SurfaceRegionDisplay`
 
 Change: modified
-Why: [phase R](PLAN.md) replaces `FSurfaceRegion` with `FSurfaceTrackRibbon`, and the ribbon is
+Why: [phase R](https://github.com/Balazs200001/RubberAccumDemo/issues/5) replaces `FSurfaceRegion` with `FSurfaceTrackRibbon`, and the ribbon is
 sized from the centreline rather than typed into a map. This Blueprint held an instance-editable
 `FSurfaceRegion` member and called `ConfigureSurfaceRegion` from `EventBeginPlay`; both are gone.
 Configuration moved to `ARacetrackCircuit::PostInitializeComponents`, which is the actor that
@@ -783,7 +785,7 @@ override is cleared. Figures in [MEASUREMENTS.md](MEASUREMENTS.md).
 Seen in a close-up of a slow corner, the road **passes through itself**. That is the offset curve
 being undefined where the local radius falls below the half width, and at 480 m on an 800 cm track
 the fastest corner has 403 cm of radius against a 400 cm half width. Full derivation in
-[PLAN.md](PLAN.md) and [MEASUREMENTS.md](MEASUREMENTS.md); the short version is that a valid road
+[C8](https://github.com/Balazs200001/RubberAccumDemo/issues/14#issuecomment-6014436025) and [MEASUREMENTS.md](MEASUREMENTS.md); the short version is that a valid road
 needs **954 m minimum at this track width, and 1726 m for the authored kinks to be clean**, and
 neither fits under the 16384 along-track cap at 3.125 cm per texel.
 
@@ -824,7 +826,7 @@ buffer, so nothing here judges the surface, only the geometry it is painted onto
 
 Asset: `/Game/Maps/L_SpaHarness`
 Change: **superseded by the entry above, which carried it out.**
-Why: [C8](PLAN.md) rescales the circuit to 480 m at 3.125 cm per texel on an 800 cm track. Two of
+Why: [C8](https://github.com/Balazs200001/RubberAccumDemo/issues/14) rescales the circuit to 480 m at 3.125 cm per texel on an 800 cm track. Two of
 the four properties in the override table above are per-instance overrides on `RacetrackCircuit_0`,
 so **changing the C++ default does not change the demo.** The editor was closed and the MCP server
 was not listening when the work was done, so this could not be made at the time.
@@ -872,7 +874,7 @@ three are recorded as unverified in `MEASUREMENTS.md`:
 ## 2026-09-23 — C9: the read path folds the ribbon into rows
 
 Three assets changed together, because the row count has to reach the shader for the fold to mean
-anything. Full reasoning in [PLAN.md](PLAN.md) under C9.
+anything. Full reasoning in [C9](https://github.com/Balazs200001/RubberAccumDemo/issues/15).
 
 ### `/RacetrackSurface/Materials/MPC_RacetrackSurface`
 
@@ -1045,7 +1047,7 @@ will move whenever the lap length or the segment length does.
 
 ## 2026-09-24 — C10.2: the debug material masks the sampled coverage by channel
 
-One asset changed. Full reasoning in [PLAN.md](PLAN.md) under C10.2.
+One asset changed. Full reasoning in [C10.2](https://github.com/Balazs200001/RubberAccumDemo/issues/16#issuecomment-6014449380).
 
 ### `/Game/Materials/M_SurfaceAccumulationDebug`
 
