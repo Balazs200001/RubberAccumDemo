@@ -1552,3 +1552,136 @@ the headless suite within the same 1.4 levels.
 
 Not verified: the screen itself, in a running demo; the all-channels view, where the tonemapper does
 not act on mixed colours channel by channel; and the cooked shader.
+
+---
+
+## 2026-10-06 — E4: a lit asphalt road material and its three textures
+
+**Assets created**, all saved and verified not dirty:
+
+| Asset | What |
+|---|---|
+| `/Game/Materials/Asphalt/T_AsphaltFresh_BaseColor` | Base colour, from `T_sfrofg0a_2K_B.png` |
+| `/Game/Materials/Asphalt/T_AsphaltFresh_Normal` | Normal, from `T_sfrofg0a_2K_N.png` |
+| `/Game/Materials/Asphalt/T_AsphaltFresh_ORM` | AO, roughness and metallic packed, from `T_sfrofg0a_2K_ORM.png` |
+| `/Game/Materials/M_SurfaceAsphalt` | The lit road material the circuit switches to on V |
+
+**Not touched, only read:** `/RacetrackSurface/Materials/MF_SampleRacetrackSurface`,
+`/RacetrackSurface/Materials/T_EmptyAccumulation` and `/Game/Materials/M_SurfaceAccumulationDebug`.
+
+Made via: `TextureTools.import_file`, `ObjectTools.set_properties` and `get_properties`,
+`MaterialTools.create_material`, `add_expression`, `connect_expressions`, `connect_to_output`,
+`recompile`, `get_expression_inputs`, `get_property_input`, then `AssetTools.save_assets` with the
+four paths given explicitly and `AssetTools.is_dirty` on each.
+
+### Source
+
+Fab Megascans surface *Asphalt Fresh*, id `sfrofg0a`, 2k, the `_ue_mid` package, downloaded by the
+user and unzipped to `C:\Users\balu2\Downloads\asphalt_fresh_sfrofg0a_2k_ue_mid\Textures\`. The import
+records that absolute path as each texture's source, so a reimport needs the same download in the
+same place. The package's `sfrofg0a.json` gives a 2 x 2 m tileable scan with 2.7 cm of relief.
+
+Both GitHub repositories, `RubberAccumDemo` and `RacetrackSurfacePlugin`, are **private**, checked
+with `gh repo view --json visibility` on 2026-10-06. The E4 plan section said the plugin repository
+was public, and it is not. The textures are in host content because they are demo dressing, which
+holds either way.
+
+### What Interchange chose on import, and what was changed
+
+| Texture | Interchange chose | Changed to | Why |
+|---|---|---|---|
+| BaseColor | `TC_Default`, sRGB on | unchanged | Colour data |
+| Normal | `TC_Normalmap`, sRGB off, `TEXTUREGROUP_WorldNormalMap`, green not flipped | `bFlipGreenChannel` true | The map is OpenGL convention, below |
+| ORM | `TC_Default`, **sRGB on** | `TC_Masks`, sRGB off | Packed linear data. As imported, roughness and AO would have been decoded as colour |
+
+All three read back after the change. **Interchange does not recognise a packed mask texture** and
+imports it as colour. The package's glTF marks the ORM image `"compression": "mask"`, but that hint
+only reaches Unreal if the glTF itself is imported, and here the PNG was. Check every packed texture
+after import.
+
+**The normal convention was measured, not assumed.** Each normal channel minus 0.5 was correlated
+with the central difference of the package's own displacement map: red against the column gradient
+-0.77 and green against the row gradient +0.77 on the PNG, -0.83 and +0.83 on the JPG. Positive on
+green means green points up the image, the OpenGL convention. Unreal's is DirectX.
+
+**The ORM packing was checked against the separate maps.** Red correlates 0.947 with
+`Asphalt_Fresh_sfrofg0a_2K_AO.jpg`, green 0.932 with the roughness JPG, and blue is 0 at every texel.
+Green averages 0.80, which is the roughness the rubber response lowers from.
+
+### The material, `/Game/Materials/M_SurfaceAsphalt`
+
+Surface domain, opaque, default lit, one-sided, tangent-space normal. All of these are the new
+material defaults, read back rather than set.
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionTextureObjectParameter_0` | `TextureObjectParameter` | `AccumulationTarget`, default `/RacetrackSurface/Materials/T_EmptyAccumulation`, sampler `LinearColor`, as the debug material |
+| `MaterialExpressionMaterialFunctionCall_0` | `MaterialFunctionCall` | `/RacetrackSurface/Materials/MF_SampleRacetrackSurface` |
+| `MaterialExpressionTextureCoordinate_0` | `TextureCoordinate` | UV0 |
+| `MaterialExpressionScalarParameter_0` | `ScalarParameter` | `AsphaltTilesAlongLap`, default 1, group `Asphalt Tiling` |
+| `MaterialExpressionScalarParameter_1` | `ScalarParameter` | `AsphaltTilesAcross`, default 1, group `Asphalt Tiling` |
+| `MaterialExpressionAppendVector_0` | `AppendVector` | the two tile counts |
+| `MaterialExpressionMultiply_0` | `Multiply` | UV0 times the tile counts |
+| `MaterialExpressionTextureSample_0` | `TextureSample` | `T_AsphaltFresh_BaseColor`, sampler `Color` |
+| `MaterialExpressionTextureSample_1` | `TextureSample` | `T_AsphaltFresh_Normal`, sampler `Normal` |
+| `MaterialExpressionTextureSample_2` | `TextureSample` | `T_AsphaltFresh_ORM`, sampler `Masks` |
+| `MaterialExpressionVectorParameter_0` | `VectorParameter` | `RubberColour` |
+| `MaterialExpressionVectorParameter_1` | `VectorParameter` | `MarbleColour` |
+| `MaterialExpressionScalarParameter_2` to `_8` | `ScalarParameter` | in the parameter table below, in that order |
+| `MaterialExpressionMultiply_1` to `_4` | `Multiply` | coverage times strength |
+| `MaterialExpressionLinearInterpolate_0` to `_6` | `LinearInterpolate` | |
+| `MaterialExpressionConstant3Vector_0` | `Constant3Vector` | (0, 0, 1) |
+
+Wiring, every connection read back with `get_expression_inputs` and `get_property_input`:
+
+```
+AccumulationTarget --> MF_SampleRacetrackSurface.AccumulationTarget
+UV0 x Append(AsphaltTilesAlongLap, AsphaltTilesAcross) --> UVs of all three texture samples
+
+BaseColor.RGB --> Lerp_0(B RubberColour, Alpha Buildup x BuildupDarkening)
+              --> Lerp_1(B RubberColour, Alpha Skid x SkidDarkening)
+              --> Lerp_2(B MarbleColour, Alpha Marbles x MarbleDarkening)   --> MP_BaseColor
+ORM.G         --> Lerp_3(B BuildupRoughness, Alpha Buildup)
+              --> Lerp_4(B SkidRoughness, Alpha Skid)
+              --> Lerp_5(B MarbleRoughness, Alpha Marbles)                  --> MP_Roughness
+Normal.RGB    --> Lerp_6(B (0,0,1), Alpha Buildup x BuildupNormalFlattening) --> MP_Normal
+ORM.R                                                                       --> MP_AmbientOcclusion
+```
+
+`MP_Specular`, `MP_Metallic` and `MP_EmissiveColor` are unconnected, read back as `None`. Specular
+per the E4 decision, metallic because the ORM's blue is 0 everywhere, emissive because the view is lit.
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `AsphaltTilesAlongLap` | 1 | The circuit sets lap length over 200 cm, rounded. 1 means unset, and shows one tile stretched over the lap |
+| `AsphaltTilesAcross` | 1 | The circuit sets track width over 200 cm |
+| `RubberColour` | (0.010, 0.010, 0.011) linear | What laid rubber and skid marks darken toward |
+| `MarbleColour` | (0.022, 0.020, 0.018) linear | What marbles dull toward, a little lighter than laid rubber |
+| `BuildupDarkening` | 0.85 | How far full buildup goes toward `RubberColour` |
+| `SkidDarkening` | 1.0 | How far a full skid mark goes toward it |
+| `MarbleDarkening` | 0.8 | How far full marbles go toward `MarbleColour` |
+| `BuildupRoughness` | 0.55 | Roughness at full buildup, against the asphalt's own 0.80 |
+| `SkidRoughness` | 0.45 | Roughness at a full skid mark |
+| `MarbleRoughness` | 0.95 | Roughness at full marbles, loose and matte |
+| `BuildupNormalFlattening` | 0.7 | How far full buildup flattens the asphalt's normal, rubber filling the pores |
+
+The defaults are starting points. The scan's average colour is `#24211D`, about 0.015 linear, so the
+asphalt is already nearly as dark as rubber on average. What the darkening mostly removes is the
+light aggregate, and the roughness drop is expected to be the more visible change. Whether it reads
+as laid rubber is the user's judgement.
+
+**Plain nodes rather than a Custom node.** A Custom node's HLSL is stored inside the `.uasset` just
+as the graph is, so it would not be any more reviewable in a diff. These are seven lerps of
+presentation, and the full graph is recorded above.
+
+### What was verified, and what was not
+
+Verified: the material recompiles without error, which also confirms each sampler type agrees with
+its texture's compression; every connection was read back; all four assets are saved and not dirty;
+`git status` showed only these four new files, so nothing else was saved alongside them; the
+material's thumbnail renders as a lit, textured sphere,
+`2627-Y3A-PR-243663/assets/media/e4-asphalt-material-thumbnail.png`.
+
+Not verified at this point: the material on the road with the tile counts set and rubber on it,
+under Lumen in a running demo, which needs the C++ built into the editor target; and the cooked
+shader.
