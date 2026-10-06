@@ -5580,6 +5580,22 @@ missed. The user's screenshot is brighter still than every harness context, whic
 Nothing in the material has changed. Work stops here for the user's decision on whether to neutralise
 local exposure and bloom for the demo's view before the inverse curve is built.
 
+#### Decided 2026-10-06 (E3): neutralise local exposure and bloom in C++, then build the inverse
+
+| | How | Consequence |
+|---|---|---|
+| **1 (decided)** | `ARacetrackCircuit` owns an unbound `UPostProcessComponent` that overrides local exposure contrast to 1 and bloom intensity to 0 | A pixel's brightness depends only on its own texel. Reviewable in a diff, no `Config/` change. The whole demo scene, sky included, loses local exposure and bloom. Needs a full build with the editor closed, because it adds a component to a reflected class |
+| 2 | The same through `r.DefaultFeature.LocalExposure.*` and `r.DefaultFeature.Bloom` in `DefaultEngine.ini` | **Rejected.** Project-wide, editor viewport included, and a `Config/` change |
+| 3 | Keep the chain and fit the curve to a thin mark on black | **Rejected.** Wide bands would read up to about twice as bright as marks of the same coverage |
+
+The user's framing, which this implements: the debug colour's intensity should depend on how much
+rubber a texel holds, and not on what is around it. Every view that has a world blends the world's
+post-process volumes, scene captures included (`SceneView.cpp:2150-2156`, `World.cpp:10764-10779`),
+so the harness sees the component too once it is placed. The inverse curve then answers only to
+exposure, the tonemapper and the sRGB encoding, which act per pixel, and is fitted to an emissive
+sweep measured with local exposure and bloom already neutralised, in both a uniform field and a
+stripe, which should then agree.
+
 ---
 
 ## Standing rules for this backlog
