@@ -886,7 +886,7 @@ The clearest proof the mechanism works, and the reason to prioritise it over mar
 | E1 | Buildup channel, saturating accumulator | Approaches a ceiling rather than clipping |
 | E2 | Decay pass over real time, frequency as a cost knob | Line fades over a session |
 | E3 | ~~Wash-out call for users to hook to rain~~ *Replaced 2026-09-25, [below](#e3-revised-2026-09-25-runtime-decay-control-from-code-instead-of-a-rain-wash-out)*: the decay rate set from C++ and Blueprint at runtime, per world | A host changes the rate from code, and a test shows the passes and the fade follow it; console and code sets both take effect in either order |
-| E4 | Roughness and specular change with slight darkening, verified under Lumen and baked | Reads as laid rubber under both |
+| E4 | Roughness and specular change with slight darkening, verified under Lumen and baked. *Expanded 2026-10-06, [below](#e4-expanded-2026-10-06-before-implementing-a-lit-asphalt-view-switchable-against-the-debug-view)*: a lit asphalt material switchable against the debug view, specular not driven | Reads as laid rubber under both. *Proposed: Lumen only, because the road cannot take baked lighting* |
 | E5 | **The coupling**: skid decay rate as a function of local buildup. *Expanded 2026-09-25, [below](#e5-to-e7-expanded-2026-09-25-before-implementing)*: an in-place compute pass, skid decaying `1 + k * RubberExposure` times as fast as the shared rate | Marks on the line are paved over, marks off it persist; the GPU pass agrees with its C++ closed form texel for texel |
 | E6 | Second profiling pass, focused on the decay pass. *Expanded*: the coupled pass and the C10 quad timed interleaved in one run, empty and populated | Numbers recorded, from the same run, with the power state |
 | E7 | Validation: two identical marks, traffic over one only, compare intensity. *Expanded*: a headless test with controlled traffic against a closed form, and a real-car capture laid by a console command | A number, not an impression, predicted before it was measured |
@@ -1370,6 +1370,131 @@ Consequences, all to be confirmed or overturned when it is built:
   recorded here, but deposition is not decay and fixing it is its own change. If the first test
   confirms the lockout, it is worth doing next.
 - E4's wet or rubbered look.
+
+### E4, expanded 2026-10-06 before implementing: a lit asphalt view, switchable against the debug view
+
+**Requested by the user 2026-10-06:** a realistic asphalt road that reads the accumulation atlas,
+switchable at runtime against the debug view. That is E4's material response plus a demo switch.
+**Nothing in this section has been built yet.**
+
+#### The source surface
+
+Fab Megascans surface *Asphalt Fresh*, id `sfrofg0a`, the 2k `_ue_mid` package, downloaded by the
+user. Its `sfrofg0a.json` gives a 2 x 2 m scan area, tileable, with 2.7 cm of relief. At 2k that is
+about 1 mm per texel against 6.25 cm per texel in the accumulation buffer, so the asphalt detail is
+already far finer than the state painted on it, and 4k would buy nothing the demo camera can see.
+
+| Asset | From | Import settings |
+|---|---|---|
+| `T_AsphaltFresh_BaseColor` | `T_sfrofg0a_2K_B.png` | sRGB, default compression |
+| `T_AsphaltFresh_Normal` | `T_sfrofg0a_2K_N.png` | `TC_Normalmap`, **green channel flipped** |
+| `T_AsphaltFresh_ORM` | `T_sfrofg0a_2K_ORM.png` | `TC_Masks`, sRGB off |
+
+All under `/Game/Materials/Asphalt/`, host content rather than plugin content. It is demo dressing,
+like the debug material, and the plugin repository is public. Whether Fab's licence permits
+redistributing the source textures has not been checked, so they stay out of the plugin.
+
+Checked against the files rather than assumed:
+
+- **The normal maps are OpenGL convention, green up, and Unreal expects DirectX.** Measured by
+  correlating each normal channel with the gradient of the package's own displacement map: red
+  against the column gradient is -0.77 and green against the row gradient is +0.77, on both the PNG
+  and the JPG. Positive on green means green up. Hence the flip on import.
+- **The packed texture is AO, roughness, metallic, in that order.** Red correlates 0.947 with the
+  separate AO map, green 0.932 with the separate roughness map, and blue is 0 at every texel, which
+  is right for asphalt.
+- **Not imported:** displacement, bump, cavity, gloss and specular. H1's parallax mapping is driven
+  by the marble height mask, not by the asphalt's own height, so nothing would read them.
+
+#### The material, `/Game/Materials/M_SurfaceAsphalt`
+
+Default lit. It calls `MF_SampleRacetrackSurface` for `Buildup`, `Skid` and `Marbles`, so the atlas
+is still read, folded, blurred and saturated in exactly one place, and the two views cannot disagree
+about where the rubber is. The texture parameter keeps the name `AccumulationTarget`, so the
+existing bind works unchanged.
+
+| Channel | Base colour | Roughness | Normal |
+|---|---|---|---|
+| Buildup | lerp toward rubber black | down, rubber fills the pores | flattened toward the surface, same reason |
+| Skid | a stronger lerp toward rubber black | down further | unchanged |
+| Marbles | lerp toward a duller rubber colour | up, loose matte debris | unchanged |
+
+Every strength and target colour is a material parameter. The defaults are starting points, and
+whether the result reads as laid rubber is the user's judgement.
+
+**Decided: the asphalt tiles along the road's UV0, a whole number of tiles per lap.** UV0 is
+distance over lap length along the track and 0 to 1 across it, by construction in
+`GenerateRoadMesh`. The material multiplies it by `AsphaltTilesAlongLap` and `AsphaltTilesAcross`,
+which the circuit sets on the dynamic instance as lap length over 200 cm, rounded, and track width
+over 200 cm.
+
+- Rounding to a whole number of tiles per lap means the start/finish line has no seam, whatever the
+  lap length.
+- The road's tangents are its spline's forward direction, which is +U, so a tangent-space normal map
+  sampled in UV space stays lit correctly as the track turns.
+- Both parameters default to **1**. An instance the circuit never set shows one tile stretched over
+  the whole lap, which nobody can miss. That is the same fail-loud rule as `SaturationConstant`.
+
+| Option | Verdict |
+|---|---|
+| **UV0 scaled by tile counts set from the circuit** | **Chosen.** Seamless, and the normal map shares the road's tangent frame |
+| The engine's `WorldAlignedTexture` | **Rejected.** No parameters and no seam, but it projects along world axes, so its normals do not follow the road's tangent frame round the circuit |
+| Tile counts in `MPC_RacetrackSurface` | **Rejected.** Tiling is a host presentation choice. The plugin's collection holds only what the plugin's C++ and HLSL must agree on |
+
+**Decided: marbles are a smooth, rougher, duller band.** Clumps and volume are H1's work, per D-D,
+and this material does not pre-empt them.
+
+**Decided: specular is not driven, and this departs from E4's wording.** In the default lit model
+`Specular` scales a dielectric's F0 of about 4 %, and both bitumen and tyre rubber are dielectrics in
+that range. The visible shine of a rubbered line comes from a smoothed microsurface, which is
+roughness. Driving specular as well would add a parameter with nothing physical behind it.
+
+#### The switch, host only
+
+- `ARacetrackCircuit` holds both materials. `BindAccumulationTargetToRoad` creates a dynamic instance
+  of each, binds the target into both, sets the asphalt tile counts, and puts the active one on the
+  road.
+- **V** toggles between the two. `RacetrackDemo.SurfaceLook` takes 0 for debug and 1 for asphalt and
+  calls the same handler, so a `-game` capture can select the look from `-ExecCmds`, since no MCP
+  tool can press a key. Each change is announced on screen, per C10.1.
+- **C** still cycles the debug channels, and `ESurfaceDebugView` is untouched. Pressing C in the
+  asphalt view switches back to the debug view, so the key never appears to do nothing.
+- Two instances rather than one material: a static switch cannot change at runtime on a dynamic
+  instance, and the debug view is unlit while the asphalt is lit. A shading model is not a runtime
+  parameter.
+- **Proposed, awaiting the user:** the W3 work adds `PerTexelDebugView`, an unbound post-process
+  component that turns off local exposure and bloom for the whole world so the debug view is linear
+  per texel. Left on, it would flatten the asphalt view too. The asphalt view disables it and the
+  debug view re-enables it.
+
+#### The exit, and why half of it cannot be met as the project stands
+
+E4's exit is *reads as laid rubber under Lumen and baked*. **The baked half is not reachable, for two
+independent reasons found in the source:**
+
+1. `r.AllowStaticLighting=False` at `Config/DefaultEngine.ini:69`.
+2. The road is a `UProceduralMeshComponent`, which does not override `GetStaticLightingInfo`, and the
+   base implementation is empty (`PrimitiveComponent.h:2225`). A lighting build would get nothing
+   from the road even with static lighting on.
+
+Meeting it would take a config change and converting the generated road into a static mesh asset.
+**Proposed, awaiting the user: the exit becomes Lumen only, for these reasons.**
+
+What a run can verify: the material compiles, the switch changes the road's material, both views have
+the target bound, and a `-game` capture with deposition raised shows rubber on the asphalt. What it
+cannot: whether that reads as laid rubber.
+
+#### Tests
+
+| Test | Asserts |
+|---|---|
+| `RubberAccumDemo.Track.SurfaceLookSwitchesRoadMaterial` | After switching to asphalt, the road's material is a dynamic instance of `M_SurfaceAsphalt` with `AccumulationTarget` bound to the subsystem's target and both tile counts as derived. Switching back restores the debug instance |
+
+#### Sequencing with W3
+
+The W3 session has uncommitted edits in `RacetrackCircuit.h` and `RacetrackCircuit.cpp`, in the
+same constructor this work edits, and it needs the editor closed for a build and test run. The asset
+work and the C++ wait for its commits.
 
 ## Phase F — Query path
 
