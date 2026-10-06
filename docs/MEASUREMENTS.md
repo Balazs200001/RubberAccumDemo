@@ -3627,3 +3627,94 @@ read 0.2 everywhere. The full per-stage tables for green and blue are in the log
 (`bAlwaysPersistRenderingState`, several frames) applies the project exposure and matches the
 screen; a non-uniform field, so bloom halos around a bright feature are not measured; the 10-bit
 back buffer, which an RGBA8 capture does not bit-match. Decision E is **not** confirmed by this run.
+
+---
+
+## 2026-10-06 — W3.1 again: a persistent view state, a stripe on black, and the screen
+
+The same harness, extended, run inside the open editor over MCP after a Live Coding compile (the
+editor world, `L_SpaHarness`; the spawned plane and capture are transient). Two additions. **A
+persistent view state:** the same capture with `bAlwaysPersistRenderingState` true, eight
+`CaptureScene` calls per reading; no reading moved by more than 0.5 levels between its last two
+captures. **A stripe on black:** the plane scaled to 4 % of the frame's width and half its height,
+captured at 512 x 512 with atmosphere, fog and cloud show flags off, so the background reads
+(0, 0, 0), as the unpainted track does in the debug view. Every figure is still the mean of the
+centre 8 x 8 bytes.
+
+**With a view state the project exposure applies.** Uniform field, persistent view state, staged
+as before, red:
+
+| Coverage | Tonemapper only | + local exposure | + project exposure | + bloom, as shown |
+|---|---|---|---|---|
+| 0.05 | 0.4 | 2.0 | 26.0 | 30.0 |
+| 0.10 | 5.1 | 12.6 | 65.2 | 73.5 |
+| 0.18 | 24.2 | 33.6 | 119.8 | 131.4 |
+| 0.25 | 43.8 | 52.4 | 158.6 | 171.3 |
+| 0.33 | 66.7 | 73.1 | 191.3 | 203.7 |
+| 0.50 | 114.7 | 112.1 | 236.9 | 247.6 |
+| 0.75 | 174.0 | 159.3 | 255.0 | 255.0 |
+| 0.95 | 208.2 | 187.1 | 255.0 | 255.0 |
+
+The *tonemapper only* column is identical to the one-off capture's, and the one-off capture's
+*+ project exposure* equalled its *+ local exposure*. So **a one-off capture renders at exposure 1
+whatever the bias**, and a capture with a view state renders at the bias the project sets: from
+bias `log2(1/1.2)` to bias 1 is the factor 2.4 that W3's prediction derived.
+
+Full chain, persistent view state, uniform field, dense sweep (coverage: level):
+
+| Coverage | 0.02 | 0.05 | 0.10 | 0.14 | 0.18 | 0.23 | 0.30 | 0.40 | 0.50 | 0.60 | 0.80 | 0.99 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Red | 4.8 | 30.0 | 73.5 | 104.6 | 131.4 | 160.6 | 192.3 | 225.1 | 247.9 | 255.0 | 255.0 | 255.0 |
+| Green | 9.8 | 46.8 | 100.6 | 131.1 | 153.8 | 174.0 | 194.1 | 213.6 | 226.2 | 235.4 | 247.0 | 253.3 |
+| Blue | 8.3 | 42.5 | 91.5 | 118.8 | 139.1 | 157.2 | 175.3 | 192.8 | 204.4 | 212.8 | 224.6 | 231.5 |
+
+The full 26-point sweeps are in the editor log of the run. Green and blue gain red and blue
+crosstalk above coverage 0.5 (green at 0.95: red 45, blue 6), the tonemapper desaturating bright
+primaries toward white.
+
+**A stripe on black is brighter than a uniform field, and local exposure is most of why.** Stripe,
+persistent view state, own channel:
+
+| | Coverage 0.10 | 0.33 | 0.50 | 0.76 | 0.95 |
+|---|---|---|---|---|---|
+| Red, full chain | 94.0 | 231.2 | 255.0 | 255.0 | 255.0 |
+| Red, local exposure flattened | 46.0 | 192.1 | 248.6 | 255.0 | 255.0 |
+| Red, flattened, no bloom | 41.3 | 182.6 | 240.1 | 255.0 | 255.0 |
+| Green, full chain | 121.8 | 217.1 | 238.6 | 253.6 | 255.0 |
+| Green, local exposure flattened | 67.9 | 194.0 | 226.6 | 249.1 | 255.0 |
+| Green, flattened, no bloom | 62.0 | 188.2 | 222.0 | 246.1 | 254.5 |
+| Blue, full chain | 111.2 | 196.1 | 216.6 | 231.8 | 238.6 |
+| Blue, local exposure flattened | 61.7 | 175.2 | 204.7 | 226.9 | 235.4 |
+| Blue, flattened, no bloom | 56.2 | 170.1 | 200.5 | 223.8 | 233.0 |
+
+At coverage 0.10 local exposure roughly doubles a stripe on black, red 46.0 to 94.0, while a
+uniform field at the same coverage reads 73.5. Bloom adds 4 to 10 levels on the stripe.
+
+**Against the screen.** The user's screenshot of the skid view, 17.4 laps after laying a skid-mark
+pair reported as keeping 7 % and 25 % (`assets/media/w3-skid-view-on-screen-7-and-25-percent.png`
+in the learning log), read with `System.Drawing`, brightest pixel across each mark at three heights:
+one mark **G 239 to 240, R 20 to 25, B 8 to 11**; the other **G 255, R 131 to 138, B 73 to 78**. The
+dimmer mark sits between the stripe's 0.50 and 0.76 (G 238.6 and 253.6, R 11.8 and 50.2). The
+brighter mark is beyond the stripe at 0.95 (G 255, R 74.7, B 15.5), so **the screen in that frame is
+brighter still than any context the harness has reproduced**. The marks' coverages are not known
+from a readback: the on-screen percentages are of each mark's laid exposure, which was not recorded.
+
+**Why the one-off capture ignored the bias, from the 5.8 source** (a read-only source trace by three
+agents, cross-checked line by line by a fourth; one of the three returned nothing usable and is
+discounted). With no view state, `GetViewState` returns null (`SceneCaptureComponent.cpp:407-433`),
+no eye-adaptation pass runs (`PostProcessing.cpp:763, 786-791`), and the tonemapper is handed the
+default buffer of ones (`SceneTextureParameters.cpp:77-87`). That buffer is not null, so the tonemap
+pass skips its CPU fallback, `GetEyeAdaptationFixedExposure`, which is the only reader of the bias
+(`PostProcessTonemap.cpp:622-631`, `PostProcessEyeAdaptation.cpp:446-460, 810-821`). Exposure is
+exactly 1.0. With a view state the histogram pass runs; because this project sets minimum and maximum
+brightness equal (`SceneView.cpp:2060-2070`), the target is forced (`PostProcessEyeAdaptation.cpp:717,
+723`) and the exposure snaps to `1.2 x 2^1 = 2.4` on the first capture, which is why every persistent
+reading had already settled. Local exposure and bloom are configured identically for a capture and
+the main view; what differs between the uniform field and the stripe is the content, not the path.
+
+**What this settles and what it does not.** Exposure, tonemapper and encoding act per pixel and are
+now reproduced. Local exposure and bloom depend on what surrounds a pixel, and on a dark track they
+dominate the low end: no single per-pixel inverse curve can be linear on screen for both a thin mark
+and a wide band while they are on. **Not verified:** a measurement of the screen itself under known
+coverage; why the brighter mark exceeds every harness reading; one GPU and driver; a capture against
+the 10-bit back buffer.

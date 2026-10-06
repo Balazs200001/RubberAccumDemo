@@ -5562,6 +5562,24 @@ freshly constructed `FPostProcessSettings` (`Scene.h:2692-2694`), whose construc
 `r.DefaultFeature.AutoExposure.Bias` (`Scene.cpp:516`). Setting it from the console should therefore
 change the view's exposure on the next frame without touching `Config/`.
 
+### Measured on implementing, 2026-10-06: the harness reproduces exposure, and the view depends on content
+
+Run inside the open editor over MCP after Live Coding compiles; numbers in `MEASUREMENTS.md` under
+"W3.1 again". **A capture with a persistent view state applies the project's exposure of 2.4**, which
+the one-off capture did not, and a source trace explains both. That closes the first contradiction:
+W3's predicted table was right about exposure, and the first run was measuring at exposure 1.
+
+**The second finding changes the design.** A stripe 4 % of the frame wide on black reads much brighter
+than a uniform field at the same coverage, red 94.0 against 73.5 at coverage 0.10, and flattening
+local exposure brings the stripe to 46.0. Local exposure and, to a lesser degree, bloom depend on
+what surrounds a pixel. On a dark track they dominate the low end, so **decision E's per-pixel
+inverse curve cannot make both a thin skid mark and a wide rubber band linear while they are on.**
+E's honest limits named bloom halos and fixed exposure, not local exposure; this is the limit it
+missed. The user's screenshot is brighter still than every harness context, which is not explained.
+
+Nothing in the material has changed. Work stops here for the user's decision on whether to neutralise
+local exposure and bloom for the demo's view before the inverse curve is built.
+
 ---
 
 ## Standing rules for this backlog
