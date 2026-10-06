@@ -4811,8 +4811,9 @@ about 4, and nobody has counted how often that happens.
 ## W — One write call per tyre: channels from slip, a full lockup mark, marbles as a fan, a linear debug view
 
 Requested 2026-09-28. **W1, W1b, W2.0, W2.1 and W2.2 are built. W2.3's fans are built and committed
-without their tests, which are owed. W2.4 is not started. W3.1's harness is built; W3.2 is dropped
-by the user's decision of 2026-09-29 to keep the measured response.**
+without their tests, which are owed. W2.4 is not started. W3 is built: the response harness, decision
+E3's post-process component, the debug material's inverse curve and the coverage probe; the
+2026-09-29 decision to drop W3.2 was reopened the same day and reversed.**
 What building them found is under
 [Measured on implementing](#measured-on-implementing-2026-09-28-w1-and-w1b), W2.0's result
 [below it](#measured-on-implementing-2026-09-28-w20-confirms-the-simulation-so-d2-stands), and W2.1's
@@ -5402,7 +5403,7 @@ must be green, at the end of W1b, W2 and W3.
 | `RubberAccumDemo.Demo.MarblesReachTheBufferOnTheFoldedLayout` | counts fans, not marble contacts; the buffer readback is unchanged | rewritten |
 | `RubberAccumDemo.Demo.CurvatureProfileOnTheDemoLayout` | right vectors horizontal everywhere; no sign change inside a corner; reports the straights' noise floor | new |
 | `RubberAccumDemo.Surface.DebugViewResponse` | W3.1's measurement, then end-to-end linearity by the agreed definition | new |
-| `RubberAccumDemo.Surface.DebugMaterialMapsCoverageLinearly` | raw emissive at known coverages matches the inverse curve | new |
+| `RubberAccumDemo.Surface.DebugMaterialMapsCoverageLinearly` | raw emissive at known coverages matches the inverse curve | **not built**, folded into `DebugViewResponse`; see W3.2's "Measured on implementing" |
 | `RubberAccumDemo.Track.SkidMarkPairLandsOnAndOffTheRubber` | target `E_lock x 300/320`; rubber band at slip 0.5 | rewritten |
 
 `RacetrackSurface.Accumulator.MarbleStrokeWritesOnlyTheMarbleChannel` keeps passing but paints a
@@ -5741,6 +5742,51 @@ so the harness sees the component too once it is placed. The inverse curve then 
 exposure, the tonemapper and the sRGB encoding, which act per pixel, and is fitted to an emissive
 sweep measured with local exposure and bloom already neutralised, in both a uniform field and a
 stripe, which should then agree.
+
+### Measured on implementing, 2026-10-06: W3.2, the curve, the probe and the circuit's component
+
+**Built and committed** in the host, in this order: `dfb3039` (the probe asset), `bbfee4e` (both
+read-path tests drawn through it), `21c6446` (the circuit's unbound post-process component),
+`01d823c` (the curve asset together with the harness that asserts it, one commit because the
+harness's earlier raw checks fail against the curve on their own). The editor target built clean;
+the full headless suite passed 127 of 127. The plugin is untouched by W3, so `BuildPlugin` was not
+rerun. Assets in `EDITOR_SETUP.md`, numbers in `MEASUREMENTS.md` under W3.2.
+
+**Decisions taken while building it, for defending:**
+
+- **Each channel's 100 % is the brightest it can be shown while still being that colour.** A bright
+  pure primary washes toward white through the tonemapper: green at emissive 1.0 shows red 60. The
+  ceiling is where the other two channels first exceed 5 levels: red 254 (capped below its clip),
+  green 235, blue 210. A shared ceiling would have dimmed red and green to blue's 210; letting every
+  channel reach 255 would have tinted the top of green and blue toward white, which is what the
+  user's too-bright 25 % mark looked like.
+- **The curve is a 33-knot table spaced by the square root of coverage**, in a Custom node. The
+  filmic toe crushes the bottom, and uniform knots left the simulated dark end 3.3 levels low;
+  square-root spacing brings the simulated worst case to 1.13 levels and the measured one to 1.4.
+- **The probe carries the channel-mask multiply**, one addition beyond E2. At its default it is still
+  coverage straight to emissive; the mask lets the harness keep sweeping the raw chain now that the
+  debug material carries the curve.
+- **`DebugMaterialMapsCoverageLinearly` is not built.** It would check raw emissive against the
+  curve, which needs the 33 knots copied into C++, the coupling E2 rejected for the read-path tests.
+  `DebugViewResponse` asserts the property the curve exists for, linear on screen, through the real
+  chain, in both contexts, which a raw-path test cannot.
+- **The harness's stage-by-stage tables were removed once recorded.** They answered W3.1's
+  questions; their code is at `791fbfc` and their numbers are in `MEASUREMENTS.md`. The harness now
+  holds the raw sweep, the context agreement and the linearity assertions.
+- **The linearity assertions run twice**: with the neutral chain set on the capture, which tests the
+  curve alone, and with nothing set on the capture, which tests the world as the demo sets it and so
+  fails if the circuit's component is removed or overridden. The second set failed before
+  `21c6446` and passes after it.
+
+**What it found:** with local exposure and bloom neutralised, a pixel's level depends on its own
+texel alone, to 0.8 levels; the curve then holds every coverage from 0.01 to 0.99 within 1.4 levels
+of linear in every channel and context.
+
+**Not verified:** the screen in a running demo, which is the user's check; the all-channels view;
+the lit asphalt view planned as E4, which this component would also flatten unless E4 disables it
+for that view; one GPU and driver; the 10-bit back buffer. The harness runs in the editor world,
+spawns two transient actors there and reconfigures its surface subsystem, as the other read-path
+tests already do.
 
 ---
 
