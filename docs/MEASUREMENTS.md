@@ -3799,3 +3799,59 @@ reading moved between its last two captures.
 **Not verified:** the screen itself, seen in a running demo; the all-channels view, where the
 tonemapper does not act on a mixed colour channel by channel; one GPU and driver; the 10-bit back
 buffer, which an RGBA8 capture does not bit-match.
+
+---
+
+## 2026-10-06 — E4: the lit asphalt on screen, against the debug view at the same settings
+
+```
+Build:    Development, editor target run as UnrealEditor.exe -game, windowed 1600x900, at a729012
+Power:    MAINS, BatteryStatus.PowerOnline True at capture time
+Scene:    /Game/Maps/L_SpaHarness, twenty cars, Spa layout at 180000 cm, 800 cm wide, 3.125 cm per texel
+Driven:   entirely from -ReleaseField and -ExecCmds, no keyboard. One process per still, grabbed
+          80 s after launch, then killed
+Settings: r.RacetrackSurface.DepositionScale 32, RacetrackDemo.TimeDilation 20, then per still below
+Capture:  PrintWindow of the game window's own client area, PW_CLIENTONLY | PW_RENDERFULLCONTENT
+```
+
+Four stills in [`assets/media/`](../../2627-Y3A-PR-243663/assets/media/):
+
+| Still | Look | Camera | Added to the settings |
+|---|---|---|---|
+| `e4-asphalt-wide-spa-32x-deposition` | Lit asphalt | The default framing of the whole circuit | `RacetrackDemo.SurfaceLook 1` |
+| `e4-debug-wide-spa-32x-deposition` | Debug view, all channels | The same | nothing |
+| `e4-asphalt-follow-leader-rubbered-line` | Lit asphalt | Behind the leading car | `RacetrackDemo.SurfaceLook 1`, `RacetrackDemo.FollowTheLeader 1`, `r.RacetrackSurface.DrawQueryOverlay 0` |
+| `e4-debug-follow-leader-same-corner` | Debug view, all channels | Behind the leading car | `RacetrackDemo.FollowTheLeader 1`, `r.RacetrackSurface.DrawQueryOverlay 0` |
+
+As with C10.5, 32x deposition means these show *what the channels look like on the asphalt*, not
+how fast rubber arrives. The query overlay is off in the close-ups only so the road under the car is
+visible.
+
+**Read from each run's own log, not assumed.** Every run allocated the 14401 x 1024 folded target and
+logged `bound the same target into the asphalt, tiled 900 times along the 180000.0 cm lap and 4.00
+times across the 800.0 cm width`, which is 200.0 cm tiles both ways on this layout. The two asphalt
+runs logged `now shows the lit asphalt, with local exposure and bloom left to the scene` at frame 0.
+The two debug runs never switched. No run logged an error.
+
+What the stills show. These are observations; whether the result reads as laid rubber is the user's
+judgement and is E4's exit:
+
+- **Close up, the line reads.** A darker, smoother band follows the corner, with a sky reflection
+  where the roughness has dropped. The asphalt grain is intact either side, and at that distance the
+  2 m tile does not visibly repeat. It lines up with the red band in the debug close-up of the same
+  corner, behind the same leading car. The two are not bit-identical frames, only the same place.
+- **From the default framing it barely reads.** The debug view shows the line saturated round almost
+  the whole lap; the asphalt shows only faint darker streaks. The scan averages about 0.015 linear,
+  already close to the 0.010 `RubberColour`, so darkening has little room. The roughness change needs
+  a reflection angle that a camera high above the circuit mostly does not get.
+- **The marble band does not show on the asphalt at the defaults.** The debug close-up has a wide
+  blue band either side of the line; the asphalt close-up has plain asphalt there. `MarbleColour`
+  (0.022) is slightly *lighter* than the scan's mean, so full marbles move the surface slightly lighter
+  and more matte, which at these values is not visible. **Not changed:** the defaults are a judgement
+  for the user. The two levers, if marbles should show, are a darker `MarbleColour` or a lighter, more
+  worn asphalt scan, against which rubber and marbles would both have more contrast.
+
+**Not verified:** the V key and the C key's return from the asphalt, because these runs had no
+keyboard. The console command calls the same `SetSurfaceLook` and was exercised; the key bindings
+were only compiled. The frame cost of the lit material against the unlit debug one was not measured.
+
