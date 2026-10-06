@@ -3718,3 +3718,82 @@ dominate the low end: no single per-pixel inverse curve can be linear on screen 
 and a wide band while they are on. **Not verified:** a measurement of the screen itself under known
 coverage; why the brighter mark exceeds every harness reading; one GPU and driver; a capture against
 the 10-bit back buffer.
+
+---
+
+## 2026-10-06 — W3.2: the raw response the curve is fitted to, and the curve's result
+
+Same harness, same editor session over MCP, persistent view state throughout, local exposure
+contrast 1 and bloom 0 set on the capture (decision E3's chain). **The raw response:** the material
+as it was before W3.2 (coverage times the channel mask), coverage held at 0.5 and the mask scaled,
+so the plane emits a known emissive per primary. Uniform field, own channel (levels of 255), with
+the largest of the other two channels in brackets where it is above the 0.2 dither floor:
+
+| Emissive | 0.0175 | 0.02 | 0.03 | 0.05 | 0.10 | 0.20 | 0.30 | 0.40 | 0.50 | 0.56 | 0.60 | 0.70 | 1.0 | 2.0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Red | 0.2 | 0.4 | 1.6 | 8.9 | 41.0 | 109.4 | 167.8 | 209.7 | 239.5 | 254.3 | 255.0 (0.4) | 255.0 (1.4) | 255.0 (6.0) | 255.0 (28.8) |
+| Green | 0.4 | 0.8 | 3.6 | 16.7 | 61.5 | 135.4 | 178.7 | 204.6 | 221.6 (0.4) | 229.6 (0.6) | 234.0 (3.1) | 241.7 (17.5) | 255.0 (60.4) | 255.0 (141.4) |
+| Blue | 0.2 | 0.6 | 2.8 | 14.5 | 55.7 | 122.8 | 161.5 | 184.9 | 200.2 (2.3) | 207.4 (4.0) | 211.5 (6.5) | 219.4 (16.9) | 234.7 (46.9) | 252.1 (120.9) |
+
+All 48 steps, uniform field, the data the curve in `EDITOR_SETUP.md` was fitted to (own channel;
+then the larger of the other two channels):
+
+```
+emissive  0 0.005 0.01 0.0125 0.015 0.0175 0.02 0.0225 0.025 0.0275 0.03 0.035 0.04 0.045 0.05 0.06
+          0.07 0.08 0.09 0.10 0.12 0.14 0.16 0.18 0.20 0.23 0.26 0.30 0.35 0.40 0.45 0.50 0.52 0.54
+          0.56 0.58 0.60 0.62 0.64 0.66 0.68 0.70 0.80 0.90 1.0 1.5 2.0 3.0
+red       0.2 0.2 0.2 0.2 0.2 0.2 0.4 0.5 0.8 1.3 1.6 2.7 4.6 6.3 8.9 14.5 20.8 27.4 33.4 41.0 53.6
+          68.5 81.5 95.8 109.4 127.7 146.1 167.8 190.3 209.7 225.7 239.5 244.5 249.5 254.3 255 255 255
+          255 255 255 255 255 255 255 255 255 255
+  other   0.2 to emissive 0.58, then 0.4 0.6 0.8 1.0 1.2 1.4 2.3 4.3 6.0 16.1 28.8 64.1
+green     0.2 0.2 0.2 0.2 0.2 0.4 0.8 1.2 1.7 2.7 3.6 5.7 9.4 12.6 16.7 25.2 34.2 43.3 51.7 61.5 78.1
+          95.1 110.0 123.4 135.4 151.3 163.8 178.7 192.7 204.6 214.1 221.6 224.4 227.1 229.6 232.2
+          234.0 235.7 237.3 238.8 240.3 241.7 248.4 252.4 255 255 255 255
+  other   0.2 to emissive 0.45, then 0.4 0.4 0.5 0.6 0.6 3.1 6.4 9.2 12.2 14.9 17.5 30.1 45.9 60.4
+          111.1 141.4 175.7
+blue      0.2 0.2 0.2 0.2 0.2 0.2 0.6 0.9 1.4 2.1 2.8 4.6 7.8 10.6 14.5 22.3 30.7 39.0 46.9 55.7 71.1
+          86.4 99.8 111.9 122.8 137.1 148.3 161.5 174.4 184.9 193.3 200.2 202.6 205.2 207.4 209.6
+          211.5 213.2 214.8 216.4 217.9 219.4 226.1 230.6 234.7 246.6 252.1 255
+  other   0.2 to emissive 0.40, then 0.7 2.3 2.9 3.5 4.0 4.5 6.5 8.7 10.8 13.0 15.0 16.9 26.1 36.9
+          46.9 90.2 120.9 159.4
+```
+
+**The uniform field and a stripe on black agree within 0.8 levels** at every step in every channel
+(red 0.8 at emissive 0.35, green 0.6 at 0.35, blue 0.6 at 0.30): with local exposure and bloom
+neutralised, a pixel's level depends only on its own texel. The sweep fed what it said: the probe's
+raw emissive matched the requested value to 0.2 % at every step.
+
+**The ceilings**, where the other two channels first exceed 5 levels above the floor, red capped at
+254 below its clip: red 254.0, green 235.08, blue 210.26.
+
+**The curve's result.** The debug material with the inverse curve, the same chain, coverage fed
+through the exposure texture, levels shown against `ceiling * coverage`:
+
+| Coverage | 0.01 | 0.05 | 0.10 | 0.25 | 0.33 | 0.50 | 0.76 | 0.99 |
+|---|---|---|---|---|---|---|---|---|
+| Red stripe, shown / target | 2.4 / 2.5 | 13.1 / 12.7 | 25.8 / 25.4 | 64.2 / 63.5 | 84.1 / 83.8 | 127.8 / 127.0 | 194.2 / 193.0 | 252.2 / 251.5 |
+| Green stripe | 2.6 / 2.4 | 11.9 / 11.8 | 24.0 / 23.5 | 59.3 / 58.8 | 78.2 / 77.6 | 118.2 / 117.5 | 179.6 / 178.7 | 233.8 / 232.7 |
+| Blue stripe | 2.3 / 2.1 | 10.6 / 10.5 | 21.3 / 21.0 | 53.1 / 52.6 | 70.0 / 69.4 | 105.8 / 105.1 | 160.5 / 159.8 | 208.9 / 208.2 |
+
+**Every coverage from 0.01 to 0.99 read within 1.4 levels of its target, in all three channels, as
+a uniform field and as a stripe.** Crosstalk at coverage 0.99 was 2.7 levels for green and 4.4 for
+blue, inside the 5-level rule. The uniform-field rows are within the same bound and in the log.
+
+**The same curve under the chain as the world set it before the circuit's component existed**, the
+"before" for E3: red at coverage 0.33 read 120.4 as a uniform field and 148.8 as a stripe against a
+target of 83.8; red at 0.01 read 15.6 and 23.5 against 2.5. Local exposure lifts the dark end and
+lifts it more on black, which is the failure E3 removes. These six assertions failed, as expected,
+and are the ones the circuit's post-process component has to turn green.
+
+**With the component in place.** After `21c6446` added the circuit's unbound post-process
+component, the full headless suite on the Development editor target (`C:/RSBuild/w32-tests.log`,
+127 of 127 passing) ran the same assertions with nothing set on the capture, so the chain is the one
+the world gives every view of `L_SpaHarness`. Every coverage from 0.01 to 0.99 read within 1.4
+levels of its target in all three channels and both contexts. Red at coverage 0.33 read 83.6 as a
+uniform field and 84.1 as a stripe, against 83.8, where without the component the same curve read
+120.4 and 148.8. The uniform field and the stripe agreed within 0.7 levels on the raw sweep. No
+reading moved between its last two captures.
+
+**Not verified:** the screen itself, seen in a running demo; the all-channels view, where the
+tonemapper does not act on a mixed colour channel by channel; one GPU and driver; the 10-bit back
+buffer, which an RGBA8 capture does not bit-match.
