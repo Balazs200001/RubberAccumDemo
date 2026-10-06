@@ -2,10 +2,14 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Components/PostProcessComponent.h"
 #include "Components/SplineComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "ProceduralMeshComponent.h"
 #include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
@@ -3193,6 +3197,136 @@ bool FRacetrackCircuitTheGridNeverDrivesIntoItself::RunTest(const FString& Param
 				RealTime.SmallestAdjacentGap),
 			FMath::Abs(Result.SmallestAdjacentGap - RealTime.SmallestAdjacentGap) < CompressedAgreementCentimetres);
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitSurfaceLookSwitchesRoadMaterial,
+	"RubberAccumDemo.Demo.SurfaceLookSwitchesRoadMaterial",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitSurfaceLookSwitchesRoadMaterial::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No editor, game or PIE world available."));
+		return false;
+	}
+
+	const UMaterialInterface* DebugMaterial = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/Materials/M_SurfaceAccumulationDebug.M_SurfaceAccumulationDebug"));
+	const UMaterialInterface* AsphaltMaterial = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/Materials/M_SurfaceAsphalt.M_SurfaceAsphalt"));
+
+	if (DebugMaterial == nullptr || AsphaltMaterial == nullptr)
+	{
+		AddError(TEXT("Could not load the debug or the asphalt road material."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr)
+	{
+		AddError(TEXT("Could not spawn a circuit."));
+		return false;
+	}
+
+	Track->PostInitializeComponents();
+	Track->DispatchBeginPlay();
+
+	UProceduralMeshComponent* Road = Track->FindComponentByClass<UProceduralMeshComponent>();
+	UPostProcessComponent* PerTexelDebugView = Track->FindComponentByClass<UPostProcessComponent>();
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+	UTextureRenderTarget2D* Target = Subsystem != nullptr ? Subsystem->GetOrCreateAccumulationTarget() : nullptr;
+
+	if (Road == nullptr || PerTexelDebugView == nullptr || Target == nullptr)
+	{
+		AddError(TEXT("The circuit has no road, no per-texel post-process or no accumulation target."));
+		DestroyTheField(*Track);
+		return false;
+	}
+
+	auto ShownInstance = [Road]()
+	{
+		return Cast<UMaterialInstanceDynamic>(Road->GetMaterial(0));
+	};
+
+	UMaterialInstanceDynamic* DebugShown = ShownInstance();
+
+	TestTrue(TEXT("The circuit begins play on the debug view"), Track->GetSurfaceLook() == ESurfaceLook::Debug);
+
+	TestTrue(
+		TEXT("The debug view shows a dynamic instance of the debug material"),
+		DebugShown != nullptr && DebugShown->Parent.Get() == DebugMaterial);
+
+	TestTrue(
+		TEXT("The per-texel post-process is on while the debug view is shown, which the debug view's "
+			"linearity depends on"),
+		PerTexelDebugView->bEnabled != 0);
+
+	Track->SetSurfaceLook(ESurfaceLook::Asphalt);
+
+	UMaterialInstanceDynamic* AsphaltShown = ShownInstance();
+	const bool bAsphaltShown = AsphaltShown != nullptr && AsphaltShown->Parent.Get() == AsphaltMaterial;
+
+	TestTrue(TEXT("Switching to asphalt records the look"), Track->GetSurfaceLook() == ESurfaceLook::Asphalt);
+
+	TestTrue(TEXT("The asphalt look shows a dynamic instance of the asphalt material"), bAsphaltShown);
+
+	TestTrue(
+		TEXT("The per-texel post-process is off while the asphalt is shown, so it does not flatten the "
+			"lit view"),
+		PerTexelDebugView->bEnabled == 0);
+
+	if (bAsphaltShown)
+	{
+		const double Scan = ARacetrackCircuit::AsphaltScanCentimetres;
+		const double TilesAlongLap = AsphaltShown->K2_GetScalarParameterValue(
+			ARacetrackCircuit::AsphaltTilesAlongLapParameterName);
+		const double TilesAcross = AsphaltShown->K2_GetScalarParameterValue(
+			ARacetrackCircuit::AsphaltTilesAcrossParameterName);
+
+		AddInfo(FString::Printf(
+			TEXT("%.0f tiles along a %.1f cm lap, %.1f cm each, and %.2f across %.1f cm, against a %.0f cm scan"),
+			TilesAlongLap,
+			Track->GetTrackLength(),
+			Track->GetTrackLength() / FMath::Max(TilesAlongLap, 1.0),
+			TilesAcross,
+			Track->GetTrackWidth(),
+			Scan));
+
+		TestTrue(
+			TEXT("The asphalt reads the same accumulation target as the debug view"),
+			AsphaltShown->K2_GetTextureParameterValue(RacetrackSurfaceMapping::AccumulationTargetParameterName) == Target);
+
+		TestTrue(
+			TEXT("The lap holds a whole number of tiles, at least one, so the start and finish line has no seam"),
+			TilesAlongLap >= 1.0 && TilesAlongLap == FMath::RoundToDouble(TilesAlongLap));
+
+		TestTrue(
+			TEXT("A tile along the lap is the scan's own size, give or take the rounding to a whole number "
+				"spread over the lap"),
+			TilesAlongLap >= 1.0
+				&& FMath::Abs(Track->GetTrackLength() / TilesAlongLap - Scan) <= 0.5 * Scan / TilesAlongLap + 1.0e-3);
+
+		TestTrue(
+			TEXT("Across the track a tile is the scan's own size, so the asphalt is not stretched sideways"),
+			FMath::IsNearlyEqual(TilesAcross * Scan, Track->GetTrackWidth(), 1.0e-2));
+	}
+
+	Track->SetSurfaceLook(ESurfaceLook::Debug);
+
+	TestTrue(
+		TEXT("Switching back shows the same debug instance, so its channel mask survives the round trip"),
+		DebugShown != nullptr && ShownInstance() == DebugShown);
+
+	TestTrue(TEXT("Switching back turns the per-texel post-process on again"), PerTexelDebugView->bEnabled != 0);
+
+	DestroyTheField(*Track);
 
 	return true;
 }
