@@ -16,7 +16,7 @@
 
 namespace
 {
-	constexpr const TCHAR* DebugMaterialPath = TEXT("/Game/Materials/M_SurfaceAccumulationDebug.M_SurfaceAccumulationDebug");
+	constexpr const TCHAR* CoverageProbeMaterialPath = TEXT("/Game/Materials/M_SurfaceCoverageProbe.M_SurfaceCoverageProbe");
 
 	constexpr int32 SampledWidth = 128;
 	constexpr int32 SampledHeight = 32;
@@ -96,11 +96,13 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		return true;
 	}
 
-	UMaterial* DebugMaterial = LoadObject<UMaterial>(nullptr, DebugMaterialPath);
+	UMaterial* ProbeMaterial = LoadObject<UMaterial>(nullptr, CoverageProbeMaterialPath);
 
-	if (DebugMaterial == nullptr)
+	if (ProbeMaterial == nullptr)
 	{
-		AddError(FString::Printf(TEXT("Could not load %s, which is what closes the read path."), DebugMaterialPath));
+		AddError(FString::Printf(
+			TEXT("Could not load %s, the probe that draws coverage straight to emissive, which is what closes the read path."),
+			CoverageProbeMaterialPath));
 		return false;
 	}
 
@@ -155,11 +157,11 @@ bool FSurfaceReadPathReturnsTheMarkWhereItWasPainted::RunTest(const FString& Par
 		TestEqual(TEXT("The painted span belongs to the second row"), Painted[0].RowIndex, 1);
 	}
 
-	UMaterialInstanceDynamic* Sampler = UMaterialInstanceDynamic::Create(DebugMaterial, World);
+	UMaterialInstanceDynamic* Sampler = UMaterialInstanceDynamic::Create(ProbeMaterial, World);
 
 	if (Sampler == nullptr)
 	{
-		AddError(TEXT("Could not create a dynamic instance of the debug material."));
+		AddError(TEXT("Could not create a dynamic instance of the coverage probe."));
 		return false;
 	}
 
@@ -491,11 +493,13 @@ bool FSurfaceGatherAgreesWithTheShaderAtTheSameRadius::RunTest(const FString& Pa
 		return true;
 	}
 
-	UMaterial* DebugMaterial = LoadObject<UMaterial>(nullptr, DebugMaterialPath);
+	UMaterial* ProbeMaterial = LoadObject<UMaterial>(nullptr, CoverageProbeMaterialPath);
 
-	if (DebugMaterial == nullptr)
+	if (ProbeMaterial == nullptr)
 	{
-		AddError(FString::Printf(TEXT("Could not load %s, which is the only existing reader."), DebugMaterialPath));
+		AddError(FString::Printf(
+			TEXT("Could not load %s, the probe that draws the material function's coverage without a display curve."),
+			CoverageProbeMaterialPath));
 		return false;
 	}
 
@@ -526,11 +530,11 @@ bool FSurfaceGatherAgreesWithTheShaderAtTheSameRadius::RunTest(const FString& Pa
 	const double BlurRadiusInTexels =
 		USurfaceAccumulationSubsystem::GetQueryContactPatchWidth() / (2.0 * Ribbon.SafeCentimetresPerTexel());
 
-	UMaterialInstanceDynamic* Sampler = UMaterialInstanceDynamic::Create(DebugMaterial, World);
+	UMaterialInstanceDynamic* Sampler = UMaterialInstanceDynamic::Create(ProbeMaterial, World);
 
 	if (Sampler == nullptr)
 	{
-		AddError(TEXT("Could not create a dynamic instance of the debug material."));
+		AddError(TEXT("Could not create a dynamic instance of the coverage probe."));
 		return false;
 	}
 
