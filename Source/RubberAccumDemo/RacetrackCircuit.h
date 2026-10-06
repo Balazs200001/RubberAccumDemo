@@ -27,6 +27,13 @@ enum class ESurfaceDebugView : uint8
 	Marbles
 };
 
+UENUM()
+enum class ESurfaceLook : uint8
+{
+	Debug,
+	Asphalt
+};
+
 struct FSkidMarkPairPlacement
 {
 	double DistanceAlongCentreline = 0.0;
@@ -202,6 +209,21 @@ public:
 
 	static const TCHAR* DebugViewName(ESurfaceDebugView View);
 
+	ESurfaceLook GetSurfaceLook() const
+	{
+		return SurfaceLook;
+	}
+
+	void SetSurfaceLook(ESurfaceLook Look);
+
+	static const TCHAR* SurfaceLookName(ESurfaceLook Look);
+
+	static constexpr double AsphaltScanCentimetres = 200.0;
+
+	static constexpr const TCHAR* AsphaltTilesAlongLapParameterName = TEXT("AsphaltTilesAlongLap");
+
+	static constexpr const TCHAR* AsphaltTilesAcrossParameterName = TEXT("AsphaltTilesAcross");
+
 	float NextDecayRate(float CurrentRate, bool bFaster) const;
 
 	double GetLapSeconds() const;
@@ -292,6 +314,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UMaterialInterface> RoadMaterial;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
+	TObjectPtr<UMaterialInterface> AsphaltMaterial;
+
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0", ClampMax = "64"))
 	int32 CarCount = 20;
 
@@ -357,6 +382,10 @@ private:
 
 	void ApplyDebugViewToRoad();
 
+	void ToggleSurfaceLook();
+
+	void ApplySurfaceLookToRoad();
+
 	void PublishTrackRibbon();
 
 	void GenerateTrackSpline();
@@ -393,6 +422,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> RoadSurfaceMaterial;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> AsphaltSurfaceMaterial;
+
 	UPROPERTY()
 	TArray<TObjectPtr<ASplineFollowingCar>> SpawnedField;
 
@@ -405,6 +437,8 @@ private:
 	bool bFieldPaused = false;
 
 	ESurfaceDebugView DebugView = ESurfaceDebugView::AllChannels;
+
+	ESurfaceLook SurfaceLook = ESurfaceLook::Debug;
 
 	TArray<double> CorneringProfile;
 

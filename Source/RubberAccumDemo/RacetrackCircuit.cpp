@@ -181,6 +181,28 @@ namespace RacetrackDemoCommands
 			"the C key calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetChannelView));
 
+	void SetSurfaceLook(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit == nullptr || Arguments.Num() == 0)
+		{
+			return;
+		}
+
+		const int32 Requested = FMath::Clamp(
+			FCString::Atoi(*Arguments[0]),
+			0,
+			static_cast<int32>(ESurfaceLook::Asphalt));
+
+		Circuit->SetSurfaceLook(static_cast<ESurfaceLook>(Requested));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs SurfaceLookCommand(
+		TEXT("RacetrackDemo.SurfaceLook"),
+		TEXT("0 shows the debug view, 1 the lit asphalt. The same handler the V key calls."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetSurfaceLook));
+
 	void ArmSkidMarkPair(const TArray<FString>& Arguments, UWorld* World)
 	{
 		ARacetrackCircuit* Circuit = FindCircuit(World);
@@ -338,6 +360,14 @@ ARacetrackCircuit::ARacetrackCircuit()
 	if (DebugSurfaceMaterial.Succeeded())
 	{
 		RoadMaterial = DebugSurfaceMaterial.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> AsphaltRoadMaterial(
+		TEXT("/Game/Materials/M_SurfaceAsphalt.M_SurfaceAsphalt"));
+
+	if (AsphaltRoadMaterial.Succeeded())
+	{
+		AsphaltMaterial = AsphaltRoadMaterial.Object;
 	}
 
 	CarClass = ASplineFollowingCar::StaticClass();
@@ -1055,13 +1085,15 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::M, IE_Pressed, this, &ARacetrackCircuit::DecayFaster);
 	InputComponent->BindKey(EKeys::N, IE_Pressed, this, &ARacetrackCircuit::DecaySlower);
 	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARacetrackCircuit::CycleDebugView);
+	InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ARacetrackCircuit::ToggleSurfaceLook);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
 			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
 			"%.0fx of the derived rate. Press M and N for how fast it fades, between off and %.0fx of a "
 			"%.0f lap half-life, which is %.0f s on this layout. Press C to look at one accumulation "
-			"channel at a time. W A S D, Q E and the mouse fly the camera at all times"),
+			"channel at a time. Press V to switch between the debug view and the lit asphalt. "
+			"W A S D, Q E and the mouse fly the camera at all times"),
 		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
@@ -1074,7 +1106,7 @@ void ARacetrackCircuit::BindTimeControls()
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		this,
 		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition   M N decay   C channel"));
+		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt"));
 }
 
 void ARacetrackCircuit::DepositFaster()
@@ -1195,6 +1227,12 @@ void ARacetrackCircuit::ApplyDecayRate(float Rate)
 
 void ARacetrackCircuit::CycleDebugView()
 {
+	if (SurfaceLook == ESurfaceLook::Asphalt)
+	{
+		SetSurfaceLook(ESurfaceLook::Debug);
+		return;
+	}
+
 	SetDebugView(NextDebugView(DebugView));
 }
 
@@ -1339,6 +1377,61 @@ void ARacetrackCircuit::ApplyDebugViewToRoad()
 	RoadSurfaceMaterial->SetVectorParameterValue(
 		RacetrackCircuitDisplay::DebugChannelMaskParameterName,
 		DebugViewChannelMask(DebugView));
+}
+
+void ARacetrackCircuit::ToggleSurfaceLook()
+{
+	SetSurfaceLook(SurfaceLook == ESurfaceLook::Debug ? ESurfaceLook::Asphalt : ESurfaceLook::Debug);
+}
+
+const TCHAR* ARacetrackCircuit::SurfaceLookName(ESurfaceLook Look)
+{
+	return Look == ESurfaceLook::Asphalt ? TEXT("lit asphalt") : TEXT("debug view");
+}
+
+void ARacetrackCircuit::SetSurfaceLook(ESurfaceLook Look)
+{
+	if (Look == ESurfaceLook::Asphalt && AsphaltSurfaceMaterial == nullptr)
+	{
+		UE_LOG(LogRacetrackSurface, Warning,
+			TEXT("%s has no asphalt material bound, so the road stays on the debug view"),
+			*GetName());
+
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.SurfaceLook"),
+			TEXT("No asphalt material is bound, so the road stays on the debug view"));
+		return;
+	}
+
+	SurfaceLook = Look;
+
+	ApplySurfaceLookToRoad();
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s now shows the %s, with local exposure and bloom %s"),
+		*GetName(),
+		SurfaceLookName(SurfaceLook),
+		SurfaceLook == ESurfaceLook::Asphalt ? TEXT("left to the scene") : TEXT("neutralised per texel"));
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.SurfaceLook"),
+		FString::Printf(TEXT("Surface look: %s"), SurfaceLookName(SurfaceLook)));
+}
+
+void ARacetrackCircuit::ApplySurfaceLookToRoad()
+{
+	const bool bShowAsphalt = SurfaceLook == ESurfaceLook::Asphalt;
+
+	PerTexelDebugView->bEnabled = !bShowAsphalt;
+
+	UMaterialInstanceDynamic* Shown = bShowAsphalt ? AsphaltSurfaceMaterial : RoadSurfaceMaterial;
+
+	if (Shown != nullptr)
+	{
+		Road->SetMaterial(0, Shown);
+	}
 }
 
 void ARacetrackCircuit::SpawnField()
@@ -1536,6 +1629,32 @@ void ARacetrackCircuit::BindAccumulationTargetToRoad()
 		*GetName(),
 		Target->SizeX,
 		Target->SizeY);
+
+	if (AsphaltMaterial != nullptr)
+	{
+		const float TilesAlongLap = static_cast<float>(
+			FMath::Max(FMath::RoundToDouble(GetTrackLength() / AsphaltScanCentimetres), 1.0));
+		const float TilesAcross = static_cast<float>(TrackWidth / AsphaltScanCentimetres);
+
+		AsphaltSurfaceMaterial = UMaterialInstanceDynamic::Create(AsphaltMaterial, this);
+
+		AsphaltSurfaceMaterial->SetTextureParameterValue(
+			RacetrackSurfaceMapping::AccumulationTargetParameterName,
+			Target);
+		AsphaltSurfaceMaterial->SetScalarParameterValue(AsphaltTilesAlongLapParameterName, TilesAlongLap);
+		AsphaltSurfaceMaterial->SetScalarParameterValue(AsphaltTilesAcrossParameterName, TilesAcross);
+
+		UE_LOG(LogRacetrackSurface, Log,
+			TEXT("%s bound the same target into the asphalt, tiled %.0f times along the %.1f cm lap and "
+				"%.2f times across the %.1f cm width"),
+			*GetName(),
+			TilesAlongLap,
+			GetTrackLength(),
+			TilesAcross,
+			TrackWidth);
+	}
+
+	ApplySurfaceLookToRoad();
 }
 
 void ARacetrackCircuit::OnConstruction(const FTransform& Transform)
