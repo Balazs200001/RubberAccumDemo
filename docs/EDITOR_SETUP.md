@@ -1396,3 +1396,157 @@ called.
 
 Not verified: that this is the code the *cooked* shader contains. It is the code in the asset, and
 the asset recompiled clean on 2026-09-23, but no shader map was inspected.
+
+---
+
+## 2026-10-06 — W3.2: the debug material's inverse display curve, and a coverage probe
+
+**Asset changed:** `/Game/Materials/M_SurfaceAccumulationDebug`. One expression added,
+`MaterialExpressionCustom_1`, description `InverseDisplayResponse`; one connection rewired. Nothing
+deleted. Recompiled clean, saved, verified not dirty.
+
+**Asset created:** `/Game/Materials/M_SurfaceCoverageProbe`. Saved, verified not dirty.
+
+**Checked, not changed:** `/Game/Blueprints/BP_SurfaceRegionDisplay` compiles with warnings treated
+as errors and is not dirty afterwards. This is the recompile check owed since W1.1, when the
+Blueprint library's write wrappers lost their `Channel` parameter.
+
+**Not touched:** `/RacetrackSurface/Materials/MF_SampleRacetrackSurface` and
+`/RacetrackSurface/Materials/MPC_RacetrackSurface`, both only read.
+
+### Why
+
+Decision E: the debug view is linear in coverage, in the encoded pixel value. Decision E3, taken on
+2026-10-06 after `MEASUREMENTS.md` "W3.1 again" showed local exposure making a thin mark on black
+twice as bright as a wide band of the same coverage: local exposure and bloom are neutralised in C++
+by an unbound post-process component the circuit owns, and the material undoes only what then
+remains, which acts per pixel: the fixed exposure of 2.4, the filmic tonemapper and the sRGB
+encoding.
+
+### The debug material's wiring after the change
+
+```
+MF_SampleRacetrackSurface.Coverage --> Custom (InverseDisplayResponse).Coverage     (new)
+Custom (InverseDisplayResponse) ------> Multiply.A                                  (rewired; was Coverage direct)
+DebugChannelMask --> ComponentMask(RGB) --> Multiply.B                              (unchanged)
+Multiply --> MP_EmissiveColor                                                       (unchanged)
+```
+
+The nine orphaned marble-dot nodes from G5 are still present and still unconnected.
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+`MaterialExpressionCustom_1`, one input `Coverage` (float3 from the function), output `CMOT_Float3`:
+
+```hlsl
+static const float3 EmissiveAtRootCoverage[33] =
+{
+	float3(0.000000, 0.000000, 0.000000),
+	float3(0.018101, 0.015370, 0.017533),
+	float3(0.025961, 0.020739, 0.021845),
+	float3(0.032875, 0.025915, 0.026600),
+	float3(0.038339, 0.030174, 0.031348),
+	float3(0.044709, 0.035053, 0.035833),
+	float3(0.050053, 0.038466, 0.039363),
+	float3(0.055811, 0.042889, 0.044038),
+	float3(0.062183, 0.047552, 0.048258),
+	float3(0.068876, 0.052230, 0.052734),
+	float3(0.076068, 0.057361, 0.057736),
+	float3(0.084356, 0.062865, 0.063031),
+	float3(0.093051, 0.068732, 0.068653),
+	float3(0.101460, 0.075052, 0.074822),
+	float3(0.112091, 0.082019, 0.081577),
+	float3(0.122967, 0.089945, 0.089115),
+	float3(0.133289, 0.097215, 0.096439),
+	float3(0.144901, 0.105839, 0.104730),
+	float3(0.158257, 0.115520, 0.114064),
+	float3(0.171252, 0.125618, 0.123956),
+	float3(0.185028, 0.136152, 0.134425),
+	float3(0.199983, 0.148243, 0.146199),
+	float3(0.217467, 0.161661, 0.159378),
+	float3(0.235734, 0.177080, 0.174584),
+	float3(0.254742, 0.194723, 0.191696),
+	float3(0.276460, 0.215250, 0.211613),
+	float3(0.299778, 0.239338, 0.234574),
+	float3(0.328947, 0.269552, 0.264214),
+	float3(0.360744, 0.304588, 0.298437),
+	float3(0.397184, 0.351555, 0.343366),
+	float3(0.442319, 0.410605, 0.399539),
+	float3(0.495917, 0.493459, 0.479194),
+	float3(0.558750, 0.612727, 0.587000)
+};
+
+float3 Position = sqrt(saturate(Coverage)) * 32.0;
+float3 Emissive = 0.0;
+
+[unroll]
+for (int Channel = 0; Channel < 3; ++Channel)
+{
+	int Lower = min((int)Position[Channel], 31);
+	Emissive[Channel] = lerp(EmissiveAtRootCoverage[Lower][Channel], EmissiveAtRootCoverage[Lower + 1][Channel], Position[Channel] - Lower);
+}
+
+return Emissive;
+```
+
+### How the table was made, so it can be made again
+
+1. **The raw response.** `RubberAccumDemo.Surface.DebugViewResponse` drew the material before this
+   change (coverage times the channel mask, nothing else) on a plane filling a capture with a
+   persistent view state, with local exposure contrast 1 and bloom 0 on the capture. Coverage was
+   held at 0.5 and the channel mask scaled, so emissive ran from 0 to 3 in 48 steps, per primary.
+   The levels are in `MEASUREMENTS.md` under W3.2. The uniform field and a stripe on black agreed
+   within 0.8 levels at every step.
+2. **The ceilings.** A bright pure primary washes toward white: green at emissive 1.0 shows red 60.
+   Each channel's ceiling is the level it reaches where the other two channels first exceed 5
+   levels above the dither floor of 0.2, linearly interpolated between steps, and red is capped at
+   254 so the curve stays below the clip: **red 254.0, green 235.08, blue 210.26**. Coverage 1 shows
+   each channel at its ceiling and coverage `c` at `c` times it.
+3. **The knots.** For knot `i` of 32, coverage `(i/32)^2`, the emissive is the measured response
+   inverted at `ceiling * coverage`, by linear interpolation between the sweep's steps. Knot 0 is 0.
+4. **Why square-root spacing.** The filmic toe crushes the bottom: nothing below emissive 0.0175
+   lifts a channel off black. Uniform knots in coverage left the simulated screen up to 3.3 levels
+   below target near coverage 0.02; knots uniform in the square root of coverage put most of them
+   in the toe and bring the simulated worst case to 0.49, 1.13 and 0.62 levels for red, green and
+   blue, at coverages 0.75, 0.98 and 0.97.
+
+### The probe: `/Game/Materials/M_SurfaceCoverageProbe`
+
+Unlit, opaque, surface domain, one-sided, as the debug material is.
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionTextureObjectParameter_0` | `TextureObjectParameter` | `AccumulationTarget`, default `/RacetrackSurface/Materials/T_EmptyAccumulation`, sampler `LinearColor` |
+| `MaterialExpressionMaterialFunctionCall_0` | `MaterialFunctionCall` | `/RacetrackSurface/Materials/MF_SampleRacetrackSurface` |
+| `MaterialExpressionVectorParameter_0` | `VectorParameter` | `DebugChannelMask`, default `(1,1,1,1)`, group `Surface Debug` |
+| `MaterialExpressionComponentMask_0` | `ComponentMask` | R, G, B |
+| `MaterialExpressionMultiply_0` | `Multiply` | |
+
+```
+AccumulationTarget --> MF_SampleRacetrackSurface.AccumulationTarget
+MF_SampleRacetrackSurface.Coverage --> Multiply.A
+DebugChannelMask --> ComponentMask(RGB) --> Multiply.B
+Multiply --> MP_EmissiveColor
+```
+
+**One addition beyond decision E2**, which specified coverage straight to emissive: the channel mask
+multiply, copied from the debug material. At its default of 1 the probe is still exactly coverage to
+emissive, which is what the two read-path tests now draw. It is there so the response harness can
+keep sweeping emissive through the raw chain, which the debug material no longer exposes now that it
+carries the curve. `SurfaceBlurTexels` reaches the probe because it is a parameter inside
+`MF_SampleRacetrackSurface`, so the gather test's blur radius still applies.
+
+### What was verified, and what was not
+
+Verified: both materials recompile; every connection above was read back with
+`get_expression_inputs` and `get_property_input`; both are saved and not dirty. Run inside the editor
+before closing it, with local exposure and bloom neutralised on the capture, the debug material
+reads within 1.4 levels of `ceiling * coverage` at every coverage from 0.01 to 0.99, in all three
+channels, as a uniform field and as a stripe on black.
+
+Verified after the full build that added the circuit's post-process component (`21c6446`): the same
+assertions with nothing set on the capture, so with the chain the world gives every view, pass in
+the headless suite within the same 1.4 levels.
+
+Not verified: the screen itself, in a running demo; the all-channels view, where the tonemapper does
+not act on mixed colours channel by channel; and the cooked shader.
