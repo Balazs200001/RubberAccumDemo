@@ -1462,10 +1462,10 @@ roughness. Driving specular as well would add a parameter with nothing physical 
 - Two instances rather than one material: a static switch cannot change at runtime on a dynamic
   instance, and the debug view is unlit while the asphalt is lit. A shading model is not a runtime
   parameter.
-- **Proposed, awaiting the user:** the W3 work adds `PerTexelDebugView`, an unbound post-process
-  component that turns off local exposure and bloom for the whole world so the debug view is linear
-  per texel. Left on, it would flatten the asphalt view too. The asphalt view disables it and the
-  debug view re-enables it.
+- **Decided by the user 2026-10-06:** the W3 work adds `PerTexelDebugView`, an unbound
+  post-process component that turns off local exposure and bloom for the whole world so the debug
+  view is linear per texel. Left on, it would flatten the asphalt view too. The asphalt view
+  disables it and the debug view re-enables it.
 
 #### The exit, and why half of it cannot be met as the project stands
 
