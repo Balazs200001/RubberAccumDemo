@@ -47,6 +47,29 @@ namespace RubberAccumDebugViewResponse
 
 	const float StripeCoverages[] = { 0.10f, 0.33f, 0.50f, 0.76f, 0.95f };
 
+	constexpr float SweepCoverage = 0.5f;
+
+	const float SweepEmissives[] = {
+		0.0f, 0.005f, 0.01f, 0.0125f, 0.015f, 0.0175f, 0.02f, 0.0225f, 0.025f, 0.0275f, 0.03f, 0.035f,
+		0.04f, 0.045f, 0.05f, 0.06f, 0.07f, 0.08f, 0.09f, 0.10f, 0.12f, 0.14f, 0.16f, 0.18f, 0.20f, 0.23f,
+		0.26f, 0.30f, 0.35f, 0.40f, 0.45f, 0.50f, 0.52f, 0.54f, 0.56f, 0.58f, 0.60f, 0.62f, 0.64f, 0.66f,
+		0.68f, 0.70f, 0.80f, 0.90f, 1.0f, 1.5f, 2.0f, 3.0f,
+	};
+
+	constexpr float RawSweepRelativeTolerance = 2.0e-3f;
+
+	FPostProcessSettings NeutralisedChainSettings()
+	{
+		FPostProcessSettings Settings;
+		Settings.bOverride_LocalExposureHighlightContrastScale = true;
+		Settings.LocalExposureHighlightContrastScale = 1.0f;
+		Settings.bOverride_LocalExposureShadowContrastScale = true;
+		Settings.LocalExposureShadowContrastScale = 1.0f;
+		Settings.bOverride_BloomIntensity = true;
+		Settings.BloomIntensity = 0.0f;
+		return Settings;
+	}
+
 	struct FStripeVariant
 	{
 		const TCHAR* Name;
@@ -361,6 +384,65 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 		UKismetRenderingLibrary::ClearRenderTarget2D(World, ExposureTexture, FLinearColor(Exposure, Exposure, Exposure, 0.0f));
 	};
 
+	int32 RawSweepMismatches = 0;
+	TArray<float> UniformSweepLevels[UE_ARRAY_COUNT(ChannelViews)];
+	TArray<float> StripeSweepLevels[UE_ARRAY_COUNT(ChannelViews)];
+
+	auto SweepEmissive = [&](UTextureRenderTarget2D& Target, const TCHAR* ContextName, TArray<float>* OutLevelsByChannel)
+	{
+		Capture->TextureTarget = &Target;
+		Capture->bAlwaysPersistRenderingState = true;
+		Capture->PostProcessSettings = NeutralisedChainSettings();
+		SetCoverage(SweepCoverage);
+
+		for (int32 ChannelIndex = 0; ChannelIndex < UE_ARRAY_COUNT(ChannelViews); ++ChannelIndex)
+		{
+			const FChannelView& View = ChannelViews[ChannelIndex];
+
+			FString Row = FString::Printf(
+				TEXT("Emissive sweep, %s, persistent view state, local exposure flattened, no bloom, %s, emissive:(own, others)"),
+				ContextName,
+				View.Name);
+
+			for (const float Emissive : SweepEmissives)
+			{
+				Material->SetVectorParameterValue(ChannelMaskParameterName, View.Mask * (Emissive / SweepCoverage));
+
+				UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, RawTarget, Material);
+				const TArray<FLinearColor> Raw = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
+					World, RawTarget, 0, 0, ExposureTextureSize, ExposureTextureSize, false);
+				const float RawEmissive = Raw.Num() == ExposureTextureSize * ExposureTextureSize
+					? Component(Raw[(ExposureTextureSize / 2) * ExposureTextureSize + ExposureTextureSize / 2], View.Component)
+					: -1.0f;
+
+				RawSweepMismatches += FMath::Abs(RawEmissive - Emissive) > FMath::Max(Emissive, 1.0e-3f) * RawSweepRelativeTolerance ? 1 : 0;
+
+				FLinearColor Last;
+				FLinearColor BeforeLast;
+
+				if (!CaptureUntilSettled(*Capture, Target, CapturesPerPersistentReading, Last, BeforeLast))
+				{
+					++FailedReads;
+					OutLevelsByChannel[ChannelIndex].Add(-1.0f);
+					continue;
+				}
+
+				const float Value = Component(Last, View.Component);
+				UnsettledReadings += FMath::Abs(Value - Component(BeforeLast, View.Component)) > SettledWithinLevels ? 1 : 0;
+				OutLevelsByChannel[ChannelIndex].Add(Value);
+
+				Row += FString::Printf(
+					TEXT(" %.4f:(%.1f, %.1f, %.1f)"),
+					Emissive,
+					Value,
+					Component(Last, (View.Component + 1) % 3),
+					Component(Last, (View.Component + 2) % 3));
+			}
+
+			AddInfo(Row);
+		}
+	};
+
 	for (const FCaptureMode& Mode : CaptureModes)
 	{
 		Capture->bAlwaysPersistRenderingState = Mode.bPersistRenderingState;
@@ -464,6 +546,8 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 		}
 	}
 
+	SweepEmissive(*LdrTarget, TEXT("uniform field"), UniformSweepLevels);
+
 	UTextureRenderTarget2D* StripeTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
 		World, StripeCaptureSize, StripeCaptureSize, RTF_RGBA8, FLinearColor::Black, false, false);
 
@@ -530,6 +614,32 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 			}
 		}
 
+		SweepEmissive(*StripeTarget, TEXT("stripe on black"), StripeSweepLevels);
+
+		for (int32 ChannelIndex = 0; ChannelIndex < UE_ARRAY_COUNT(ChannelViews); ++ChannelIndex)
+		{
+			float WorstDisagreement = 0.0f;
+			float WorstAtEmissive = 0.0f;
+
+			for (int32 Index = 0; Index < UniformSweepLevels[ChannelIndex].Num() && Index < StripeSweepLevels[ChannelIndex].Num(); ++Index)
+			{
+				const float Disagreement = FMath::Abs(UniformSweepLevels[ChannelIndex][Index] - StripeSweepLevels[ChannelIndex][Index]);
+
+				if (Disagreement > WorstDisagreement)
+				{
+					WorstDisagreement = Disagreement;
+					WorstAtEmissive = SweepEmissives[Index];
+				}
+			}
+
+			AddInfo(FString::Printf(
+				TEXT("Emissive sweep, %s: with local exposure and bloom neutralised, the uniform field and the stripe "
+					"disagree by at most %.1f levels, at emissive %.4f"),
+				ChannelViews[ChannelIndex].Name,
+				WorstDisagreement,
+				WorstAtEmissive));
+		}
+
 		UKismetRenderingLibrary::ReleaseRenderTarget2D(StripeTarget);
 	}
 	else
@@ -549,6 +659,7 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 		SettledWithinLevels));
 
 	TestEqual(TEXT("The material's raw emissive is the coverage, so the fixture feeds what it says"), RawMismatches, 0);
+	TestEqual(TEXT("The emissive sweep feeds the emissive it says, through the channel mask"), RawSweepMismatches, 0);
 	TestEqual(TEXT("Every capture was read back"), FailedReads, 0);
 	TestEqual(TEXT("Every stage's output rises with coverage"), NonMonotonicSteps, 0);
 
