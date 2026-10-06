@@ -21,10 +21,12 @@
 namespace RubberAccumDebugViewResponse
 {
 	constexpr const TCHAR* DebugMaterialPath = TEXT("/Game/Materials/M_SurfaceAccumulationDebug.M_SurfaceAccumulationDebug");
+	constexpr const TCHAR* ProbeMaterialPath = TEXT("/Game/Materials/M_SurfaceCoverageProbe.M_SurfaceCoverageProbe");
 	constexpr const TCHAR* PlaneMeshPath = TEXT("/Engine/BasicShapes/Plane.Plane");
 	constexpr const TCHAR* ChannelMaskParameterName = TEXT("DebugChannelMask");
 
-	constexpr int32 CaptureSize = 64;
+	constexpr int32 UniformCaptureSize = 64;
+	constexpr int32 StripeCaptureSize = 512;
 	constexpr int32 CentreBlock = 8;
 	constexpr int32 ExposureTextureSize = 16;
 
@@ -32,20 +34,12 @@ namespace RubberAccumDebugViewResponse
 	constexpr double CaptureDistance = 100.0;
 	constexpr float CaptureFieldOfView = 20.0f;
 
-	constexpr float ExposureAtZeroBias = 1.2f;
-
-	constexpr float RawEmissiveTolerance = 1.0e-3f;
-
-	constexpr int32 CapturesPerPersistentReading = 8;
-
-	constexpr float SettledWithinLevels = 0.5f;
-
-	constexpr int32 StripeCaptureSize = 512;
 	constexpr double StripeWidthOfTheFrame = 0.04;
 	constexpr double StripeLengthOfTheFrame = 0.5;
 	constexpr double EnginePlaneCentimetres = 100.0;
 
-	const float StripeCoverages[] = { 0.10f, 0.33f, 0.50f, 0.76f, 0.95f };
+	constexpr int32 CapturesPerReading = 8;
+	constexpr float SettledWithinLevels = 0.5f;
 
 	constexpr float SweepCoverage = 0.5f;
 
@@ -57,6 +51,54 @@ namespace RubberAccumDebugViewResponse
 	};
 
 	constexpr float RawSweepRelativeTolerance = 2.0e-3f;
+
+	constexpr float ContextsAgreeWithinLevels = 2.0f;
+
+	const float LinearCoverages[] = { 0.01f, 0.02f, 0.05f, 0.10f, 0.18f, 0.25f, 0.33f, 0.50f, 0.66f, 0.76f, 0.90f, 0.99f };
+
+	constexpr float LinearWithinLevels = 2.5f;
+
+	struct FChannelView
+	{
+		const TCHAR* Name;
+		FLinearColor Mask;
+		int32 Component;
+		float DisplayCeiling;
+	};
+
+	const FChannelView ChannelViews[] = {
+		{ TEXT("rubber, red"), FLinearColor(1.0f, 0.0f, 0.0f, 0.0f), 0, 254.0f },
+		{ TEXT("skid, green"), FLinearColor(0.0f, 1.0f, 0.0f, 0.0f), 1, 235.08f },
+		{ TEXT("marbles, blue"), FLinearColor(0.0f, 0.0f, 1.0f, 0.0f), 2, 210.26f },
+	};
+
+	enum class EViewContext : uint8
+	{
+		UniformField,
+		StripeOnBlack,
+	};
+
+	const EViewContext ViewContexts[] = { EViewContext::UniformField, EViewContext::StripeOnBlack };
+
+	const TCHAR* ContextName(EViewContext Context)
+	{
+		return Context == EViewContext::UniformField ? TEXT("uniform field") : TEXT("stripe on black");
+	}
+
+	enum class EChainSource : uint8
+	{
+		NeutralisedOnTheCapture,
+		AsTheWorldSetsIt,
+	};
+
+	const EChainSource ChainSources[] = { EChainSource::NeutralisedOnTheCapture, EChainSource::AsTheWorldSetsIt };
+
+	const TCHAR* ChainSourceName(EChainSource Source)
+	{
+		return Source == EChainSource::NeutralisedOnTheCapture
+			? TEXT("local exposure and bloom neutralised on the capture")
+			: TEXT("the chain as the world sets it");
+	}
 
 	FPostProcessSettings NeutralisedChainSettings()
 	{
@@ -70,114 +112,6 @@ namespace RubberAccumDebugViewResponse
 		return Settings;
 	}
 
-	struct FStripeVariant
-	{
-		const TCHAR* Name;
-		bool bFlattenLocalExposure;
-		bool bRemoveBloom;
-	};
-
-	const FStripeVariant StripeVariants[] = {
-		{ TEXT("full chain"), false, false },
-		{ TEXT("local exposure flattened"), true, false },
-		{ TEXT("local exposure flattened, no bloom"), true, true },
-	};
-
-	FPostProcessSettings SettingsForStripe(const FStripeVariant& Variant)
-	{
-		FPostProcessSettings Settings;
-
-		if (Variant.bFlattenLocalExposure)
-		{
-			Settings.bOverride_LocalExposureHighlightContrastScale = true;
-			Settings.LocalExposureHighlightContrastScale = 1.0f;
-			Settings.bOverride_LocalExposureShadowContrastScale = true;
-			Settings.LocalExposureShadowContrastScale = 1.0f;
-		}
-
-		if (Variant.bRemoveBloom)
-		{
-			Settings.bOverride_BloomIntensity = true;
-			Settings.BloomIntensity = 0.0f;
-		}
-
-		return Settings;
-	}
-
-	const float Coverages[] = { 0.05f, 0.10f, 0.18f, 0.25f, 0.33f, 0.50f, 0.75f, 0.95f };
-
-	const float DenseCoverages[] = {
-		0.00f, 0.01f, 0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.08f, 0.10f, 0.12f, 0.14f, 0.16f, 0.18f,
-		0.20f, 0.23f, 0.26f, 0.30f, 0.35f, 0.40f, 0.45f, 0.50f, 0.60f, 0.70f, 0.80f, 0.90f, 0.99f,
-	};
-
-	struct FChannelView
-	{
-		const TCHAR* Name;
-		FLinearColor Mask;
-		int32 Component;
-	};
-
-	const FChannelView ChannelViews[] = {
-		{ TEXT("rubber, red"), FLinearColor(1.0f, 0.0f, 0.0f, 0.0f), 0 },
-		{ TEXT("skid, green"), FLinearColor(0.0f, 1.0f, 0.0f, 0.0f), 1 },
-		{ TEXT("marbles, blue"), FLinearColor(0.0f, 0.0f, 1.0f, 0.0f), 2 },
-	};
-
-	enum class EChainStage : uint8
-	{
-		TonemapperOnly,
-		WithLocalExposure,
-		WithProjectExposure,
-		FullChain,
-	};
-
-	const EChainStage ChainStages[] = {
-		EChainStage::TonemapperOnly,
-		EChainStage::WithLocalExposure,
-		EChainStage::WithProjectExposure,
-		EChainStage::FullChain,
-	};
-
-	struct FCaptureMode
-	{
-		const TCHAR* Name;
-		bool bPersistRenderingState;
-		int32 CapturesPerReading;
-	};
-
-	const FCaptureMode CaptureModes[] = {
-		{ TEXT("one-off capture, no view state"), false, 1 },
-		{ TEXT("capture with a persistent view state"), true, CapturesPerPersistentReading },
-	};
-
-	FPostProcessSettings SettingsFor(EChainStage Stage)
-	{
-		FPostProcessSettings Settings;
-
-		if (Stage != EChainStage::FullChain)
-		{
-			Settings.bOverride_BloomIntensity = true;
-			Settings.BloomIntensity = 0.0f;
-		}
-
-		if (Stage == EChainStage::TonemapperOnly)
-		{
-			Settings.bOverride_LocalExposureHighlightContrastScale = true;
-			Settings.LocalExposureHighlightContrastScale = 1.0f;
-			Settings.bOverride_LocalExposureShadowContrastScale = true;
-			Settings.LocalExposureShadowContrastScale = 1.0f;
-		}
-
-		if (Stage == EChainStage::TonemapperOnly || Stage == EChainStage::WithLocalExposure)
-		{
-			Settings.bOverride_AutoExposureBias = true;
-			Settings.AutoExposureBias = FMath::Log2(1.0f / ExposureAtZeroBias);
-		}
-
-		return Settings;
-	}
-
 	float ExposureForCoverage(float Coverage)
 	{
 		return -FMath::Loge(1.0f - Coverage) / RacetrackSurfaceMapping::SaturationConstant;
@@ -186,6 +120,11 @@ namespace RubberAccumDebugViewResponse
 	float Component(const FLinearColor& Colour, int32 Index)
 	{
 		return Index == 0 ? Colour.R : (Index == 1 ? Colour.G : Colour.B);
+	}
+
+	float Crosstalk(const FLinearColor& Colour, int32 Index)
+	{
+		return FMath::Max(Component(Colour, (Index + 1) % 3), Component(Colour, (Index + 2) % 3));
 	}
 
 	bool ReadBlock(UTextureRenderTarget2D& Target, int32 CentreX, int32 CentreY, FLinearColor& OutMeanBytes)
@@ -217,38 +156,32 @@ namespace RubberAccumDebugViewResponse
 		return true;
 	}
 
-	bool ReadCentre(UTextureRenderTarget2D& Target, FLinearColor& OutMeanBytes)
-	{
-		return ReadBlock(Target, Target.SizeX / 2, Target.SizeY / 2, OutMeanBytes);
-	}
-
 	bool CaptureUntilSettled(
 		USceneCaptureComponent2D& Capture,
 		UTextureRenderTarget2D& Target,
-		int32 Captures,
 		FLinearColor& OutLast,
-		FLinearColor& OutBeforeLast)
+		bool& bOutSettled)
 	{
-		for (int32 Index = 0; Index < Captures; ++Index)
+		FLinearColor BeforeLast = FLinearColor::Transparent;
+		OutLast = FLinearColor::Transparent;
+
+		for (int32 Index = 0; Index < CapturesPerReading; ++Index)
 		{
 			Capture.CaptureScene();
 
-			if (Index + 2 >= Captures)
+			if (Index + 2 >= CapturesPerReading)
 			{
-				OutBeforeLast = OutLast;
+				BeforeLast = OutLast;
 
-				if (!ReadCentre(Target, OutLast))
+				if (!ReadBlock(Target, Target.SizeX / 2, Target.SizeY / 2, OutLast))
 				{
 					return false;
 				}
 			}
 		}
 
-		if (Captures < 2)
-		{
-			OutBeforeLast = OutLast;
-		}
-
+		bOutSettled = (OutLast - BeforeLast).GetMax() <= SettledWithinLevels
+			&& (BeforeLast - OutLast).GetMax() <= SettledWithinLevels;
 		return true;
 	}
 
@@ -310,11 +243,12 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 	}
 
 	UMaterial* DebugMaterial = LoadObject<UMaterial>(nullptr, DebugMaterialPath);
+	UMaterial* ProbeMaterial = LoadObject<UMaterial>(nullptr, ProbeMaterialPath);
 	UStaticMesh* PlaneMesh = LoadObject<UStaticMesh>(nullptr, PlaneMeshPath);
 
-	if (DebugMaterial == nullptr || PlaneMesh == nullptr)
+	if (DebugMaterial == nullptr || ProbeMaterial == nullptr || PlaneMesh == nullptr)
 	{
-		AddError(FString::Printf(TEXT("Could not load %s or %s."), DebugMaterialPath, PlaneMeshPath));
+		AddError(FString::Printf(TEXT("Could not load %s, %s or %s."), DebugMaterialPath, ProbeMaterialPath, PlaneMeshPath));
 		return false;
 	}
 
@@ -324,17 +258,22 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 		World, ExposureTextureSize, ExposureTextureSize, RTF_RGBA32f, FLinearColor::Black, false, false);
 	UTextureRenderTarget2D* RawTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
 		World, ExposureTextureSize, ExposureTextureSize, RTF_RGBA16f, FLinearColor::Black, false, false);
-	UTextureRenderTarget2D* LdrTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
-		World, CaptureSize, CaptureSize, RTF_RGBA8, FLinearColor::Black, false, false);
-	UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(DebugMaterial, World);
+	UTextureRenderTarget2D* UniformTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
+		World, UniformCaptureSize, UniformCaptureSize, RTF_RGBA8, FLinearColor::Black, false, false);
+	UTextureRenderTarget2D* StripeTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
+		World, StripeCaptureSize, StripeCaptureSize, RTF_RGBA8, FLinearColor::Black, false, false);
+	UMaterialInstanceDynamic* Probe = UMaterialInstanceDynamic::Create(ProbeMaterial, World);
+	UMaterialInstanceDynamic* Debug = UMaterialInstanceDynamic::Create(DebugMaterial, World);
 
-	if (ExposureTexture == nullptr || RawTarget == nullptr || LdrTarget == nullptr || Material == nullptr)
+	if (ExposureTexture == nullptr || RawTarget == nullptr || UniformTarget == nullptr || StripeTarget == nullptr
+		|| Probe == nullptr || Debug == nullptr)
 	{
-		AddError(TEXT("Could not create the render targets or the material instance."));
+		AddError(TEXT("Could not create the render targets or the material instances."));
 		return false;
 	}
 
-	Material->SetTextureParameterValue(RacetrackSurfaceMapping::AccumulationTargetParameterName, ExposureTexture);
+	Probe->SetTextureParameterValue(RacetrackSurfaceMapping::AccumulationTargetParameterName, ExposureTexture);
+	Debug->SetTextureParameterValue(RacetrackSurfaceMapping::AccumulationTargetParameterName, ExposureTexture);
 
 	const FVector PlaneLocation(0.0, 0.0, CaptureAltitude);
 
@@ -354,29 +293,35 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 	UStaticMeshComponent* PlaneComponent = Plane->GetStaticMeshComponent();
 	PlaneComponent->SetMobility(EComponentMobility::Movable);
 	PlaneComponent->SetStaticMesh(PlaneMesh);
-	PlaneComponent->SetMaterial(0, Material);
 
 	USceneCaptureComponent2D* Capture = Camera->GetCaptureComponent2D();
 	Capture->bCaptureEveryFrame = false;
 	Capture->bCaptureOnMovement = false;
+	Capture->bAlwaysPersistRenderingState = true;
 	Capture->CaptureSource = SCS_FinalColorLDR;
-	Capture->TextureTarget = LdrTarget;
 	Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
 	Capture->ShowOnlyActors.Add(Plane);
 	Capture->FOVAngle = CaptureFieldOfView;
 	Capture->PostProcessBlendWeight = 1.0f;
+	Capture->ShowFlags.SetAtmosphere(false);
+	Capture->ShowFlags.SetFog(false);
+	Capture->ShowFlags.SetCloud(false);
 
-	if (GShaderCompilingManager != nullptr)
+	const double FrameWidth = 2.0 * CaptureDistance * FMath::Tan(FMath::DegreesToRadians(CaptureFieldOfView * 0.5));
+
+	auto UseContext = [&](EViewContext Context)
 	{
-		GShaderCompilingManager->FinishAllCompilation();
-	}
+		const bool bStripe = Context == EViewContext::StripeOnBlack;
 
-	Capture->CaptureScene();
+		Plane->SetActorScale3D(bStripe
+			? FVector(
+				StripeWidthOfTheFrame * FrameWidth / EnginePlaneCentimetres,
+				StripeLengthOfTheFrame * FrameWidth / EnginePlaneCentimetres,
+				1.0)
+			: FVector::OneVector);
 
-	int32 RawMismatches = 0;
-	int32 FailedReads = 0;
-	int32 NonMonotonicSteps = 0;
-	int32 UnsettledReadings = 0;
+		Capture->TextureTarget = bStripe ? StripeTarget : UniformTarget;
+	};
 
 	auto SetCoverage = [&](float Coverage)
 	{
@@ -384,31 +329,40 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 		UKismetRenderingLibrary::ClearRenderTarget2D(World, ExposureTexture, FLinearColor(Exposure, Exposure, Exposure, 0.0f));
 	};
 
-	int32 RawSweepMismatches = 0;
-	TArray<float> UniformSweepLevels[UE_ARRAY_COUNT(ChannelViews)];
-	TArray<float> StripeSweepLevels[UE_ARRAY_COUNT(ChannelViews)];
-
-	auto SweepEmissive = [&](UTextureRenderTarget2D& Target, const TCHAR* ContextName, TArray<float>* OutLevelsByChannel)
+	if (GShaderCompilingManager != nullptr)
 	{
-		Capture->TextureTarget = &Target;
-		Capture->bAlwaysPersistRenderingState = true;
-		Capture->PostProcessSettings = NeutralisedChainSettings();
-		SetCoverage(SweepCoverage);
+		GShaderCompilingManager->FinishAllCompilation();
+	}
+
+	int32 FailedReads = 0;
+	int32 UnsettledReadings = 0;
+	int32 RawSweepMismatches = 0;
+
+	TArray<float> SweepLevels[UE_ARRAY_COUNT(ViewContexts)][UE_ARRAY_COUNT(ChannelViews)];
+
+	PlaneComponent->SetMaterial(0, Probe);
+	Capture->PostProcessSettings = NeutralisedChainSettings();
+	SetCoverage(SweepCoverage);
+
+	for (int32 ContextIndex = 0; ContextIndex < UE_ARRAY_COUNT(ViewContexts); ++ContextIndex)
+	{
+		UseContext(ViewContexts[ContextIndex]);
 
 		for (int32 ChannelIndex = 0; ChannelIndex < UE_ARRAY_COUNT(ChannelViews); ++ChannelIndex)
 		{
 			const FChannelView& View = ChannelViews[ChannelIndex];
 
 			FString Row = FString::Printf(
-				TEXT("Emissive sweep, %s, persistent view state, local exposure flattened, no bloom, %s, emissive:(own, others)"),
-				ContextName,
+				TEXT("Raw response through the probe, %s, %s, %s, emissive:(own, others)"),
+				ContextName(ViewContexts[ContextIndex]),
+				ChainSourceName(EChainSource::NeutralisedOnTheCapture),
 				View.Name);
 
 			for (const float Emissive : SweepEmissives)
 			{
-				Material->SetVectorParameterValue(ChannelMaskParameterName, View.Mask * (Emissive / SweepCoverage));
+				Probe->SetVectorParameterValue(ChannelMaskParameterName, View.Mask * (Emissive / SweepCoverage));
 
-				UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, RawTarget, Material);
+				UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, RawTarget, Probe);
 				const TArray<FLinearColor> Raw = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
 					World, RawTarget, 0, 0, ExposureTextureSize, ExposureTextureSize, false);
 				const float RawEmissive = Raw.Num() == ExposureTextureSize * ExposureTextureSize
@@ -417,251 +371,153 @@ bool FSurfaceDebugViewResponse::RunTest(const FString& Parameters)
 
 				RawSweepMismatches += FMath::Abs(RawEmissive - Emissive) > FMath::Max(Emissive, 1.0e-3f) * RawSweepRelativeTolerance ? 1 : 0;
 
-				FLinearColor Last;
-				FLinearColor BeforeLast;
+				FLinearColor Shown;
+				bool bSettled = false;
 
-				if (!CaptureUntilSettled(*Capture, Target, CapturesPerPersistentReading, Last, BeforeLast))
+				if (!CaptureUntilSettled(*Capture, *Capture->TextureTarget, Shown, bSettled))
 				{
 					++FailedReads;
-					OutLevelsByChannel[ChannelIndex].Add(-1.0f);
+					SweepLevels[ContextIndex][ChannelIndex].Add(-1.0f);
 					continue;
 				}
 
-				const float Value = Component(Last, View.Component);
-				UnsettledReadings += FMath::Abs(Value - Component(BeforeLast, View.Component)) > SettledWithinLevels ? 1 : 0;
-				OutLevelsByChannel[ChannelIndex].Add(Value);
+				UnsettledReadings += bSettled ? 0 : 1;
+				SweepLevels[ContextIndex][ChannelIndex].Add(Component(Shown, View.Component));
 
 				Row += FString::Printf(
 					TEXT(" %.4f:(%.1f, %.1f, %.1f)"),
 					Emissive,
-					Value,
-					Component(Last, (View.Component + 1) % 3),
-					Component(Last, (View.Component + 2) % 3));
+					Component(Shown, View.Component),
+					Component(Shown, (View.Component + 1) % 3),
+					Component(Shown, (View.Component + 2) % 3));
 			}
 
 			AddInfo(Row);
 		}
-	};
-
-	for (const FCaptureMode& Mode : CaptureModes)
-	{
-		Capture->bAlwaysPersistRenderingState = Mode.bPersistRenderingState;
-
-		for (const FChannelView& View : ChannelViews)
-		{
-			Material->SetVectorParameterValue(ChannelMaskParameterName, View.Mask);
-
-			AddInfo(FString::Printf(
-				TEXT("%s, %s. Columns: coverage | raw emissive | target 255c | 255 sRGB(raw) | tonemapper only | + "
-					"local exposure | + project exposure | + bloom, the view as shown"),
-				Mode.Name,
-				View.Name));
-
-			float PreviousByStage[UE_ARRAY_COUNT(ChainStages)] = {};
-
-			for (const float Coverage : Coverages)
-			{
-				SetCoverage(Coverage);
-
-				UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, RawTarget, Material);
-				const TArray<FLinearColor> Raw = UKismetRenderingLibrary::ReadRenderTargetRawPixelArea(
-					World, RawTarget, 0, 0, ExposureTextureSize, ExposureTextureSize, false);
-
-				const float RawEmissive = Raw.Num() == ExposureTextureSize * ExposureTextureSize
-					? Component(Raw[(ExposureTextureSize / 2) * ExposureTextureSize + ExposureTextureSize / 2], View.Component)
-					: -1.0f;
-
-				RawMismatches += FMath::Abs(RawEmissive - Coverage) > RawEmissiveTolerance ? 1 : 0;
-
-				const FColor Encoded = FLinearColor(RawEmissive, RawEmissive, RawEmissive).ToFColorSRGB();
-
-				FString Row = FString::Printf(
-					TEXT("%.2f | %.4f | %.1f | %d"),
-					Coverage,
-					RawEmissive,
-					255.0f * Coverage,
-					Encoded.R);
-
-				for (int32 StageIndex = 0; StageIndex < UE_ARRAY_COUNT(ChainStages); ++StageIndex)
-				{
-					Capture->PostProcessSettings = SettingsFor(ChainStages[StageIndex]);
-
-					FLinearColor Last;
-					FLinearColor BeforeLast;
-
-					if (!CaptureUntilSettled(*Capture, *LdrTarget, Mode.CapturesPerReading, Last, BeforeLast))
-					{
-						++FailedReads;
-						Row += TEXT(" | read failed");
-						continue;
-					}
-
-					const float Value = Component(Last, View.Component);
-					NonMonotonicSteps += Value < PreviousByStage[StageIndex] ? 1 : 0;
-					UnsettledReadings += FMath::Abs(Value - Component(BeforeLast, View.Component)) > SettledWithinLevels ? 1 : 0;
-					PreviousByStage[StageIndex] = Value;
-
-					Row += FString::Printf(
-						TEXT(" | %.1f (others %.1f, %.1f)"),
-						Value,
-						Component(Last, (View.Component + 1) % 3),
-						Component(Last, (View.Component + 2) % 3));
-				}
-
-				AddInfo(Row);
-			}
-
-			if (!Mode.bPersistRenderingState)
-			{
-				continue;
-			}
-
-			Capture->PostProcessSettings = SettingsFor(EChainStage::FullChain);
-
-			FString Sweep = FString::Printf(TEXT("%s, %s, full chain, coverage:level"), Mode.Name, View.Name);
-			float Previous = 0.0f;
-
-			for (const float Coverage : DenseCoverages)
-			{
-				SetCoverage(Coverage);
-
-				FLinearColor Last;
-				FLinearColor BeforeLast;
-
-				if (!CaptureUntilSettled(*Capture, *LdrTarget, Mode.CapturesPerReading, Last, BeforeLast))
-				{
-					++FailedReads;
-					continue;
-				}
-
-				const float Value = Component(Last, View.Component);
-				NonMonotonicSteps += Value < Previous ? 1 : 0;
-				UnsettledReadings += FMath::Abs(Value - Component(BeforeLast, View.Component)) > SettledWithinLevels ? 1 : 0;
-				Previous = Value;
-
-				Sweep += FString::Printf(TEXT(" %.2f:%.1f"), Coverage, Value);
-			}
-
-			AddInfo(Sweep);
-		}
 	}
 
-	SweepEmissive(*LdrTarget, TEXT("uniform field"), UniformSweepLevels);
-
-	UTextureRenderTarget2D* StripeTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
-		World, StripeCaptureSize, StripeCaptureSize, RTF_RGBA8, FLinearColor::Black, false, false);
-
-	if (StripeTarget != nullptr)
+	for (int32 ChannelIndex = 0; ChannelIndex < UE_ARRAY_COUNT(ChannelViews); ++ChannelIndex)
 	{
-		const double FrameWidth = 2.0 * CaptureDistance * FMath::Tan(FMath::DegreesToRadians(CaptureFieldOfView * 0.5));
+		float WorstDisagreement = 0.0f;
+		float WorstAtEmissive = 0.0f;
+		const TArray<float>& Uniform = SweepLevels[0][ChannelIndex];
+		const TArray<float>& Stripe = SweepLevels[1][ChannelIndex];
 
-		Plane->SetActorScale3D(FVector(
-			StripeWidthOfTheFrame * FrameWidth / EnginePlaneCentimetres,
-			StripeLengthOfTheFrame * FrameWidth / EnginePlaneCentimetres,
-			1.0));
-
-		Capture->TextureTarget = StripeTarget;
-		Capture->bAlwaysPersistRenderingState = true;
-		Capture->ShowFlags.SetAtmosphere(false);
-		Capture->ShowFlags.SetFog(false);
-		Capture->ShowFlags.SetCloud(false);
-
-		for (const FChannelView& View : ChannelViews)
+		for (int32 Index = 0; Index < Uniform.Num() && Index < Stripe.Num(); ++Index)
 		{
-			Material->SetVectorParameterValue(ChannelMaskParameterName, View.Mask);
+			const float Disagreement = FMath::Abs(Uniform[Index] - Stripe[Index]);
 
-			for (const FStripeVariant& Variant : StripeVariants)
+			if (Disagreement > WorstDisagreement)
 			{
-				Capture->PostProcessSettings = SettingsForStripe(Variant);
+				WorstDisagreement = Disagreement;
+				WorstAtEmissive = SweepEmissives[Index];
+			}
+		}
+
+		AddInfo(FString::Printf(
+			TEXT("%s: with local exposure and bloom neutralised, the uniform field and the stripe disagree by at most "
+				"%.1f levels, at emissive %.4f"),
+			ChannelViews[ChannelIndex].Name,
+			WorstDisagreement,
+			WorstAtEmissive));
+
+		TestTrue(
+			*FString::Printf(
+				TEXT("%s: with local exposure and bloom neutralised, a stripe on black and a uniform field show the same "
+					"emissive alike, so a pixel's level depends only on its own texel"),
+				ChannelViews[ChannelIndex].Name),
+			WorstDisagreement <= ContextsAgreeWithinLevels);
+	}
+
+	PlaneComponent->SetMaterial(0, Debug);
+
+	for (const EChainSource Source : ChainSources)
+	{
+		Capture->PostProcessSettings = Source == EChainSource::NeutralisedOnTheCapture
+			? NeutralisedChainSettings()
+			: FPostProcessSettings();
+
+		for (const EViewContext Context : ViewContexts)
+		{
+			UseContext(Context);
+
+			for (const FChannelView& View : ChannelViews)
+			{
+				Debug->SetVectorParameterValue(ChannelMaskParameterName, View.Mask);
 
 				FString Row = FString::Printf(
-					TEXT("Stripe %.0f %% of the frame wide on black, persistent view state, %s, %s, coverage:(own, others)"),
-					StripeWidthOfTheFrame * 100.0,
+					TEXT("Debug material, %s, %s, %s, ceiling %.1f, coverage:(shown, target, crosstalk)"),
+					ChainSourceName(Source),
+					ContextName(Context),
 					View.Name,
-					Variant.Name);
+					View.DisplayCeiling);
 
-				for (const float Coverage : StripeCoverages)
+				float WorstError = 0.0f;
+				float WorstAtCoverage = 0.0f;
+				float WorstCrosstalk = 0.0f;
+
+				for (const float Coverage : LinearCoverages)
 				{
 					SetCoverage(Coverage);
 
-					FLinearColor Last;
-					FLinearColor BeforeLast;
+					FLinearColor Shown;
+					bool bSettled = false;
 
-					if (!CaptureUntilSettled(*Capture, *StripeTarget, CapturesPerPersistentReading, Last, BeforeLast))
+					if (!CaptureUntilSettled(*Capture, *Capture->TextureTarget, Shown, bSettled))
 					{
 						++FailedReads;
 						continue;
 					}
 
-					UnsettledReadings += FMath::Abs(Component(Last, View.Component) - Component(BeforeLast, View.Component)) > SettledWithinLevels ? 1 : 0;
+					UnsettledReadings += bSettled ? 0 : 1;
 
-					Row += FString::Printf(
-						TEXT(" %.2f:(%.1f, %.1f, %.1f)"),
-						Coverage,
-						Component(Last, View.Component),
-						Component(Last, (View.Component + 1) % 3),
-						Component(Last, (View.Component + 2) % 3));
-				}
+					const float Level = Component(Shown, View.Component);
+					const float Target = View.DisplayCeiling * Coverage;
+					const float Error = Level - Target;
 
-				FLinearColor Corner;
+					if (FMath::Abs(Error) > FMath::Abs(WorstError))
+					{
+						WorstError = Error;
+						WorstAtCoverage = Coverage;
+					}
 
-				if (ReadBlock(*StripeTarget, CentreBlock, CentreBlock, Corner))
-				{
-					Row += FString::Printf(TEXT(", background (%.1f, %.1f, %.1f)"), Corner.R, Corner.G, Corner.B);
+					WorstCrosstalk = FMath::Max(WorstCrosstalk, Crosstalk(Shown, View.Component));
+
+					Row += FString::Printf(TEXT(" %.2f:(%.1f, %.1f, %.1f)"), Coverage, Level, Target, Crosstalk(Shown, View.Component));
 				}
 
 				AddInfo(Row);
+
+				TestTrue(
+					*FString::Printf(
+						TEXT("Debug material, %s, %s, %s: every coverage shows within %.1f levels of its share of the "
+							"ceiling; worst %+.1f at coverage %.2f, worst crosstalk %.1f"),
+						ChainSourceName(Source),
+						ContextName(Context),
+						View.Name,
+						LinearWithinLevels,
+						WorstError,
+						WorstAtCoverage,
+						WorstCrosstalk),
+					FMath::Abs(WorstError) <= LinearWithinLevels);
 			}
 		}
-
-		SweepEmissive(*StripeTarget, TEXT("stripe on black"), StripeSweepLevels);
-
-		for (int32 ChannelIndex = 0; ChannelIndex < UE_ARRAY_COUNT(ChannelViews); ++ChannelIndex)
-		{
-			float WorstDisagreement = 0.0f;
-			float WorstAtEmissive = 0.0f;
-
-			for (int32 Index = 0; Index < UniformSweepLevels[ChannelIndex].Num() && Index < StripeSweepLevels[ChannelIndex].Num(); ++Index)
-			{
-				const float Disagreement = FMath::Abs(UniformSweepLevels[ChannelIndex][Index] - StripeSweepLevels[ChannelIndex][Index]);
-
-				if (Disagreement > WorstDisagreement)
-				{
-					WorstDisagreement = Disagreement;
-					WorstAtEmissive = SweepEmissives[Index];
-				}
-			}
-
-			AddInfo(FString::Printf(
-				TEXT("Emissive sweep, %s: with local exposure and bloom neutralised, the uniform field and the stripe "
-					"disagree by at most %.1f levels, at emissive %.4f"),
-				ChannelViews[ChannelIndex].Name,
-				WorstDisagreement,
-				WorstAtEmissive));
-		}
-
-		UKismetRenderingLibrary::ReleaseRenderTarget2D(StripeTarget);
-	}
-	else
-	{
-		++FailedReads;
 	}
 
 	Plane->Destroy();
 	Camera->Destroy();
 	UKismetRenderingLibrary::ReleaseRenderTarget2D(ExposureTexture);
 	UKismetRenderingLibrary::ReleaseRenderTarget2D(RawTarget);
-	UKismetRenderingLibrary::ReleaseRenderTarget2D(LdrTarget);
+	UKismetRenderingLibrary::ReleaseRenderTarget2D(UniformTarget);
+	UKismetRenderingLibrary::ReleaseRenderTarget2D(StripeTarget);
 
 	AddInfo(FString::Printf(
-		TEXT("%d persistent readings moved by more than %.1f levels between their last two captures"),
+		TEXT("%d readings moved by more than %.1f levels between their last two captures"),
 		UnsettledReadings,
 		SettledWithinLevels));
 
-	TestEqual(TEXT("The material's raw emissive is the coverage, so the fixture feeds what it says"), RawMismatches, 0);
-	TestEqual(TEXT("The emissive sweep feeds the emissive it says, through the channel mask"), RawSweepMismatches, 0);
+	TestEqual(TEXT("The probe feeds the emissive the sweep says, through the channel mask"), RawSweepMismatches, 0);
 	TestEqual(TEXT("Every capture was read back"), FailedReads, 0);
-	TestEqual(TEXT("Every stage's output rises with coverage"), NonMonotonicSteps, 0);
 
 	return true;
 }
