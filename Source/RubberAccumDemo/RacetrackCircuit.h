@@ -7,6 +7,7 @@
 
 class ASplineFollowingCar;
 class UMaterialInstanceDynamic;
+class UPostProcessComponent;
 class UProceduralMeshComponent;
 class USplineComponent;
 
@@ -385,6 +386,9 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UProceduralMeshComponent> Road;
+
+	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
+	TObjectPtr<UPostProcessComponent> PerTexelDebugView;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> RoadSurfaceMaterial;

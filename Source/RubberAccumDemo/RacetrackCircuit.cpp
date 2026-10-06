@@ -1,6 +1,7 @@
 #include "RacetrackCircuit.h"
 
 #include "Components/InputComponent.h"
+#include "Components/PostProcessComponent.h"
 #include "Engine/Engine.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
@@ -320,6 +321,16 @@ ARacetrackCircuit::ARacetrackCircuit()
 	Road->SetupAttachment(Spline);
 	Road->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Road->bUseAsyncCooking = false;
+
+	PerTexelDebugView = CreateDefaultSubobject<UPostProcessComponent>(TEXT("PerTexelDebugView"));
+	PerTexelDebugView->SetupAttachment(Spline);
+	PerTexelDebugView->bUnbound = true;
+	PerTexelDebugView->Settings.bOverride_LocalExposureHighlightContrastScale = true;
+	PerTexelDebugView->Settings.LocalExposureHighlightContrastScale = 1.0f;
+	PerTexelDebugView->Settings.bOverride_LocalExposureShadowContrastScale = true;
+	PerTexelDebugView->Settings.LocalExposureShadowContrastScale = 1.0f;
+	PerTexelDebugView->Settings.bOverride_BloomIntensity = true;
+	PerTexelDebugView->Settings.BloomIntensity = 0.0f;
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> DebugSurfaceMaterial(
 		TEXT("/Game/Materials/M_SurfaceAccumulationDebug.M_SurfaceAccumulationDebug"));
