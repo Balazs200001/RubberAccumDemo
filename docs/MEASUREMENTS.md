@@ -3855,3 +3855,65 @@ judgement and is E4's exit:
 keyboard. The console command calls the same `SetSurfaceLook` and was exercised; the key bindings
 were only compiled. The frame cost of the lit material against the unlit debug one was not measured.
 
+## 2026-10-07 — C11.3: the road's collision cook, and traces against it
+
+[C11.3](https://github.com/Balazs200001/RubberAccumDemo/issues/121) gives the procedural road
+collision, so a Chaos car can drive on it. Procedural mesh collision is cooked at runtime, and the
+plan asked what that costs at the demo's lap length.
+
+```
+Build:    Development, editor target, headless through UnrealEditor-Cmd.exe (standing method)
+Hardware: standing
+Power:    BATTERY, read about 20 minutes after the run (Win32_Battery status 1, PowerOnline false,
+          91 %). The run itself was not read, so treat it as battery
+Scene:    L_SpaHarness, the project's EditorStartupMap, with its own circuit loaded. The test's
+          circuit is spawned 3 km below it, at Z = -300000, so the two roads never overlap
+Method:   automation test RubberAccumDemo.Performance.RoadCollisionCook, FPlatformTime::Seconds,
+          64 samples each way, interleaved, median reported, the R2 method
+Command:  -ExecCmds="Automation RunTests RacetrackSurface+RubberAccumDemo", log C:/RSBuild/c11-3-tests.log
+```
+
+**What is timed.** The Spa layout at 180000 cm with the default 128 cm segments: 2814 vertices and
+2812 triangles, copied from the circuit's own road section onto a probe procedural mesh component at
+the road's transform. Each sample creates that section once with `bCreateCollision` true and once
+false, with `bUseAsyncCooking` false as on the road. The difference is the collision cook plus the
+body's re-creation in the physics scene, which is what each road build now pays.
+
+| | Median | Fastest | Slowest |
+|---|---|---|---|
+| Section with collision | **2.7936 ms** | 2.0415 ms | 5.6731 ms |
+| Section without collision | 0.0850 ms | | |
+| **Collision cook and body creation** | **2.7087 ms** | | |
+
+**Reading.** About 2.7 ms, paid once each time the road is built: in `OnConstruction` when the map
+loads or the circuit spawns, and again on `SetLayout`. It is a one-off at load, not a per-frame
+cost, so it is not the frame hitch the plan worried about, and asynchronous cooking is not needed.
+
+**Which cook path this is.** In the editor build, the synchronous path sets `bHasCookedCollisionData`
+and cooks through the `WITH_EDITOR` derived-data builder in `UBodySetup::TryGetCookedData`
+(`Engine/Source/Runtime/Engine/Private/PhysicsEngine/BodySetup.cpp:1484-1533`), in any world type.
+A packaged build has no derived-data builder and cooks through `RuntimeCookPhysics_Chaos` instead
+(`BodySetup.cpp:446-458`), so this figure is the editor's and PIE's cost, not a packaged build's. A
+new body setup GUID per build means every cook misses the cache and writes a new entry.
+
+**Seen along the way, not changed.** In the editor, `OnConstruction` re-runs while the circuit's
+properties are edited or the actor is dragged, so each of those now also pays the cook.
+
+**The traces.** `RubberAccumDemo.Vehicle.RoadHasCollision` traces down on `ECC_WorldDynamic`, the
+channel Chaos suspension traces use, at 65 distances round the lap (64 even ones plus 1 cm before
+the seam) and three lateral positions (alpha -0.95, 0, 0.95):
+
+| Layout | Traces that hit the road | Worst distance from the spline along its up vector |
+|---|---|---|
+| Stadium | 195 of 195 | 1.00 cm |
+| Spa | 195 of 195 | 2.08 cm |
+
+The 1.00 cm is `RoadHeightAboveSpline`. On Spa the extra comes from the road being flat between its
+128 cm rings while the spline curves.
+
+**Not verified**
+- **The cook time on mains.** On battery, CPU wall-clock figures moved by 2 to 3.7x in the R2
+  re-take, so this figure is indicative. It is to be re-taken on mains.
+- The cook in a packaged build.
+- The car driving on the road, which is C11.5 onward.
+
