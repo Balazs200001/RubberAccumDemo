@@ -91,6 +91,11 @@ public:
 		return Spline;
 	}
 
+	UProceduralMeshComponent* GetRoad() const
+	{
+		return Road;
+	}
+
 	double GetTrackLength() const;
 
 	double GetTrackWidth() const

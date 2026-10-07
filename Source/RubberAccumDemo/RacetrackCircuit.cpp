@@ -341,7 +341,8 @@ ARacetrackCircuit::ARacetrackCircuit()
 
 	Road = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Road"));
 	Road->SetupAttachment(Spline);
-	Road->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Road->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Road->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 	Road->bUseAsyncCooking = false;
 
 	PerTexelDebugView = CreateDefaultSubobject<UPostProcessComponent>(TEXT("PerTexelDebugView"));
@@ -1744,7 +1745,7 @@ void ARacetrackCircuit::GenerateRoadMesh()
 	}
 
 	Road->ClearAllMeshSections();
-	Road->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, VertexColours, Tangents, false);
+	Road->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, VertexColours, Tangents, true);
 
 	if (RoadMaterial != nullptr)
 	{
