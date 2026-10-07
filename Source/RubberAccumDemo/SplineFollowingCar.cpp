@@ -27,6 +27,7 @@ ASplineFollowingCar::ASplineFollowingCar()
 	PreviousWheelPositions.SetNumZeroed(WheelCount);
 
 	CarMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarMesh"));
+	CarMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	SetRootComponent(CarMesh);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
