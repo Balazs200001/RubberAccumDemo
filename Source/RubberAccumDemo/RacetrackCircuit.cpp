@@ -1,5 +1,6 @@
 #include "RacetrackCircuit.h"
 
+#include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "ChaosVehicleWheel.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
@@ -19,6 +20,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -102,6 +104,10 @@ namespace RacetrackDrivenVehicle
 {
 	constexpr float Scale = 0.5f;
 
+	constexpr float ChaseCameraDistance = 900.0f;
+
+	constexpr float ChaseCameraHeight = 450.0f;
+
 	constexpr float LengthScale = Scale;
 
 	constexpr float SpringRateScale = Scale * Scale;
@@ -151,6 +157,30 @@ namespace RacetrackDrivenVehicle
 		}
 	}
 
+	void AimTheChaseCamera(AWheeledVehiclePawn& Vehicle)
+	{
+		const FRotator LookingDownAtTheCar(
+			-FMath::RadiansToDegrees(FMath::Atan2(ChaseCameraHeight, ChaseCameraDistance)),
+			0.0,
+			0.0);
+
+		TArray<UCameraComponent*> Cameras;
+		Vehicle.GetComponents(Cameras);
+
+		for (UCameraComponent* Camera : Cameras)
+		{
+			USpringArmComponent* Arm = Cast<USpringArmComponent>(Camera->GetAttachParent());
+
+			if (Arm == nullptr)
+			{
+				continue;
+			}
+
+			Arm->TargetArmLength = ChaseCameraDistance;
+			Arm->SocketOffset = FVector(0.0, 0.0, ChaseCameraHeight);
+			Camera->SetRelativeRotation(LookingDownAtTheCar);
+		}
+	}
 }
 
 namespace RacetrackDemoCommands
@@ -1214,6 +1244,8 @@ AWheeledVehiclePawn* ARacetrackCircuit::SpawnVehicleNearTheCamera(const APlayerC
 	{
 		RacetrackDrivenVehicle::ScaleTheWheels(*Movement);
 	}
+
+	RacetrackDrivenVehicle::AimTheChaseCamera(*Vehicle);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("%s spawned %s at %.2f scale on the centreline %.0f cm round the lap, the nearest point to the camera"),
