@@ -694,6 +694,24 @@ void ARacetrackCircuit::LaySkidMarkPair(float DeltaSeconds)
 		return;
 	}
 
+	float PeakRubber = 0.0f;
+	float PeakMarbles = 0.0f;
+
+	for (const FLinearColor& Texel : Band)
+	{
+		PeakRubber = FMath::Max(PeakRubber, Texel.R);
+		PeakMarbles = FMath::Max(PeakMarbles, Texel.B);
+	}
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s read the slice across the longest apex before laying the pair: peak rubber %.6f (coverage %.4f), "
+			"peak marbles %.6f (coverage %.4f)"),
+		*GetName(),
+		PeakRubber,
+		RacetrackSurfaceMapping::ExposureToCoverage(PeakRubber),
+		PeakMarbles,
+		RacetrackSurfaceMapping::ExposureToCoverage(PeakMarbles));
+
 	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();
 	const float ContactWidth = Reference != nullptr ? Reference->GetContactWidth() : 20.0f;
 
