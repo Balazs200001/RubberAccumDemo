@@ -4430,3 +4430,159 @@ carry almost none. Whether it reads as marbles is the user's call.
 coverage on screen; the query overlay's marble readout, which reads the same buffer and is now 7.5
 times higher; frame cost; one GPU and driver.
 
+
+## 2026-10-08 — H2: the marble pellets shimmer with distance, measured under a quarter-pixel pan, and TSR's cost
+
+**Question.** H1 closed with no distance fade on the pellets (#73). Do they shimmer where a 4 cm
+cell is smaller than a pixel, and how much? Asked for on #74 before H2 is rescoped.
+
+```
+Build:    Development editor target as UnrealEditor.exe -game, host a9dcad8, plugin 4dca82a.
+          THE EDITOR WAS OPEN in the background for every run in this entry
+Hardware: as standing
+Power:    MAINS, Win32_Battery BatteryStatus 2 at 19:00 local, before the runs
+Window:   1600 x 900 windowed, RENDERED AT 1336 x 751 and spatially upscaled (ProfileGPU:
+          "Upscale(PrimaryToOutput Method=4) 1336x751 -> 1600x900"), from
+          r.ScreenPercentage.Default.Desktop.Mode=1 in DefaultEngine.ini
+AA:       r.AntiAliasingMethod = "0" LastSetBy: ProjectSetting, read back in the run's log. None at all
+Scene:    L_SpaHarness, twenty cars, Spa layout, lit asphalt (RacetrackDemo.SurfaceLook 1)
+Field:    -ReleaseField, RacetrackDemo.TimeDilation 20 for 308.9 s real, 6178 s of track time,
+          about 76.8 laps at 80.45 s a lap; then RacetrackDemo.Field 0 and TimeDilation 1, so the
+          field is frozen for every capture. Peak over 48 columns at the freeze: rubber 0.9113,
+          marbles 0.8769 coverage. NOT the H1 stills' 57 laps: the game ran at about 46.5 fps, not
+          the 60 the schedule assumed, so the freeze frame came later
+Settings: t.MaxFPS 60, RacetrackDemo.FollowTheLeader 0, DisableAllScreenMessages.
+          r.RacetrackSurface.DrawQueryOverlay was left at its default
+Logs:     C:/RSBuild/h2-run1-poses.log, h2-run2.log (stills), h2-run3-tsr-cost.log (ProfileGPU)
+```
+
+### Method: console commands on chosen frames, and a camera that can be moved
+
+Two facts the earlier entries did not have, both read in the 5.8 source:
+
+- **`-csvCaptureFrames=N -csvExecCmds="<frame>:<command>,..."` runs console commands on chosen
+  frames of a boot CSV capture** (`CsvProfiler.cpp:5204`, executed per frame at
+  `LaunchEngineLoop.cpp:1479`). So a `-game` run is no longer limited to `-ExecCmds` at frame 0.
+  Commands only fire while the capture runs. Nothing else in a run depends on the CSV file.
+- **`BugItGo X Y Z Pitch Yaw Roll` places the camera**, because standalone allows cheats
+  (`GameModeBase.cpp:1413`, `PlayerController.cpp:1087`). `BugIt` logs the current pose as a
+  `BugItGo` line, which is how the apex pose was read: `RacetrackDemo.SkidMarkPair 0` parked the
+  camera, then `BugIt` logged it.
+
+The capture script tails the log, which `-forcelogflush` writes per line
+(`OutputDeviceFile.cpp:575`), and grabs the window with PrintWindow 300 ms after each `BugItGo to:`
+line. All 126 grabs matched their trigger. `DisableAllScreenMessages` also hides the CSV frame
+counter (`UnrealEngine.cpp:13786`).
+
+Posting keystrokes to the game window with `PostMessage` to open the console **did not work**: the
+command never reached the log. It was not pursued, because `SendInput` would need the window in
+front.
+
+**The pan.** At each view, two frames at the same pose give the noise floor. Then eight frames
+step the yaw by a quarter of a pixel each, 0.0179 degrees, two pixels in all. Under a sub-pixel
+pan a filtered image changes by its gradient times the step. An aliased one changes erratically.
+That pan is what driving does to every pixel. Shimmer is scored as the mean absolute luma change
+per step, over the marble band and over bare tarmac, in the same frames.
+
+**Masks.** After the asphalt pass, `RacetrackDemo.SurfaceLook 0` and `Channel 3` revisit each pose.
+Road pixels are those with red and green under 40. The band is road where blue exceeds half its
+99th percentile, and bare is road where blue is under 8 % of it. These are screen values, which the
+debug view lifts (see the entry above), so they are used only as masks.
+
+**Views.** All look at the longest apex, at (3651, 4785, 2575), along the track's yaw of -171.66
+degrees. Cell size is in rendered pixels at the focus, across and along the view.
+
+| View | Distance, elevation | 4 cm cell, px |
+|---|---|---|
+| near | 5.6 m, 60 deg, the `SkidMarkPair` framing | 4.8 x 4.1 |
+| m15 | 15 m, 45 deg | 1.8 x 1.3 |
+| m30 | 30 m, 30 deg | 0.9 x 0.45 |
+| m60 | 60 m, 20 deg | 0.45 x 0.15 |
+| chase | 9 m behind and 4.5 m above the apex, as the driven car's camera | 2.7 x 1.2 at the focus, less beyond |
+| overview | the demo's start camera, 309 m from the apex | 0.09 |
+
+### Result: shimmer, AA off as the project ships
+
+Mean absolute luma change per quarter-pixel step, 0 to 255:
+
+| View | Band, static | Band, pan | Bare, pan | Band over bare | Band pixels changing over 20 levels in the pan |
+|---|---|---|---|---|---|
+| near | 0.28 | 1.40 | 0.76 | 1.8 | 8.5 % |
+| m15 | 0.25 | 2.48 | 0.44 | 5.6 | 18.5 % |
+| m30 | 0.24 | 3.26 | 0.50 | 6.5 | 26.3 % |
+| m60 | 0.13 | 6.18 | 0.42 | 14.6 | 43.7 % |
+| chase | 0.30 | 2.00 | 0.87 | 2.3 | 14.6 % |
+| overview | 0.26 | 3.53 | (road edges only) | | 13.2 % |
+
+- **The static frames change by 0.1 to 0.3 levels**, so the pan figures are not Lumen or shadow
+  noise.
+- **Bare tarmac stays near 0.4 to 0.9 at every distance.** Its textures are mipmapped, so they
+  prefilter themselves.
+- **The band rises with distance**, to 15 times bare at 60 m, where 44 % of band pixels swing by
+  more than 20 levels inside a two-pixel pan.
+- The overview's bare region is only 728 pixels, all at the road's aliased edges, so no ratio is
+  given.
+- The heat maps show the same thing as images: the band lights up and the line and bare tarmac do
+  not.
+- **At m30 and m60 the speckle comes in 2x2 blocks.** The edge width is
+  `abs(DDX(NearestEdge)) + abs(DDY(NearestEdge))`, and `DDX` is per 2x2 quad. The engine's own
+  `AntialiasedTextureMask` uses the same derivative trick, and its source says so: *"ddx/ddy only
+  for every 2x2 block (bad for distant stuff)"* (`Common.ush:1756`).
+
+### TSR, switched on at runtime only, as a comparison
+
+`r.AntiAliasingMethod 4` was set by console command in the same run, after the mask pass, and set
+back to 0 at the end. No Config file was changed.
+
+| View | Band, pan | Bare, pan | Band pixels changing over 20 levels |
+|---|---|---|---|
+| near | 1.32 | 0.82 | 7.1 % |
+| m15 | 1.31 | 0.47 | 3.4 % |
+| m30 | 1.60 | 0.58 | 6.9 % |
+| m60 | 2.01 | 0.46 | 1.5 % |
+| chase | 1.53 | 1.08 | 8.2 % |
+| overview | 1.05 | | 0.2 % |
+
+**TSR takes the band's flicker to 1.3 to 2 levels a step at every distance**, against 2.5 to 6.2
+with AA off. The band still flickers at 2.5 to 4 times bare at m15 to m60. TSR's static-frame
+difference is 0.8 to 1.5, not 0.1 to 0.3, because its history keeps converging.
+
+### TSR's cost, ProfileGPU
+
+Chase pose, the field released at 1x **from empty**, so almost no pellets. Single-frame
+`ProfileGPU`, three frames per mode, in the order off, TSR, off, TSR. Graphics pipeline totals:
+
+| Mode | Frames, ms | Mean |
+|---|---|---|
+| AA off | 4.632, 5.037, 4.998, 4.947, 4.428, 5.233 | 4.88 ms |
+| TSR | 6.394, 6.159, 6.226, 6.039, 6.756, 6.516 | 6.35 ms |
+
+**TSR adds about 1.5 ms of GPU a frame here.** Its graphics-pipeline pass reads 1.17 ms each time:
+`RejectShading` 0.56 ms and `UpdateHistory` 0.53 ms. The history runs at 3200 x 1800 because
+`sg.AntiAliasingQuality=3` puts `r.TSR.History.ScreenPercentage` at 200. A further 0.2 to 0.4 ms
+runs on async compute.
+
+**The whole GPU frame is about 5 ms, while the game ran at about 46.5 fps, 21.5 ms a frame.** So this
+scene at 20x and at 1x frozen is not GPU-bound. That is H4's to explain.
+
+### Not verified
+
+- These are single frames from `ProfileGPU`, not a CSV series. The editor was open.
+- The pellet layer's own cost is not measured here, because the cost run had no marble field.
+- The shimmer was measured with a yaw pan, not with the forward translation of driving.
+- These stills are at about 77 laps and at one apex only.
+- How it looks in motion is the user's call. The GIFs approximate it at 140 ms a frame.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`. In each GIF, AA off as shipped is on the left and TSR at
+runtime is on the right, cropped to the band, 2x nearest neighbour, over the static frame and the
+eight pan steps:
+
+- `h2-shimmer-5m6-aa-off-vs-tsr.gif`, `h2-shimmer-15m-aa-off-vs-tsr.gif`,
+  `h2-shimmer-30m-aa-off-vs-tsr.gif`, `h2-shimmer-60m-aa-off-vs-tsr.gif`,
+  `h2-shimmer-chase-aa-off-vs-tsr.gif`, `h2-shimmer-overview-aa-off-vs-tsr.gif`
+- `h2-view-5m6-aa-off.png` and the same for the other five views: the full frame with the crop
+  boxed
+- `h2-shimmer-heat-30m-aa-off.png` and `h2-shimmer-heat-30m-tsr.png`: per-pixel temporal standard
+  deviation over the pan, times 12
