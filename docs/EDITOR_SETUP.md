@@ -1854,3 +1854,194 @@ the change in a running `-game` demo at 32x and at 1x deposition, measured in `M
 *H1 step 1*.
 
 Not verified: whether it reads as marbles, which is the user's judgement; the cooked shader.
+
+---
+
+## 2026-10-08 — H1 step 2: marbles as pellets on top of the tarmac, `MF_MarbleLayer`
+
+**Why.** The user's verdict on step 1: *"this doesn't look like marbles at all. The tarmac itself
+should not get darker; there should just be rubber pellets on top of the road."* The coverage wash
+is gone. The marble channel now decides where pellets are, how many and how big. The tarmac under
+and between them is untouched. The decision is recorded on
+[#73](https://github.com/Balazs200001/RubberAccumDemo/issues/73).
+
+**Asset created:** `/Game/Materials/MF_MarbleLayer`, commit `e2e9c52`.
+**Asset changed:** `/Game/Materials/M_SurfaceAsphalt`, commit `d823698`. Two nodes added, three
+connections changed, one parameter default changed. Nothing deleted.
+Both are saved and verified not dirty, and `git status` showed only these two files.
+
+Made via: `MaterialTools.create_function`, `add_expression`, `connect_expressions`,
+`connect_to_output`, `disconnect_expressions`, `recompile`, `get_expression_inputs`,
+`get_expression_input_names` and `get_expression_output_names`; `ObjectTools.set_properties` and
+`get_properties`; `AssetTools.save_assets` with the paths given and `is_dirty`;
+`LogsToolset.GetLogEntries` after each recompile.
+
+### `MF_MarbleLayer`
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionFunctionInput_0` | `FunctionInput` | `Marbles`, `FunctionInput_Scalar`, sort priority 0 |
+| `MaterialExpressionWorldPosition_0` | `WorldPosition` | `WPT_ExcludeAllShaderOffsets`, as in `MF_SampleRacetrackSurface`, so a later POM or WPO cannot move the pellets |
+| `MaterialExpressionVertexNormalWS_0` | `VertexNormalWS` | |
+| `MaterialExpressionScalarParameter_0` | `ScalarParameter` | `MarblePelletCellCentimetres`, default **4.0**, group `Marble Pellets` |
+| `MaterialExpressionScalarParameter_1` | `ScalarParameter` | `MarblePelletMaxRadius`, default **0.45** of a cell, group `Marble Pellets` |
+| `MaterialExpressionScalarParameter_2` | `ScalarParameter` | `MarblePresenceGain`, default **2.0**, group `Marble Pellets` |
+| `MaterialExpressionScalarParameter_3` | `ScalarParameter` | `MarbleMaxPresence`, default **0.6**, group `Marble Pellets` |
+| `MaterialExpressionCustom_0` | `Custom` | `MarblePellets`, `CMOT_Float4`, inputs below |
+| `MaterialExpressionComponentMask_0` | `ComponentMask` | R, G, B |
+| `MaterialExpressionComponentMask_1` | `ComponentMask` | A |
+| `MaterialExpressionTransform_0` | `Transform` | `TRANSFORMSOURCE_World` to `TRANSFORM_Tangent` |
+| `MaterialExpressionFunctionOutput_1` | `FunctionOutput` | `PelletMask`, sort priority 0 |
+| `MaterialExpressionFunctionOutput_0` | `FunctionOutput` | `PelletNormal`, sort priority 1 |
+
+```
+WorldPosition.XYZ            --> Custom.Position
+VertexNormalWS               --> Custom.SurfaceNormal
+FunctionInput Marbles        --> Custom.Coverage
+MarblePelletCellCentimetres  --> Custom.CellSize
+MarblePelletMaxRadius        --> Custom.MaxRadius
+MarblePresenceGain           --> Custom.PresenceGain
+MarbleMaxPresence            --> Custom.MaxPresence
+Custom --> ComponentMask(RGB) --> Transform(World to Tangent) --> PelletNormal
+Custom --> ComponentMask(A)   ----------------------------------> PelletMask
+```
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+```hlsl
+float2 Scaled = Position.xy / CellSize;
+float2 Cell = floor(Scaled);
+float2 Local = Scaled - Cell;
+float Fill = saturate(Coverage * PresenceGain);
+float Presence = Fill * MaxPresence;
+float Growth = 0.5 + 0.5 * Fill;
+float NearestEdge = 1.0;
+float BestHeight = 0.0;
+float2 BestOffset = 0.0;
+float BestRadius = 1.0;
+for (int Row = -1; Row <= 1; ++Row)
+{
+    for (int Column = -1; Column <= 1; ++Column)
+    {
+        float2 Neighbour = float2(Column, Row);
+        float4 Draw = Rand32ToFloat(Rand4DPCG32(int4(int2(Cell + Neighbour), 0, 0)));
+        if (Draw.z >= Presence)
+        {
+            continue;
+        }
+        float Radius = MaxRadius * Growth * (0.6 + 0.4 * Draw.w);
+        float2 Offset = Local - (Neighbour + Draw.xy);
+        float Distance = length(Offset);
+        NearestEdge = min(NearestEdge, Distance - Radius);
+        float Height = Radius * Radius - Distance * Distance;
+        if (Height > BestHeight)
+        {
+            BestHeight = Height;
+            BestOffset = Offset;
+            BestRadius = Radius;
+        }
+    }
+}
+float EdgeWidth = max(abs(DDX(NearestEdge)) + abs(DDY(NearestEdge)), 1e-4);
+float Mask = 1.0 - smoothstep(-EdgeWidth, EdgeWidth, NearestEdge);
+float2 Tilt = BestOffset / BestRadius;
+float3 TiltWorld = float3(Tilt, 0.0);
+TiltWorld -= dot(TiltWorld, SurfaceNormal) * SurfaceNormal;
+float Rise = sqrt(saturate(1.0 - dot(Tilt, Tilt)));
+float3 PelletNormal = normalize(TiltWorld + SurfaceNormal * Rise);
+return float4(PelletNormal, Mask);
+```
+
+Inputs in order: `Position`, `SurfaceNormal`, `Coverage`, `CellSize`, `MaxRadius`, `PresenceGain`,
+`MaxPresence`. Output `CMOT_Float4`: xyz the pellet's world-space normal, w the mask.
+
+**What it does, line by line in prose, since the source carries no comments:**
+- **Cells.** World XY is cut into square cells of `CellSize` cm. Each cell owns at most one pellet.
+- **Per-cell random draw.** `Rand4DPCG32`, keyed on the cell's integer coordinates, gives four
+  uniforms: `xy` is the pellet's centre anywhere in its cell, `z` decides whether the pellet exists,
+  `w` varies its size between 60 % and 100 %.
+- **Fill.** This is `saturate(Coverage x PresenceGain)`.
+- **Presence.** This is `Fill x MaxPresence`, so the share of cells carrying a pellet scales with
+  fill and reaches `MaxPresence` at full fill. It is a scale, not a clamp. With the gain at 2, fill
+  itself saturates at 0.5 coverage, so above 0.5 coverage the density no longer rises.
+- **Growth.** This is `0.5 + 0.5 x Fill`, from the *uncapped* fill. The cap reduces how many pellets
+  there are, not how big they grow.
+- **Search.** All 3x3 neighbouring cells are searched. A pellet's radius is under one cell and its
+  centre lies inside its own cell, so no pellet outside that neighbourhood can reach the pixel.
+  Pellets may overlap; the highest dome wins, so overlaps read as a clump rather than a cut.
+- **Edge.** `NearestEdge` is the signed distance to the nearest pellet edge. The mask is a
+  one-pixel smoothstep around it, sized by the engine's `DDX` and `DDY`, which return 0 in shaders
+  without hardware derivatives (`Common.ush:828`).
+- **Normal.** Each pellet is a hemisphere resting on the surface. Its normal tilts in the surface
+  plane by `offset / radius` and rises by `sqrt(1 - tilt^2)`.
+
+**Engine facts this rests on, each read in the 5.8 source:**
+- `Rand4DPCG32(int4)` and `Rand32ToFloat(uint4)` are in `Engine/Shaders/Private/RandomPCG.ush`
+  lines 80 and 137. `RandomPCG.ush` is included by `Random.ush:11`, which `MaterialTemplate.ush:26`
+  includes, so a Custom node can call them.
+- An LWC input to a Custom node arrives as a demoted `float3` of the input's name, plus a
+  `FWSVector3` named with `LWC` appended (`HLSLMaterialTranslator.cpp`, `CustomExpression`, the
+  `MCT_LWCVector3` case). The demoted value is about 0.004 cm precise at this circuit's 500 m
+  extent.
+- The road's tangent basis is real: `GenerateRoadMesh` gives every vertex a tangent along the lap
+  and its normal (`RacetrackCircuit.cpp:2182`), so World to Tangent is valid.
+
+**Why not the engine's `VoronoiNoise3D_ALU`** (`Random.ush:517`):
+- It returns only the single nearest seed, by 3D distance.
+- At qualities 1 and 2, its seeds sit exactly 0.2588 from each lattice corner (`Random.ush:482`).
+  Sliced across a flat road, that is a nearly regular square grid of pellets.
+- Pellets need a union of irregular discs, each with its own attributes, which it does not compute.
+
+**Why world XY rather than the mesh UV.** The same reason as G5. The ribbon UV is anisotropic and
+folded, while world XY gives round pellets and is continuous across the folds. On Spa's slopes a
+pellet stretches by 1/cos of the grade, a few percent.
+
+### `M_SurfaceAsphalt` after the change
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionMaterialFunctionCall_1` | `MaterialFunctionCall` | `/Game/Materials/MF_MarbleLayer` |
+| `MaterialExpressionLinearInterpolate_7` | `LinearInterpolate` | |
+
+```
+MF_SampleRacetrackSurface.Marbles --> MF_MarbleLayer.Marbles                           (new)
+MF_MarbleLayer.PelletMask --> Multiply_3.A        (rewired; was MF_SampleRacetrackSurface.Marbles)
+MF_MarbleLayer.PelletMask --> Lerp_5.Alpha        (rewired; was MF_SampleRacetrackSurface.Marbles)
+Lerp_6 --> Lerp_7.A,  MF_MarbleLayer.PelletNormal --> Lerp_7.B,  PelletMask --> Lerp_7.Alpha (new)
+Lerp_7 --> MP_Normal                              (rewired; was Lerp_6)
+```
+
+So:
+- `Lerp_2` paints `MarbleColour` inside a pellet, through `Multiply_3 = PelletMask x MarbleDarkening`.
+  `MarbleDarkening` is now the pellet's opacity, left at 1.0.
+- `Lerp_5` paints `MarbleRoughness` (0.95, unchanged) inside a pellet.
+- `Lerp_7` puts the pellet's dome normal over the asphalt's normal.
+- Outside pellets, every output is exactly what E4 built.
+
+| Parameter | Before | After | Why |
+|---|---|---|---|
+| `MarbleColour` | (0.0045, 0.0041, 0.0037), from step 1 | **(0.010, 0.010, 0.011)** | The value of `RubberColour`: marbles are the same rubber that is laid on the line |
+
+### A tool defect found while reading the wiring back
+
+`MaterialTools.get_expression_inputs` **reports the wrong output pin when two inputs of one node
+are fed from different outputs of the same source node.** With `Lerp_7.B` on `PelletNormal` and
+`Lerp_7.Alpha` on `PelletMask`, both read back as `PelletNormal`, through three reconnects. With
+`B` disconnected, `Alpha` read back as `PelletMask`. With `Alpha` disconnected, `B` read back as
+`PelletNormal`. So each connection was verified on its own, and the final `Alpha` connection was
+made last, as a single call on the input verified a moment before. The final state with both inputs
+connected **cannot be read back correctly** through this tool. Any future read-back of a node with
+two inputs from one multi-output source has to be done one input at a time.
+
+### What was verified, and what was not
+
+Verified: both assets compile, with no shader or material error in the editor log after each
+recompile; every connection was read back, with the defect above handled; both are saved and not
+dirty; pellets render in a running `-game` demo, at 32x as dense dark pellets in the marble band
+with the tarmac between them unchanged. The numbers are in `MEASUREMENTS.md` under *H1 step 2*.
+
+**Not verified, and open:** at the demo's 1x deposition, the pellets are sparser and smaller than
+the marble coverage the debug view shows in the same pixels should give. The cause is not found.
+See `MEASUREMENTS.md`. Also not verified: whether it reads as marbles, which is the user's
+judgement; the frame cost of the 3x3 search; shimmer at a distance, where a pellet is under a
+pixel; the cooked shader.
