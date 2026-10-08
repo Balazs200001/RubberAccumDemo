@@ -98,6 +98,61 @@ namespace RacetrackCircuitDisplay
 	}
 }
 
+namespace RacetrackDrivenVehicle
+{
+	constexpr float Scale = 0.5f;
+
+	constexpr float LengthScale = Scale;
+
+	constexpr float SpringRateScale = Scale * Scale;
+
+	constexpr float ForceScale = Scale * Scale * Scale;
+
+	constexpr float TorqueScale = ForceScale * Scale;
+
+	void ScaleTheBodyBeforeSpawning(UChaosWheeledVehicleMovementComponent& Movement)
+	{
+		Movement.Mass *= ForceScale;
+		Movement.ChassisWidth *= LengthScale;
+		Movement.ChassisHeight *= LengthScale;
+		Movement.EngineSetup.MaxTorque *= TorqueScale;
+	}
+
+	void ScaleTheWheels(UChaosWheeledVehicleMovementComponent& Movement)
+	{
+		for (int32 Wheel = 0; Wheel < Movement.Wheels.Num(); ++Wheel)
+		{
+			UChaosVehicleWheel* Setup = Movement.Wheels[Wheel].Get();
+
+			if (Setup == nullptr)
+			{
+				continue;
+			}
+
+			Setup->WheelRadius *= LengthScale;
+			Setup->WheelWidth *= LengthScale;
+			Setup->SuspensionMaxRaise *= LengthScale;
+			Setup->SuspensionMaxDrop *= LengthScale;
+			Setup->SpringRate *= SpringRateScale;
+			Setup->SpringPreload *= ForceScale;
+			Setup->MaxBrakeTorque *= TorqueScale;
+			Setup->MaxHandBrakeTorque *= TorqueScale;
+
+			Movement.SetWheelRadius(Wheel, Setup->WheelRadius);
+			Movement.SetSuspensionParams(
+				Setup->SpringRate,
+				Setup->SuspensionDampingRatio,
+				Setup->SpringPreload,
+				Setup->SuspensionMaxRaise,
+				Setup->SuspensionMaxDrop,
+				Wheel);
+			Movement.SetWheelMaxBrakeTorque(Wheel, Setup->MaxBrakeTorque);
+			Movement.SetWheelHandbrakeTorque(Wheel, Setup->MaxHandBrakeTorque);
+		}
+	}
+
+}
+
 namespace RacetrackDemoCommands
 {
 	ARacetrackCircuit* FindCircuit(UWorld* World)
@@ -1131,20 +1186,41 @@ AWheeledVehiclePawn* ARacetrackCircuit::SpawnVehicleNearTheCamera(const APlayerC
 		+ Up * (RoadHeightAboveSpline + DriveSpawnHeight);
 	const FRotator AlongTheTrack = FRotationMatrix::MakeFromXZ(GetWorldDirectionAtDistance(Distance), Up).Rotator();
 
-	FActorSpawnParameters AlwaysSpawn;
-	AlwaysSpawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	const FTransform SpawnTransform(AlongTheTrack, OnTheRoad, FVector(RacetrackDrivenVehicle::Scale));
 
-	AWheeledVehiclePawn* Vehicle =
-		World->SpawnActor<AWheeledVehiclePawn>(DriveVehicleClass, OnTheRoad, AlongTheTrack, AlwaysSpawn);
+	AWheeledVehiclePawn* Vehicle = World->SpawnActorDeferred<AWheeledVehiclePawn>(
+		DriveVehicleClass,
+		SpawnTransform,
+		nullptr,
+		nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 
-	if (Vehicle != nullptr)
+	if (Vehicle == nullptr)
 	{
-		UE_LOG(LogRacetrackSurface, Log,
-			TEXT("%s spawned %s on the centreline %.0f cm round the lap, the nearest point to the camera"),
-			*GetName(),
-			*Vehicle->GetName(),
-			Distance);
+		return nullptr;
 	}
+
+	UChaosWheeledVehicleMovementComponent* Movement =
+		Cast<UChaosWheeledVehicleMovementComponent>(Vehicle->GetVehicleMovementComponent());
+
+	if (Movement != nullptr)
+	{
+		RacetrackDrivenVehicle::ScaleTheBodyBeforeSpawning(*Movement);
+	}
+
+	Vehicle->FinishSpawning(SpawnTransform);
+
+	if (Movement != nullptr)
+	{
+		RacetrackDrivenVehicle::ScaleTheWheels(*Movement);
+	}
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s spawned %s at %.2f scale on the centreline %.0f cm round the lap, the nearest point to the camera"),
+		*GetName(),
+		*Vehicle->GetName(),
+		RacetrackDrivenVehicle::Scale,
+		Distance);
 
 	return Vehicle;
 }
