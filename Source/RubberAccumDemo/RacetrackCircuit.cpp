@@ -108,6 +108,8 @@ namespace RacetrackDrivenVehicle
 
 	constexpr float ChaseCameraHeight = 450.0f;
 
+	constexpr float SecondsToFullBrake = 2.0f;
+
 	float SteerAngleForTheSameTurningCircle(float FullSizeAngleDegrees)
 	{
 		return FMath::RadiansToDegrees(
@@ -1267,6 +1269,7 @@ AWheeledVehiclePawn* ARacetrackCircuit::SpawnVehicleNearTheCamera(const APlayerC
 	if (Movement != nullptr)
 	{
 		RacetrackDrivenVehicle::KeepTheFullSizeWheelDynamics(*Movement);
+		Movement->BrakeInputRate.RiseRate = 1.0f / RacetrackDrivenVehicle::SecondsToFullBrake;
 	}
 
 	RacetrackDrivenVehicle::AimTheChaseCamera(*Vehicle);
