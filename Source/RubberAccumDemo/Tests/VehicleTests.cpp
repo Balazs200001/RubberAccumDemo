@@ -231,6 +231,58 @@ namespace RubberAccumDemoVehicleTest
 			FString::Printf(TEXT("%s: two triangles per side per segment, none dropped as degenerate"), LayoutName),
 			Section->ProcIndexBuffer.Num(),
 			SegmentCount * 12);
+
+		const FProcMeshSection* RoadSection = Track.GetRoad()->GetProcMeshSection(0);
+
+		if (RoadSection == nullptr || RoadSection->ProcIndexBuffer.Num() < 3)
+		{
+			Test.AddError(FString::Printf(TEXT("%s: the road has no triangles to compare winding with."), LayoutName));
+			return;
+		}
+
+		const FTransform RoadToWorld = Track.GetRoad()->GetComponentTransform();
+		const TArray<FProcMeshVertex>& RoadVertices = RoadSection->ProcVertexBuffer;
+		const TArray<uint32>& RoadIndices = RoadSection->ProcIndexBuffer;
+
+		auto WorldNormal = [](const FVector& A, const FVector& B, const FVector& C)
+		{
+			return FVector::CrossProduct(B - A, C - A);
+		};
+
+		const double RoadFacing = FMath::Sign(FVector::DotProduct(
+			WorldNormal(
+				RoadToWorld.TransformPosition(RoadVertices[RoadIndices[0]].Position),
+				RoadToWorld.TransformPosition(RoadVertices[RoadIndices[1]].Position),
+				RoadToWorld.TransformPosition(RoadVertices[RoadIndices[2]].Position)),
+			Track.GetWorldUpVectorAtDistance(0.0)));
+
+		const TArray<uint32>& WallIndices = Section->ProcIndexBuffer;
+		int32 FacingTheTrack = 0;
+
+		for (int32 Triangle = 0; Triangle * 3 < WallIndices.Num(); ++Triangle)
+		{
+			const int32 Segment = Triangle / 4;
+			const double TowardsTheTrack = (Triangle / 2) % 2 == 0 ? 1.0 : -1.0;
+			const FVector Right = Track.GetWorldRightVectorAtDistance(Length * (Segment + 0.5) / SegmentCount);
+
+			const FVector Normal = WorldNormal(
+				LocalToWorld.TransformPosition(WallVertices[WallIndices[Triangle * 3]].Position),
+				LocalToWorld.TransformPosition(WallVertices[WallIndices[Triangle * 3 + 1]].Position),
+				LocalToWorld.TransformPosition(WallVertices[WallIndices[Triangle * 3 + 2]].Position));
+
+			if (FMath::Sign(FVector::DotProduct(Normal, Right * TowardsTheTrack)) == RoadFacing)
+			{
+				++FacingTheTrack;
+			}
+		}
+
+		Test.TestEqual(
+			FString::Printf(
+				TEXT("%s: every wall triangle faces the track the way the road's triangles face up, so the one-sided "
+					"physics collision stops the car at both walls"),
+				LayoutName),
+			FacingTheTrack,
+			WallIndices.Num() / 3);
 	}
 
 	double LocalCentrelineRadius(const ARacetrackCircuit& Track, double Distance)

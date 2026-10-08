@@ -2142,15 +2142,13 @@ void ARacetrackCircuit::GenerateEdgeWalls(
 
 	for (int32 Segment = 0; Segment < RingCount - 1; ++Segment)
 	{
-		for (int32 Side = 0; Side < 2; ++Side)
-		{
-			const int32 Foot = Segment * 4 + Side * 2;
-			const int32 Top = Foot + 1;
-			const int32 NextFoot = Foot + 4;
-			const int32 NextTop = Top + 4;
+		const int32 LeftFoot = Segment * 4;
+		const int32 LeftTop = LeftFoot + 1;
+		const int32 RightFoot = LeftFoot + 2;
+		const int32 RightTop = LeftFoot + 3;
 
-			Triangles.Append({ Foot, NextFoot, Top, Top, NextFoot, NextTop });
-		}
+		Triangles.Append({ LeftFoot, LeftFoot + 4, LeftTop, LeftTop, LeftFoot + 4, LeftTop + 4 });
+		Triangles.Append({ RightFoot, RightTop, RightFoot + 4, RightTop, RightTop + 4, RightFoot + 4 });
 	}
 
 	EdgeWalls->CreateMeshSection_LinearColor(
