@@ -1803,3 +1803,54 @@ from the road's own grade, roll −0.53°). The test actors were removed and the
 Loading & Saving → Auto Reimport → Monitor Content Directories** (`bMonitorContentDirectories`,
 `Engine/Source/Editor/UnrealEd/Classes/Settings/EditorLoadingSavingSettings.h:128`), or restore the
 four meshes as above afterwards.
+
+---
+
+## 2026-10-08 — H1 step 1: the marble parameters on the asphalt retuned
+
+**Asset changed:** `/Game/Materials/M_SurfaceAsphalt`. Two parameter defaults only. No nodes were
+added, removed or rewired. Saved, verified not dirty, and `git status` showed only this `.uasset`
+changed. Commit `c3ba409`.
+
+Why: [H1](https://github.com/Balazs200001/RubberAccumDemo/issues/73) step 1, chosen by the user on
+2026-10-08. The baseline in `MEASUREMENTS.md` (*H1 baseline*) showed full marbles leaving the
+asphalt no darker than bare road, because `MarbleColour` was above the scan's 0.015 mean. Editing
+this E4 asset was approved by the user.
+
+Made via: `MaterialTools.get_expressions` and `get_expression_inputs` to confirm the graph still
+matched the E4 record, `ObjectTools.get_properties` to read each parameter's name and default before
+the change, `ObjectTools.set_properties`, `MaterialTools.recompile`, `get_properties` again to read
+back, then `AssetTools.save_assets` with the one path and `AssetTools.is_dirty`.
+
+| Node | Parameter | Before | After |
+|---|---|---|---|
+| `MaterialExpressionVectorParameter_1` | `MarbleColour` | (0.022, 0.020, 0.018) linear | **(0.0045, 0.0041, 0.0037)** linear |
+| `MaterialExpressionScalarParameter_4` | `MarbleDarkening` | 0.8 | **1.0** |
+| `MaterialExpressionScalarParameter_7` | `MarbleRoughness` | 0.95 | 0.95, unchanged |
+
+Read back after the recompile as (0.0045, 0.0041, 0.0037, 1), 1 and 0.95. The wiring this acts
+through was read back too and is unchanged from E4: `Lerp_2(A Lerp_1, B MarbleColour.RGB,
+Alpha Multiply_3)`, with `Multiply_3 = MF_SampleRacetrackSurface.Marbles x MarbleDarkening`.
+
+**The values.** `MarbleColour` keeps E4's hue ratio, 1 : 0.91 : 0.82, at about a third of the scan's
+mean, so full marbles are clearly darker than bare asphalt and darker than laid rubber's 0.010.
+`MarbleDarkening` at 1.0 lets full coverage reach `MarbleColour`. Nothing above 1 is possible here
+without a clamp, because the lerp's alpha is `Marbles x MarbleDarkening` and an alpha past 1
+extrapolates beyond `MarbleColour`. `MarbleRoughness` stays: the marble band is already matte, and
+the change it would make is not the one that is missing.
+
+The circuit does not override these on its dynamic instance. It sets only `AccumulationTarget`,
+`AsphaltTilesAlongLap` and `AsphaltTilesAcross` (`RacetrackCircuit.cpp:2083-2087`), so the
+material's defaults are what the road shows.
+
+**The editor log** after the recompile and save has no material or shader error. Its one error line
+is `LogModelContextProtocol: Call to unknown method "server/discover"`, which is the MCP server and
+unrelated.
+
+### What was verified, and what was not
+
+Verified: the values read back; the material recompiles; it is saved and not dirty; the road shows
+the change in a running `-game` demo at 32x and at 1x deposition, measured in `MEASUREMENTS.md` under
+*H1 step 1*.
+
+Not verified: whether it reads as marbles, which is the user's judgement; the cooked shader.
