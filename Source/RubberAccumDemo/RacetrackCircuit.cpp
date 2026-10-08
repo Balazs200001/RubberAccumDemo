@@ -1,6 +1,14 @@
 #include "RacetrackCircuit.h"
 
+#include "Camera/PlayerCameraManager.h"
+#include "ChaosVehicleWheel.h"
+#include "ChaosWheeledVehicleMovementComponent.h"
 #include "Components/InputComponent.h"
+#include "Engine/LocalPlayer.h"
+#include "EnhancedInputSubsystems.h"
+#include "InputMappingContext.h"
+#include "SurfaceTrackSpace.h"
+#include "WheeledVehiclePawn.h"
 #include "Components/PostProcessComponent.h"
 #include "Engine/Engine.h"
 #include "HAL/IConsoleManager.h"
@@ -215,6 +223,22 @@ namespace RacetrackDemoCommands
 		}
 	}
 
+	void ToggleDriving(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit != nullptr)
+		{
+			Circuit->ToggleDriving();
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs DriveCommand(
+		TEXT("RacetrackDemo.Drive"),
+		TEXT("Hands the player the circuit's car, spawned on the centreline nearest the camera the first time, "
+			"or gives the fly camera back and parks the car where it is. Time is held at 1x while driving."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ToggleDriving));
+
 	FAutoConsoleCommandWithWorldAndArgs SkidMarkPairCommand(
 		TEXT("RacetrackDemo.SkidMarkPair"),
 		TEXT("After the first argument's seconds of track time, lays two identical lockup marks across the "
@@ -405,7 +429,15 @@ void ARacetrackCircuit::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	ReadAndDrawTheLeadersWheels();
+	if (bDriving)
+	{
+		ReadAndDrawTheDrivenWheels();
+	}
+	else
+	{
+		ReadAndDrawTheLeadersWheels();
+	}
+
 	AdvanceSkidMarkPair(DeltaSeconds);
 }
 
@@ -450,6 +482,15 @@ double ARacetrackCircuit::FindLongestApexDistance() const
 
 void ARacetrackCircuit::ArmSkidMarkPair(double DelaySeconds, double ReportIntervalSeconds)
 {
+	if (bDriving)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.SkidMarkPair"),
+			TEXT("RacetrackDemo.SkidMarkPair is refused while driving: it would move the car you are driving"));
+		return;
+	}
+
 	SecondsUntilSkidMarkPair = FMath::Max(DelaySeconds, 0.0);
 	SkidMarkPairReportInterval = FMath::Max(ReportIntervalSeconds, 0.0);
 	SecondsUntilSkidMarkPairReport = 0.0;
@@ -769,7 +810,7 @@ void ARacetrackCircuit::PlaceObserverAboveSkidMarkPair()
 {
 	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
 
-	if (!SkidMarkPair.IsSet() || Controller == nullptr || Controller->GetPawn() == nullptr)
+	if (bDriving || !SkidMarkPair.IsSet() || Controller == nullptr || Controller->GetPawn() == nullptr)
 	{
 		return;
 	}
@@ -953,6 +994,246 @@ void ARacetrackCircuit::PlaceObserverBehindTheLeader(const ASplineFollowingCar& 
 
 	Controller->GetPawn()->SetActorLocationAndRotation(Eye, Look);
 	Controller->SetControlRotation(Look);
+}
+
+void ARacetrackCircuit::ToggleDriving()
+{
+	if (bDriving)
+	{
+		StopDriving();
+	}
+	else
+	{
+		StartDriving();
+	}
+}
+
+void ARacetrackCircuit::StartDriving()
+{
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (Controller == nullptr)
+	{
+		return;
+	}
+
+	if (DriveVehicleClass == nullptr)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.Drive"),
+			TEXT("No vehicle class is set on the circuit, so there is no car to drive"));
+		return;
+	}
+
+	APawn* Observer = Controller->GetPawn();
+	AWheeledVehiclePawn* Vehicle = DrivenVehicle.Get();
+
+	if (Vehicle == nullptr)
+	{
+		Vehicle = SpawnVehicleNearTheCamera(*Controller);
+		DrivenVehicle = Vehicle;
+	}
+
+	if (Vehicle == nullptr)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.Drive"),
+			TEXT("The car could not be spawned on the track"));
+		return;
+	}
+
+	ApplyTimeDilation(1.0f);
+
+	FlyPawn = Observer;
+	Controller->Possess(Vehicle);
+	SetDriveMappingContext(*Controller, true);
+
+	if (UChaosVehicleMovementComponent* Movement = Vehicle->GetVehicleMovementComponent())
+	{
+		Movement->SetHandbrakeInput(false);
+	}
+
+	bDriving = true;
+
+	UE_LOG(LogRacetrackSurface, Log, TEXT("%s handed %s to the player"), *GetName(), *Vehicle->GetName());
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.Drive"),
+		TEXT("Driving. RacetrackDemo.Drive gives the fly camera back. Time is held at 1x"));
+
+	if (RacetrackCircuitDisplay::CVarFollowTheLeader.GetValueOnGameThread() != 0)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.FollowTheLeader"),
+			TEXT("RacetrackDemo.FollowTheLeader is ignored while driving: it would move the car you are driving"));
+	}
+}
+
+void ARacetrackCircuit::StopDriving()
+{
+	bDriving = false;
+
+	ParkTheDrivenVehicle();
+
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (Controller != nullptr)
+	{
+		SetDriveMappingContext(*Controller, false);
+
+		if (APawn* Observer = FlyPawn.Get())
+		{
+			Controller->Possess(Observer);
+		}
+	}
+
+	UE_LOG(LogRacetrackSurface, Log, TEXT("%s gave the fly camera back and parked the car"), *GetName());
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.Drive"),
+		TEXT("Fly camera back. The car is parked where it stopped, and RacetrackDemo.Drive takes it again"));
+}
+
+AWheeledVehiclePawn* ARacetrackCircuit::SpawnVehicleNearTheCamera(const APlayerController& Controller)
+{
+	UWorld* World = GetWorld();
+
+	if (World == nullptr || Spline == nullptr)
+	{
+		return nullptr;
+	}
+
+	const FVector CameraLocation = Controller.PlayerCameraManager != nullptr
+		? Controller.PlayerCameraManager->GetCameraLocation()
+		: GetActorLocation();
+
+	FSurfaceTrackCoordinate Nearest;
+
+	if (RacetrackSurfaceTrackSpace::WorldToTrack(*Spline, TrackWidth, CameraLocation, Nearest)
+		== ETrackSpaceStatus::NoCentreline)
+	{
+		return nullptr;
+	}
+
+	Nearest.LateralOffsetAlpha = 0.0;
+
+	const double Distance = Nearest.DistanceAlongCentreline;
+	const FVector Up = GetWorldUpVectorAtDistance(Distance);
+	const FVector OnTheRoad = RacetrackSurfaceTrackSpace::TrackToWorld(*Spline, TrackWidth, Nearest)
+		+ Up * (RoadHeightAboveSpline + DriveSpawnHeight);
+	const FRotator AlongTheTrack = FRotationMatrix::MakeFromXZ(GetWorldDirectionAtDistance(Distance), Up).Rotator();
+
+	FActorSpawnParameters AlwaysSpawn;
+	AlwaysSpawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	AWheeledVehiclePawn* Vehicle =
+		World->SpawnActor<AWheeledVehiclePawn>(DriveVehicleClass, OnTheRoad, AlongTheTrack, AlwaysSpawn);
+
+	if (Vehicle != nullptr)
+	{
+		UE_LOG(LogRacetrackSurface, Log,
+			TEXT("%s spawned %s on the centreline %.0f cm round the lap, the nearest point to the camera"),
+			*GetName(),
+			*Vehicle->GetName(),
+			Distance);
+	}
+
+	return Vehicle;
+}
+
+void ARacetrackCircuit::SetDriveMappingContext(const APlayerController& Controller, bool bAdd) const
+{
+	UEnhancedInputLocalPlayerSubsystem* Input =
+		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(Controller.GetLocalPlayer());
+
+	if (Input == nullptr || DriveMappingContext == nullptr)
+	{
+		return;
+	}
+
+	if (bAdd)
+	{
+		Input->AddMappingContext(DriveMappingContext, 0);
+	}
+	else
+	{
+		Input->RemoveMappingContext(DriveMappingContext);
+	}
+}
+
+void ARacetrackCircuit::ParkTheDrivenVehicle() const
+{
+	const AWheeledVehiclePawn* Vehicle = DrivenVehicle.Get();
+	UChaosVehicleMovementComponent* Movement = Vehicle != nullptr ? Vehicle->GetVehicleMovementComponent() : nullptr;
+
+	if (Movement == nullptr)
+	{
+		return;
+	}
+
+	Movement->SetThrottleInput(0.0f);
+	Movement->SetBrakeInput(0.0f);
+	Movement->SetSteeringInput(0.0f);
+	Movement->SetHandbrakeInput(true);
+}
+
+void ARacetrackCircuit::ReadAndDrawTheDrivenWheels()
+{
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	const AWheeledVehiclePawn* Vehicle = DrivenVehicle.Get();
+
+	const UChaosWheeledVehicleMovementComponent* Movement = Vehicle != nullptr
+		? Cast<UChaosWheeledVehicleMovementComponent>(Vehicle->GetVehicleMovementComponent())
+		: nullptr;
+
+	if (Subsystem == nullptr || Movement == nullptr || Spline == nullptr)
+	{
+		return;
+	}
+
+	const int32 WheelCount = FMath::Min(Movement->GetNumWheels(), LeaderWheelQueries.Num());
+
+	LeaderWheelSamples.SetNum(LeaderWheelQueries.Num());
+
+	FSurfaceTrackCoordinate AtTheCar;
+	RacetrackSurfaceTrackSpace::WorldToTrack(*Spline, TrackWidth, Vehicle->GetActorLocation(), AtTheCar);
+
+	RacetrackSurfaceQueryOverlay::FOverlayBasis Basis;
+	Basis.Along = GetWorldDirectionAtDistance(AtTheCar.DistanceAlongCentreline);
+	Basis.Across = GetWorldRightVectorAtDistance(AtTheCar.DistanceAlongCentreline);
+	Basis.Up = GetWorldUpVectorAtDistance(AtTheCar.DistanceAlongCentreline);
+
+	const FVector BesideTheCar =
+		Basis.Along * RacetrackCircuitDisplay::OverlayAheadOfTheCar
+		+ Basis.Across * RacetrackCircuitDisplay::OverlayBesideTheCar;
+
+	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
+	{
+		const FWheelStatus& State = Movement->GetWheelState(Wheel);
+
+		if (!State.bInContact)
+		{
+			continue;
+		}
+
+		LeaderWheelSamples[Wheel] = Subsystem->QuerySurfaceState(LeaderWheelQueries[Wheel], State.ContactPoint);
+
+		RacetrackSurfaceQueryOverlay::DrawSurfaceStateSample(
+			World,
+			State.ContactPoint + BesideTheCar,
+			Basis,
+			LeaderWheelSamples[Wheel]);
+	}
 }
 
 bool ARacetrackCircuit::StartsPausedAfterCommandLine() const
@@ -1159,6 +1440,15 @@ void ARacetrackCircuit::SlowDownTime()
 
 void ARacetrackCircuit::ApplyTimeDilation(float Dilation)
 {
+	if (bDriving)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.TimeDilation"),
+			TEXT("Time is held at 1x while driving"));
+		return;
+	}
+
 	const float Clamped = FMath::Clamp(Dilation, SlowestTimeDilation, FastestTimeDilation);
 
 	UGameplayStatics::SetGlobalTimeDilation(this, Clamped);

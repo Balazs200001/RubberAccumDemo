@@ -5,7 +5,10 @@
 #include "RacetrackSurfaceTypes.h"
 #include "RacetrackCircuit.generated.h"
 
+class APlayerController;
 class ASplineFollowingCar;
+class AWheeledVehiclePawn;
+class UInputMappingContext;
 class UMaterialInstanceDynamic;
 class UPostProcessComponent;
 class UProceduralMeshComponent;
@@ -264,6 +267,13 @@ public:
 
 	bool ReadSkidMarkPair(FLinearColor& OutOnTheLine, FLinearColor& OutOffTheLine);
 
+	void ToggleDriving();
+
+	bool IsDriving() const
+	{
+		return bDriving;
+	}
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;
@@ -364,6 +374,19 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Field", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double DriverLineCommitmentAtEdge = 0.8;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive")
+	TSubclassOf<AWheeledVehiclePawn> DriveVehicleClass;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive")
+	TObjectPtr<UInputMappingContext> DriveMappingContext;
+
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive", meta = (ClampMin = "0.0"))
+	double DriveSpawnHeight = 50.0;
+
+
+
+
+
 private:
 	double WrapDistance(double DistanceAlongTrack) const;
 
@@ -438,6 +461,18 @@ private:
 
 	void PlaceObserverAboveSkidMarkPair();
 
+	void StartDriving();
+
+	void StopDriving();
+
+	AWheeledVehiclePawn* SpawnVehicleNearTheCamera(const APlayerController& Controller);
+
+	void SetDriveMappingContext(const APlayerController& Controller, bool bAdd) const;
+
+	void ParkTheDrivenVehicle() const;
+
+	void ReadAndDrawTheDrivenWheels();
+
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<USplineComponent> Spline;
 
@@ -464,6 +499,13 @@ private:
 	TArray<FSurfaceStateSample> LeaderWheelSamples;
 
 	TWeakObjectPtr<ASplineFollowingCar> Leader;
+
+	TWeakObjectPtr<AWheeledVehiclePawn> DrivenVehicle;
+
+	TWeakObjectPtr<APawn> FlyPawn;
+
+	bool bDriving = false;
+
 
 	bool bFieldPaused = false;
 
