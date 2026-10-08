@@ -1148,6 +1148,13 @@ void ARacetrackCircuit::StartDriving()
 	ApplyTimeDilation(1.0f);
 
 	FlyPawn = Observer;
+
+	if (Observer != nullptr)
+	{
+		Observer->SetActorHiddenInGame(true);
+		Observer->SetActorEnableCollision(false);
+	}
+
 	Controller->Possess(Vehicle);
 	SetDriveMappingContext(*Controller, true);
 
@@ -1190,6 +1197,8 @@ void ARacetrackCircuit::StopDriving()
 
 		if (APawn* Observer = FlyPawn.Get())
 		{
+			Observer->SetActorHiddenInGame(false);
+			Observer->SetActorEnableCollision(true);
 			Controller->Possess(Observer);
 		}
 	}
