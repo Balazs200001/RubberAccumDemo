@@ -345,6 +345,14 @@ ARacetrackCircuit::ARacetrackCircuit()
 	Road->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 	Road->bUseAsyncCooking = false;
 
+	EdgeWalls = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("EdgeWalls"));
+	EdgeWalls->SetupAttachment(Spline);
+	EdgeWalls->SetVisibility(false);
+	EdgeWalls->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	EdgeWalls->SetCollisionResponseToAllChannels(ECR_Ignore);
+	EdgeWalls->SetCollisionResponseToChannel(ECC_Vehicle, ECR_Block);
+	EdgeWalls->bUseAsyncCooking = false;
+
 	PerTexelDebugView = CreateDefaultSubobject<UPostProcessComponent>(TEXT("PerTexelDebugView"));
 	PerTexelDebugView->SetupAttachment(Spline);
 	PerTexelDebugView->bUnbound = true;
@@ -1694,8 +1702,14 @@ void ARacetrackCircuit::GenerateRoadMesh()
 	TArray<int32> Triangles;
 	TArray<FLinearColor> VertexColours;
 	TArray<FProcMeshTangent> Tangents;
+	TArray<FVector> LeftEdges;
+	TArray<FVector> RightEdges;
+	TArray<FVector> EdgeUps;
 
 	Vertices.Reserve(RingCount * 2);
+	LeftEdges.Reserve(RingCount);
+	RightEdges.Reserve(RingCount);
+	EdgeUps.Reserve(RingCount);
 	UVs.Reserve(RingCount * 2);
 	Normals.Reserve(RingCount * 2);
 	Triangles.Reserve(SegmentCount * 6);
@@ -1714,10 +1728,16 @@ void ARacetrackCircuit::GenerateRoadMesh()
 		const FVector Forward = Spline->GetDirectionAtDistanceAlongSpline(DistanceFloat, ESplineCoordinateSpace::World);
 
 		const FVector Raised = Centre + Up * RoadHeightAboveSpline;
+		const FVector LeftEdge = Raised - Right * HalfWidth;
+		const FVector RightEdge = Raised + Right * HalfWidth;
 		const double AlongTrack = Distance / Length;
 
-		Vertices.Add(WorldToLocal.TransformPosition(Raised - Right * HalfWidth));
-		Vertices.Add(WorldToLocal.TransformPosition(Raised + Right * HalfWidth));
+		Vertices.Add(WorldToLocal.TransformPosition(LeftEdge));
+		Vertices.Add(WorldToLocal.TransformPosition(RightEdge));
+
+		LeftEdges.Add(LeftEdge);
+		RightEdges.Add(RightEdge);
+		EdgeUps.Add(Up);
 
 		UVs.Add(FVector2D(AlongTrack, 0.0));
 		UVs.Add(FVector2D(AlongTrack, 1.0));
@@ -1751,6 +1771,69 @@ void ARacetrackCircuit::GenerateRoadMesh()
 	{
 		Road->SetMaterial(0, RoadMaterial);
 	}
+
+	GenerateEdgeWalls(LeftEdges, RightEdges, EdgeUps);
+}
+
+void ARacetrackCircuit::GenerateEdgeWalls(
+	const TArray<FVector>& LeftEdges,
+	const TArray<FVector>& RightEdges,
+	const TArray<FVector>& EdgeUps)
+{
+	if (EdgeWalls == nullptr)
+	{
+		return;
+	}
+
+	EdgeWalls->ClearAllMeshSections();
+
+	const int32 RingCount = LeftEdges.Num();
+
+	if (RingCount < 2 || RightEdges.Num() != RingCount || EdgeUps.Num() != RingCount)
+	{
+		return;
+	}
+
+	const FTransform WorldToLocal = EdgeWalls->GetComponentTransform().Inverse();
+
+	TArray<FVector> Vertices;
+	TArray<int32> Triangles;
+
+	Vertices.Reserve(RingCount * 4);
+	Triangles.Reserve((RingCount - 1) * 12);
+
+	for (int32 Ring = 0; Ring < RingCount; ++Ring)
+	{
+		const FVector Rise = EdgeUps[Ring] * EdgeWallHeight;
+
+		Vertices.Add(WorldToLocal.TransformPosition(LeftEdges[Ring]));
+		Vertices.Add(WorldToLocal.TransformPosition(LeftEdges[Ring] + Rise));
+		Vertices.Add(WorldToLocal.TransformPosition(RightEdges[Ring]));
+		Vertices.Add(WorldToLocal.TransformPosition(RightEdges[Ring] + Rise));
+	}
+
+	for (int32 Segment = 0; Segment < RingCount - 1; ++Segment)
+	{
+		for (int32 Side = 0; Side < 2; ++Side)
+		{
+			const int32 Foot = Segment * 4 + Side * 2;
+			const int32 Top = Foot + 1;
+			const int32 NextFoot = Foot + 4;
+			const int32 NextTop = Top + 4;
+
+			Triangles.Append({ Foot, NextFoot, Top, Top, NextFoot, NextTop });
+		}
+	}
+
+	EdgeWalls->CreateMeshSection_LinearColor(
+		0,
+		Vertices,
+		Triangles,
+		TArray<FVector>(),
+		TArray<FVector2D>(),
+		TArray<FLinearColor>(),
+		TArray<FProcMeshTangent>(),
+		true);
 }
 
 void ARacetrackCircuit::PostInitializeComponents()

@@ -3238,7 +3238,7 @@ bool FRacetrackCircuitSurfaceLookSwitchesRoadMaterial::RunTest(const FString& Pa
 	Track->PostInitializeComponents();
 	Track->DispatchBeginPlay();
 
-	UProceduralMeshComponent* Road = Track->FindComponentByClass<UProceduralMeshComponent>();
+	UProceduralMeshComponent* Road = Track->GetRoad();
 	UPostProcessComponent* PerTexelDebugView = Track->FindComponentByClass<UPostProcessComponent>();
 	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
 	UTextureRenderTarget2D* Target = Subsystem != nullptr ? Subsystem->GetOrCreateAccumulationTarget() : nullptr;
