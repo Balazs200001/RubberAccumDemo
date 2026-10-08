@@ -1685,3 +1685,80 @@ material's thumbnail renders as a lit, textured sphere,
 Not verified at this point: the material on the road with the tile counts set and rubber on it,
 under Lumen in a running demo, which needs the C++ built into the editor target; and the cooked
 shader.
+
+## 2026-10-08 — C11.2 and C11.8: the Vehicle feature pack, and the circuit set to drive its sports car
+
+[C11.2](https://github.com/Balazs200001/RubberAccumDemo/issues/120) and
+[C11.8](https://github.com/Balazs200001/RubberAccumDemo/issues/126).
+
+### The import, done by the user in the editor
+
+MCP has no tool that adds a feature pack, so the user did it by hand:
+**Content Browser → + Add → Add Feature or Content Pack… → Blueprint → Vehicle → Add to Project**.
+It installs `Engine/../FeaturePacks/TP_VehicleAdvBP.upack` by copying `Templates/TP_VehicleAdvBP/Content`
+into the project. It added 152 files, about 44 MB, under:
+
+| Folder | What it holds |
+|---|---|
+| `/Game/VehicleTemplate/` | The Blueprints (`BP_VehicleAdvPawnBase`, `BP_VehicleAdvSportsCar`, `BP_VehicleAdvOffroadCar`, `BP_VehicleAdvGameMode`, `BP_VehicleAdvPlayerController`, the wheel Blueprints, the torque curves), the input (`IMC_Vehicle_Default`, `IMC_Vehicle_MouseLook`, `IMC_SteeringWheel`, `IA_Throttle`, `IA_Brake`, `IA_Steering`, `IA_Handbrake`, `IA_LookAround`, `IA_ToggleCamera`, `IA_Reset`, `IA_Headlights`), the touch UI, and the two template maps `Lvl_VehicleBasic` and `VehicleBasic` with their materials and meshes |
+| `/Game/Vehicles/` | The shared vehicle content: the sports car's and offroad car's meshes, materials, textures and physical materials. About 40 MB of the 44 |
+| `/Game/Input/` | A shared input pack: actions and touch |
+| `/Game/__ExternalActors__/` and `/Game/__ExternalObjects__/` | `Lvl_VehicleBasic`'s actors, saved one file per actor |
+
+**The import also rewrote `Config/DefaultInput.ini`.** That is
+`Engine/Source/Editor/UnrealEd/Private/Factories/PackFactory.cpp:281-348`, which saves the whole input
+settings object. It added 22 legacy action and axis mappings (Handbrake, SwitchCamera, ResetVR,
+MoveForward, MoveRight, LookUp, LookRight), 3 gesture axis configs and 3 settings lines.
+
+**Reverted with `git checkout -- Config/DefaultInput.ini`, as the user decided.** Before the revert:
+- Nothing in `Source/` uses those mapping names.
+- `BP_VehicleAdvPawnBase`'s event graph, read back with `read_graph_dsl`, listens only to Enhanced
+  Input events (`IA_Throttle`, `IA_Steering`, `IA_Brake`, `IA_Handbrake`, `IA_LookAround`,
+  `IA_ToggleCamera`, `IA_Reset`) and touch events, and no legacy axis or action events.
+
+The running editor still holds the added mappings in memory until it restarts, which is harmless. If
+anyone saves Project Settings → Input before then, they are written back. Check `git status` after.
+
+### What the car is, read back over MCP
+
+- `BP_VehicleAdvSportsCar`'s parent is `BP_VehicleAdvPawnBase`, whose parent is
+  `/Script/ChaosVehicles.WheeledVehiclePawn`. No template C++ is involved.
+- `AutoPossessPlayer` is `Disabled` and `AutoPossessAI` is `PlacedInWorld`, so a spawned car is
+  neither possessed nor given an AI controller by itself.
+- `VehicleMovementComp.WheelSetups`, in index order:
+
+| Index | Bone | Wheel class | Radius | Width | Max brake torque | Handbrake |
+|---|---|---|---|---|---|---|
+| 0 | `Phys_Wheel_FL` | `SportsCar_WheelsFront` | 39 cm | 35 cm | 4500 | no |
+| 1 | `Phys_Wheel_FR` | `SportsCar_WheelsFront` | 39 cm | 35 cm | 4500 | no |
+| 2 | `Phys_Wheel_BL` | `SportsCar_WheelsRear` | 40 cm | 40 cm | 1500 | 6000 |
+| 3 | `Phys_Wheel_BR` | `SportsCar_WheelsRear` | 40 cm | 40 cm | 1500 | 6000 |
+
+This is the same order as `ASplineFollowingCar`'s `FrontLeft, FrontRight, RearLeft, RearRight`
+(`Source/RubberAccumDemo/SplineFollowingCar.h:13-16`), so the overlay's four slots match by index. The
+contact width written to the surface is each wheel's own `WheelWidth`, 35 cm front and 40 cm rear.
+
+**`IMC_Vehicle_Default`'s keyboard bindings**, read from `DefaultKeyMappings`: W and Up throttle, S and
+Down brake, A, D, Left and Right steering, SpaceBar handbrake, Tab camera toggle, BackSpace reset, and
+L headlights. The rest are gamepad and VR. **The drive key is F**, chosen by the user from the keys
+free in this context, in the circuit's own keys (`. , ] [ P M N C V`), in the fly pawn's and in the
+engine's `DebugExecBindings`. It is bound in host commit `4592d82`.
+
+Mouse look while driving is not wired. That is `IMC_Vehicle_MouseLook`, a second context; the host
+adds only `IMC_Vehicle_Default`.
+
+### `L_SpaHarness`: two new overrides on `RacetrackCircuit_0`
+
+| Property | Was | Now |
+|---|---|---|
+| `DriveVehicleClass` | None | `/Game/VehicleTemplate/Blueprints/SportsCar/BP_VehicleAdvSportsCar.BP_VehicleAdvSportsCar_C` |
+| `DriveMappingContext` | None | `/Game/VehicleTemplate/Input/IMC_Vehicle_Default.IMC_Vehicle_Default` |
+
+Both were read back after setting. The level was saved, and `git status` showed only
+`Content/Maps/L_SpaHarness.umap` modified.
+
+Read back unchanged at the same time: `Layout` Spa, `AuthoredLayoutLapLength` 180000, `TrackWidth`
+800, `RoadSegmentLength` 128, `EdgeWallHeight` 150, `CarCount` 20, `ElevationExaggeration` 2.5. The
+drive calibration values were left at their class defaults, which are uncalibrated placeholders.
+
+**Not verified here:** the car in PIE, which is the next step.
