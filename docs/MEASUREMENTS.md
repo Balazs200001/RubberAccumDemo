@@ -4008,3 +4008,93 @@ layout, the fold is about 20 cm of lap, 13 cm inside the half width.
   looked.
 - The walls against a real car, and whether 150 cm holds on Spa's crests. That is C11.5 onward, in PIE.
 
+## 2026-10-08 — H1 baseline: the marble band against the lit asphalt, same camera, longest apex
+
+[H1](https://github.com/Balazs200001/RubberAccumDemo/issues/73) starts from what the asphalt shows
+of marbles today. E4 recorded that the marble band does not show on it at the defaults. This
+repeats that with a fixed camera, so the two stills are pixel-aligned and can be compared column by
+column rather than as "the same place".
+
+```
+Build:    Development, editor target run as UnrealEditor.exe -game, windowed 1600x900.
+          Host b586a12, plugin ec4209e, Build.bat reported the target up to date
+Power:    MAINS, BatteryStatus.PowerOnline True before the first run and before the retake
+Scene:    /Game/Maps/L_SpaHarness, twenty cars, Spa layout at 180000 cm, 800 cm wide, 3.125 cm per texel
+Driven:   entirely from -ReleaseField and -ExecCmds, no keyboard. One process per still, grabbed
+          80 s after launch, then killed
+Settings: r.RacetrackSurface.DepositionScale 32, RacetrackDemo.TimeDilation 20,
+          r.RacetrackSurface.DrawQueryOverlay 0, RacetrackDemo.SkidMarkPair 900, then per still below
+Capture:  PrintWindow of the game window's own client area, PW_CLIENTONLY | PW_RENDERFULLCONTENT
+Logs:     C:/RSBuild/h1-0-debug-marbles.log, C:/RSBuild/h1-0-asphalt-2.log
+```
+
+**The camera.** `RacetrackDemo.SkidMarkPair 900` is used only for the camera it parks. After 900 s
+of track time, about 11.2 laps, it lays its two lockup marks at the middle of the longest apex and
+puts the observer over them: 560 cm from their midpoint at 60 degrees, looking along the track. Both
+runs logged the pair 99630 cm round the lap, on the line at alpha -0.2617 and -0.2695, off it at
+0.2383 and 0.2305, so the two cameras differ by the 6 cm the most rubbered texel moved between runs.
+The marks themselves are in both stills, which is the cost of using that camera.
+
+Two stills in [`assets/media/`](../../2627-Y3A-PR-243663/assets/media/):
+
+| Still | Added to the settings |
+|---|---|
+| `h1-debug-marble-channel-longest-apex-32x-deposition` | `RacetrackDemo.Channel 3` |
+| `h1-asphalt-longest-apex-32x-deposition` | `RacetrackDemo.SurfaceLook 1` |
+
+**One run was discarded.** The first asphalt run framed mostly sky: the user was moving the camera
+in the game window while it ran. It was retaken with nobody touching the window, and that retake is
+the still above. The discarded image was never copied out of the scratchpad.
+
+### The profile across the road
+
+Each value is the mean over rows 560 to 620, in a 40 px column block sampled every 4 px and every
+2 rows. Coverage is the debug blue over the blue ceiling of 210.26, which the W3.2 calibration makes
+linear to within 1.4 levels. Luma is Rec. 709 weights on the 8-bit asphalt still. The road spans
+about x 150 to 1420 at these rows; the rest is sky.
+
+| x | Debug blue | Marble coverage | Asphalt luma |
+|---|---|---|---|
+| 160 | 4.2 | 0.02 | 96.8 |
+| 200 | 0.0 | 0.00 | 98.6 |
+| 240 | 0.0 | 0.00 | 101.3 |
+| 280 | 3.0 | 0.01 | 108.8 |
+| 320 | 29.3 | 0.14 | 116.4 |
+| 440 | 46.4 | 0.22 | 143.8 |
+| 600 | 41.2 | 0.20 | 177.2 |
+| 760 | 82.9 | 0.39 | 158.2 |
+| 800 | 175.0 | 0.83 | 124.9 |
+| 840 | 206.4 | 0.98 | 102.6 |
+| 880 | 201.8 | 0.96 | 103.0 |
+| 960 | 179.3 | 0.85 | 109.6 |
+| 1040 | 172.3 | 0.82 | 103.3 |
+| 1120 | 147.2 | 0.70 | 102.4 |
+| 1200 | 115.8 | 0.55 | 100.2 |
+| 1280 | 82.7 | 0.39 | 97.4 |
+| 1360 | 57.1 | 0.27 | 92.0 |
+| 1400 | 44.5 | 0.21 | 88.6 |
+
+**Reading.** In the band's core, at 0.82 to 0.98 marble coverage, the asphalt reads 103 to 110. On
+the strip inside the line with no marbles at all it reads 97 to 101. **Full marbles leave the
+asphalt no darker than bare asphalt, and a few levels lighter.** That is what the material
+predicts: at full marbles the base colour is `lerp(scan, MarbleColour 0.022, 0.8)`, about 0.0206
+against the scan's 0.015 mean, so 37 % *lighter* albedo, and roughness goes from the scan's 0.80 to
+0.95, matte to slightly more matte. The fall from 103 to 89 over x 1040 to 1400 follows the falling
+coverage but also the changing view angle toward the outer edge, and one still cannot separate the
+two.
+
+Observed, not E4's verdict: the band from x 320 to 760, which holds the on-line mark the circuit put
+on the most rubbered texel, reads 116 to 177, brighter than anything else on the road. Both
+lockup marks read as bright stripes. From this camera the lowered roughness reflects the sky, so
+rubber and skid read *lighter* than the asphalt rather than darker.
+
+The marble channel shows a dark stripe along the off-line mark: its lockup contact swept the
+marbles under it, as G6's sweep should.
+
+**Not verified:** any of this at the default deposition of 1x, where the marble band holds less
+than these near-saturated values; the rubber channel at this apex, which was not captured; whether
+the map renders with Lumen; one GPU and driver. The game's frame counter reached 268 and 278
+frames 45 s after frame 0 in the two kept runs, about 6 frames a second at 20x time dilation. That
+is a counter read from the log, on mains, with whether the window had the foreground not recorded,
+not a profiled frame time, and its cause was not investigated.
+
