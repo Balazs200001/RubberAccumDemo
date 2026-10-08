@@ -4323,3 +4323,110 @@ temporary `MarblePresenceGain` on the asphalt. Neither was done in this session.
 **Not verified:** the cause above; whether the pellets read as marbles, which is the user's call;
 frame cost; shimmer at a distance; one GPU and driver.
 
+**Resolved the same day, in the next entry.** The asphalt was right and the debug view was wrong. On
+the `-game` screen the debug view shows coverage well above what the buffer holds, so "0.41 to
+0.52 in the debug still" was never the true coverage. The 1x pellets were sparse because the band
+held about 0.145 coverage.
+
+## 2026-10-08 — The marble rate against the rubber rate, read from the buffer, and set to match
+
+The user's reading of the 1x pellets: *"very little marbles get put down compared to the other
+channels. It should probably reach the maximum at the same time as the red channel, meaning the
+racing line edge is 1.0 when the racing line gets to 1.0."*
+
+```
+Build:    Development editor target as UnrealEditor.exe -game, the editor closed. Host from 2424ccf on,
+          plugin 4dca82a for the final run; the marble rate stated per run below
+Power:    MAINS, BatteryStatus.PowerOnline True at each launch: 15:49:37, 15:53:51, 17:38:34, 18:16:17 local
+Scene:    as the H1 baseline: L_SpaHarness, twenty cars, Spa layout, the longest-apex camera
+Settings: RacetrackDemo.TimeDilation 20, r.RacetrackSurface.DrawQueryOverlay 0,
+          RacetrackDemo.SkidMarkPair 3600, deposition at its 1x default, then per run below
+Logs:     C:/RSBuild/h1-7-debug-rubber-1x.log, h1-7-debug-marbles-1x.log, h1-8-asphalt-1x.log,
+          h1-9-asphalt-1x.log; tests C:/RSBuild/h1-6-tests.log and h1-9-tests.log
+```
+
+### The instrument: the buffer, not the screen
+
+`LaySkidMarkPair` already reads the whole slice across the longest apex,
+`ReadRenderTargetRawPixelArea` over 256 texels of raw exposure, before it lays the pair. Host commit
+`2424ccf` logs that slice's peak rubber and peak marbles. The read happens at 3600 s of track time,
+about 45 laps, at the same place the camera looks.
+
+**The debug view overstates coverage on the `-game` screen.** The two 1x debug stills below were
+taken with the marble rate at `8.0e-5`. Measured as in the H1 baseline, with block means over rows
+560 to 620:
+
+| Channel | On screen, peak 40 px block | In the buffer, peak texel of the slice |
+|---|---|---|
+| Rubber | **0.88** coverage, x 600 | 0.4312 exposure, **0.725** coverage, the on-line pair texel in the same run |
+| Marbles, at `8.0e-5` | **0.61**, x 840 | 0.0832 exposure, **0.221** coverage, in the next run, at the same rate |
+
+A block mean cannot exceed the peak texel under it, so the screen is above the buffer in both
+channels: by 0.16 in rubber and by 0.39 in marbles. Low coverage is lifted the most. **W3.2's
+calibration, which held in the headless capture, does not hold on this screen.** Why not is not
+investigated here; it is W3's (#18). Every coverage in the H1 entries above that was read off a
+debug still is a screen value, not a buffer value. The H1 baseline's 0.52 marble core was about
+0.145 in the buffer: 0.0832 / 1.6, given the linearity below.
+
+### Linearity
+
+`RubberAccumDemo.Demo.MarblesReachTheBufferOnTheFoldedLayout` reads the buffer itself.
+
+| `MarbleExposurePerUnitSlip` | Peak marble exposure | Ratio to `5.0e-5` | Peak buildup |
+|---|---|---|---|
+| `5.0e-5`, `c11-4-tests.log` | 0.017532 | 1 | 0.287550 |
+| `8.0e-5`, `h1-6-tests.log` | 0.028051 | 1.600 | 0.287550 |
+| `3.75e-4`, `h1-9-tests.log` | 0.131491 | 7.500 | 0.287550 |
+
+**Exactly linear, and rubber untouched.** The sweep is multiplicative and the decay linear, so a
+scale on the rate scales the marble field. The test's own ratio, marbles at a tenth of rubber at
+`5e-5`, is not used to set the rate. Its 96 columns are spread round the lap, while marbles gather
+only in corners, so it can miss the band's peak.
+
+### Setting the rate
+
+At the longest apex, about 45 laps:
+
+| Rate | Peak rubber | Peak marbles | Rubber over marbles |
+|---|---|---|---|
+| `8.0e-5`, `h1-8` | 0.388795 (0.6885) | 0.083172 (0.2208) | 4.67 |
+| `5.0e-5`, inferred by linearity | | 0.05198 (0.1441) | 7.48 |
+| **`3.75e-4`**, `h1-9` | 0.397884 (0.6969) | **0.386320 (0.6862)** | **1.03** |
+
+**`MarbleExposurePerUnitSlip` is now `3.75e-4`, 7.5 times decision D's `5.0e-5`.** That is the
+measured ratio, rounded. Plugin commit `4dca82a`, host bump `03cc12e`. At the longest apex the
+band's peak now holds what the line's peak holds, 0.686 against 0.697 coverage.
+
+**What this matches and what it does not:**
+
+- It is matched at **one apex and one lap count**. Marbles are swept by tyres and rubber is not, so
+  their growth curves differ in shape, and the match will drift either side of 45 laps.
+- It **replaces decision D's calibration**, "the four fans carry exactly what G's one deposit
+  carried", with "the band peaks with the line". The amendment is on #18.
+- `SurfaceMarbleFanTests`'s own `5.0e-5` is a precision check of the canvas blend at that
+  increment, not a copy of the rate. A larger increment is the easier case, so it stands.
+
+### On screen
+
+| Still | Rate | Look |
+|---|---|---|
+| `h1-debug-rubber-channel-longest-apex-1x-deposition-57-laps` | `8.0e-5` | debug, rubber |
+| `h1-debug-marble-channel-longest-apex-1x-57-laps-marble-rate-8e-5` | `8.0e-5` | debug, marbles |
+| `h1-step2-pellets-gain-1-radius-055-1x-57-laps-marble-rate-8e-5` | `8.0e-5` | lit asphalt |
+| `h1-step2-pellets-gain-1-radius-055-1x-57-laps-marble-rate-3p75e-4` | `3.75e-4` | lit asphalt |
+
+All four use `MF_MarbleLayer` at gain 1.0 and radius 0.55 (`59f4150`). At `3.75e-4` the band just
+outside the line carries pellets densely and thins toward the outer edge; the line and the inside
+carry almost none. Whether it reads as marbles is the user's call.
+
+### Checks
+
+- `BuildPlugin` succeeded at both `8.0e-5` and `3.75e-4`, packaged to `C:/RSBuild/PluginPkg`.
+- `Build.bat` succeeded for every run above.
+- The full suite, `RacetrackSurface+RubberAccumDemo`, passed 137 of 137 at both rates, with the
+  editor closed.
+
+**Not verified:** the match at other lap counts and at other corners; why the debug view lifts
+coverage on screen; the query overlay's marble readout, which reads the same buffer and is now 7.5
+times higher; frame cost; one GPU and driver.
+
