@@ -9,8 +9,10 @@
 #include "GameFramework/DefaultPawn.h"
 #include "HAL/PlatformTime.h"
 #include "ProceduralMeshComponent.h"
+#include "SurfaceAccumulationMapping.h"
 #include "../RacetrackCircuit.h"
 #include "../SplineFollowingCar.h"
+#include "../WheelSurfaceSlip.h"
 
 namespace RubberAccumDemoVehicleTest
 {
@@ -871,6 +873,76 @@ bool FVehicleWallsStopOnlyVehicles::RunTest(const FString& Parameters)
 
 	FlyCamera->Destroy();
 	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVehicleWheelSlipMapsToSurfaceSlip,
+	"RubberAccumDemo.Vehicle.WheelSlipMapsToSurfaceSlip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleWheelSlipMapsToSurfaceSlip::RunTest(const FString& Parameters)
+{
+	FWheelSlipCalibration Calibration;
+	Calibration.FullRubberSlipRatio = 0.2f;
+	Calibration.FullRubberSlipAngle = 0.15f;
+	Calibration.LockedWheelSpeedFraction = 0.1f;
+	Calibration.SlowestSkiddingGroundSpeed = 100.0f;
+
+	auto Reading = [](float BrakeTorque, float SlipMagnitude, float SlipAngle, float GroundSpeed)
+	{
+		FWheelSlipReading Wheel;
+		Wheel.BrakeTorque = BrakeTorque;
+		Wheel.SlipMagnitude = SlipMagnitude;
+		Wheel.SlipAngle = SlipAngle;
+		Wheel.GroundSpeed = GroundSpeed;
+		return Wheel;
+	};
+
+	auto Slip = [&Calibration](const FWheelSlipReading& Wheel)
+	{
+		return WheelSurfaceSlip::SurfaceSlipFromWheel(Wheel, Calibration);
+	};
+
+	TestEqual(TEXT("A braked wheel turning at 2.5 % of road speed is locked and gives 1"),
+		Slip(Reading(1500.0f, -1950.0f, 0.0f, 2000.0f)), 1.0f);
+
+	TestEqual(TEXT("A free-rolling wheel gives 0"),
+		Slip(Reading(0.0f, 0.0f, 0.0f, 2000.0f)), 0.0f);
+
+	const float Cornering = Slip(Reading(0.0f, 0.0f, 0.05f, 2000.0f));
+
+	TestTrue(TEXT("A cornering wheel lays rubber strictly between free rolling and a lockup"),
+		Cornering > 0.0f && Cornering < 1.0f);
+
+	TestFalse(TEXT("A braked wheel still turning at 20 % of road speed is not a lockup, however hard it slips"),
+		RacetrackSurfaceMapping::IsLockup(Slip(Reading(1500.0f, -1600.0f, 0.0f, 2000.0f))));
+
+	TestFalse(TEXT("A braked wheel below the slowest skidding speed is not a lockup"),
+		RacetrackSurfaceMapping::IsLockup(Slip(Reading(1500.0f, -50.0f, 0.0f, 50.0f))));
+
+	int32 UnbrakedReadings = 0;
+	int32 UnbrakedLockups = 0;
+
+	for (float SlipMagnitude = -3000.0f; SlipMagnitude <= 3000.0f; SlipMagnitude += 250.0f)
+	{
+		for (float SlipAngle = 0.0f; SlipAngle <= HALF_PI; SlipAngle += 0.1f)
+		{
+			for (const float GroundSpeed : { 0.0f, 50.0f, 500.0f, 2000.0f, 5000.0f })
+			{
+				++UnbrakedReadings;
+				UnbrakedLockups += RacetrackSurfaceMapping::IsLockup(Slip(Reading(0.0f, SlipMagnitude, SlipAngle, GroundSpeed)))
+					? 1
+					: 0;
+			}
+		}
+	}
+
+	TestEqual(
+		FString::Printf(TEXT("None of %d readings without brake torque is ever a lockup"), UnbrakedReadings),
+		UnbrakedLockups,
+		0);
 
 	return true;
 }
