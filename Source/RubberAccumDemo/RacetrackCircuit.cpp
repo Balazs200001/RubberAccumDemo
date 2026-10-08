@@ -1413,14 +1413,15 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::N, IE_Pressed, this, &ARacetrackCircuit::DecaySlower);
 	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARacetrackCircuit::CycleDebugView);
 	InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ARacetrackCircuit::ToggleSurfaceLook);
+	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ARacetrackCircuit::ToggleDriving);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
 			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
 			"%.0fx of the derived rate. Press M and N for how fast it fades, between off and %.0fx of a "
 			"%.0f lap half-life, which is %.0f s on this layout. Press C to look at one accumulation "
-			"channel at a time. Press V to switch between the debug view and the lit asphalt. "
-			"W A S D, Q E and the mouse fly the camera at all times"),
+			"channel at a time. Press V to switch between the debug view and the lit asphalt. Press F to "
+			"drive the car and F again for the fly camera. W A S D, Q E and the mouse fly the camera"),
 		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
@@ -1433,7 +1434,7 @@ void ARacetrackCircuit::BindTimeControls()
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		this,
 		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt"));
+		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   F drive"));
 }
 
 void ARacetrackCircuit::DepositFaster()
