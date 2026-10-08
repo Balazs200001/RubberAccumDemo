@@ -2045,3 +2045,32 @@ the marble coverage the debug view shows in the same pixels should give. The cau
 See `MEASUREMENTS.md`. Also not verified: whether it reads as marbles, which is the user's
 judgement; the frame cost of the 3x3 search; shimmer at a distance, where a pellet is under a
 pixel; the cooked shader.
+
+---
+
+## 2026-10-08 — H1 step 2 amended: presence gain 1.0, pellets 22 % bigger
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. Two parameter defaults only. No nodes or
+connections changed. Recompiled with no material error in the log, saved, verified not dirty, and
+`M_SurfaceAsphalt` not dirty either. `git status` showed only this `.uasset`. Commit `59f4150`.
+
+Made via: `ObjectTools.get_properties` and `set_properties`, `MaterialTools.recompile`,
+`AssetTools.save_assets` with the one path, `AssetTools.is_dirty` on both materials, and
+`LogsToolset.GetLogEntries`.
+
+| Node | Parameter | Before | After | Asked for |
+|---|---|---|---|---|
+| `MaterialExpressionScalarParameter_2` | `MarblePresenceGain` | 2.0 | **1.0** | *"Make the gain 1.0"*. Fill now rises linearly with coverage up to 1.0 instead of saturating at 0.5, so the band's density keeps following its coverage |
+| `MaterialExpressionScalarParameter_1` | `MarblePelletMaxRadius` | 0.45 | **0.55** of a cell | *"the pellets could be a little bigger so they are easier to see"* |
+
+**Bigger by radius, not by cell size, and why.** A larger `MarblePelletCellCentimetres` would also
+make pellets bigger, but it spaces them further apart: at 5 cm instead of 4 there would be 36 %
+fewer per square metre. A larger radius keeps the count and grows each pellet. At 0.55 of a 4 cm
+cell, a full-size pellet is 4.4 cm across, against 3.6 before. The 3x3 search stays exact for any
+radius under one cell, because a pellet's centre lies in its own cell, so 0.55 is safe. More
+neighbours overlap, which reads as clumping.
+
+**Edits were refused while PIE ran.** The first `AssetTools.is_dirty` calls failed with *"Asset
+does not exist"*. The editor log said why: `LogUtils: Error: The Editor is currently in a play
+mode`. The user had started PIE. Nothing was changed until the user stopped it. Asset tools over
+MCP need PIE stopped, and they report it as a missing asset rather than as play mode.
