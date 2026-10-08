@@ -4153,3 +4153,84 @@ against.
 **Not verified:** the asphalt at 1x, which was not captured because the values it would show are
 the ones being changed; laps beyond about 57.
 
+## 2026-10-08 — H1 step 1: the retuned marble parameters on screen
+
+`M_SurfaceAsphalt` with `MarbleColour` (0.0045, 0.0041, 0.0037) and `MarbleDarkening` 1.0, commit
+`c3ba409`, recorded in `EDITOR_SETUP.md`. Taken with the same method, camera and profile as the H1
+baseline above, so each column compares with the same column there.
+
+```
+Build:    as the baseline: Development editor target as UnrealEditor.exe -game, host c3ba409
+          (its C++ unchanged since b586a12), plugin ec4209e. The editor was open alongside, idle
+Power:    MAINS, BatteryStatus.PowerOnline True at the launch of each run, 14:14:58 and 14:17:12 local
+Logs:     C:/RSBuild/h1-1-asphalt-32x.log, C:/RSBuild/h1-1-asphalt-1x.log
+```
+
+| Still | Settings | Pair laid |
+|---|---|---|
+| `h1-step1-asphalt-longest-apex-32x-deposition` | as the 32x baseline asphalt still, grabbed at 80 s | 99630 cm, alpha -0.2539 and 0.2461 |
+| `h1-step1-asphalt-longest-apex-1x-deposition-57-laps` | as the 1x debug still with `RacetrackDemo.SurfaceLook 1` in place of `Channel 3`, grabbed at 240 s | 99630 cm, alpha -0.2539 and 0.2461, 180 s after frame 0 |
+
+### At 32x, against the baseline asphalt at the same pixels
+
+Coverage is from the 32x debug still.
+
+| x | Marble coverage | Luma before | Luma after |
+|---|---|---|---|
+| 200 | 0.00 | 98.6 | 98.4 |
+| 240 | 0.00 | 101.3 | 100.4 |
+| 440 | 0.22 | 143.8 | 143.9 |
+| 760 | 0.39 | 158.2 | 155.6 |
+| 800 | 0.83 | 124.9 | 106.5 |
+| 840 | 0.98 | 102.6 | **77.2** |
+| 880 | 0.96 | 103.0 | **79.4** |
+| 1000 | 0.86 | 104.0 | 84.5 |
+| 1120 | 0.70 | 102.4 | 89.6 |
+| 1200 | 0.55 | 100.2 | 93.7 |
+| 1240 | 0.47 | 99.2 | 93.9 |
+| 1320 | 0.33 | 94.9 | 93.0 |
+| 1400 | 0.21 | 88.6 | 89.4 |
+
+**Reading.** Where marbles are near full, the band now reads **77 to 79 against 95 to 100 on bare
+asphalt**, about 20 levels darker, where before it was a few levels lighter. The drop follows
+coverage: about 25 levels at 0.96 to 0.98, 6 at 0.47 to 0.55, 2 at 0.33, none at 0.21. Bare
+asphalt and the rubbered line move by under 3 levels, except x 720, which drops 8 levels, from
+162.2 to 153.8, at 0.26 coverage on the line's outer edge.
+
+### At 1x, the demo's deposition
+
+Coverage is from the 1x debug still. No asphalt still at 1x exists from before the change, so
+there is no before column.
+
+| x | Marble coverage | Luma after |
+|---|---|---|
+| 200 | 0.00 | 99.6 |
+| 240 | 0.00 | 101.7 |
+| 800 | 0.41 | 115.0 |
+| 840 | 0.52 | 108.5 |
+| 880 | 0.50 | 108.6 |
+| 1000 | 0.43 | 106.8 |
+| 1040 | 0.41 | 105.0 |
+| 1120 | 0.35 | 103.3 |
+| 1200 | 0.29 | 101.9 |
+| 1280 | 0.22 | 98.4 |
+| 1360 | 0.16 | 91.1 |
+
+x 920 and 960 are left out: the off-line lockup mark crosses those columns at 1x, reading 117.9 to
+122.6.
+
+**Reading.** At the demo's deposition the band's core, at 0.41 to 0.52, reads **105 to 109,
+against 96 to 102 on the bare strip inside the line**. On screen it is still not darker than bare
+asphalt. The 32x pairs give the size of the change at this coverage: 5 to 6 levels at 0.47 to 0.55.
+**Step 1 alone moves the demo's band by a few levels, not enough to make it darker than bare road
+elsewhere in the frame.** Why the core sits above the inside strip at all is not separated here:
+the two are in different parts of the frame, so view angle and the sky reflection differ, and the
+band also carries whatever rubber reaches it.
+
+The cause of the shortfall is arithmetic rather than colour. The lerp's alpha is
+`Marbles x MarbleDarkening`, so at 0.52 coverage the surface goes at most 52 % of the way to
+`MarbleColour`, whatever colour that is.
+
+**Not verified:** the 1x change against a 1x before; whether this reads as marbles, which is the
+user's call; one GPU and driver.
+
