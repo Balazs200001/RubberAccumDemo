@@ -108,23 +108,19 @@ namespace RacetrackDrivenVehicle
 
 	constexpr float ChaseCameraHeight = 450.0f;
 
-	constexpr float LengthScale = Scale;
-
-	constexpr float SpringRateScale = Scale * Scale;
-
-	constexpr float ForceScale = Scale * Scale * Scale;
-
-	constexpr float TorqueScale = ForceScale * Scale;
-
-	void ScaleTheBodyBeforeSpawning(UChaosWheeledVehicleMovementComponent& Movement)
+	float SteerAngleForTheSameTurningCircle(float FullSizeAngleDegrees)
 	{
-		Movement.Mass *= ForceScale;
-		Movement.ChassisWidth *= LengthScale;
-		Movement.ChassisHeight *= LengthScale;
-		Movement.EngineSetup.MaxTorque *= TorqueScale;
+		return FMath::RadiansToDegrees(
+			FMath::Atan(FMath::Tan(FMath::DegreesToRadians(FullSizeAngleDegrees)) * Scale));
 	}
 
-	void ScaleTheWheels(UChaosWheeledVehicleMovementComponent& Movement)
+	void KeepTheFullSizeBodyDynamicsBeforeSpawning(UChaosWheeledVehicleMovementComponent& Movement)
+	{
+		Movement.InertiaTensorScale /= Scale;
+		Movement.TransmissionSetup.FinalRatio *= Scale;
+	}
+
+	void KeepTheFullSizeWheelDynamics(UChaosWheeledVehicleMovementComponent& Movement)
 	{
 		for (int32 Wheel = 0; Wheel < Movement.Wheels.Num(); ++Wheel)
 		{
@@ -135,14 +131,14 @@ namespace RacetrackDrivenVehicle
 				continue;
 			}
 
-			Setup->WheelRadius *= LengthScale;
-			Setup->WheelWidth *= LengthScale;
-			Setup->SuspensionMaxRaise *= LengthScale;
-			Setup->SuspensionMaxDrop *= LengthScale;
-			Setup->SpringRate *= SpringRateScale;
-			Setup->SpringPreload *= ForceScale;
-			Setup->MaxBrakeTorque *= TorqueScale;
-			Setup->MaxHandBrakeTorque *= TorqueScale;
+			Setup->WheelRadius *= Scale;
+			Setup->WheelWidth *= Scale;
+			Setup->SuspensionMaxRaise *= Scale;
+			Setup->SuspensionMaxDrop *= Scale;
+			Setup->SpringRate /= Scale;
+			Setup->MaxBrakeTorque *= Scale;
+			Setup->MaxHandBrakeTorque *= Scale;
+			Setup->MaxSteerAngle = SteerAngleForTheSameTurningCircle(Setup->MaxSteerAngle);
 
 			Movement.SetWheelRadius(Wheel, Setup->WheelRadius);
 			Movement.SetSuspensionParams(
@@ -154,6 +150,7 @@ namespace RacetrackDrivenVehicle
 				Wheel);
 			Movement.SetWheelMaxBrakeTorque(Wheel, Setup->MaxBrakeTorque);
 			Movement.SetWheelHandbrakeTorque(Wheel, Setup->MaxHandBrakeTorque);
+			Movement.SetWheelMaxSteerAngle(Wheel, Setup->MaxSteerAngle);
 		}
 	}
 
@@ -1235,14 +1232,14 @@ AWheeledVehiclePawn* ARacetrackCircuit::SpawnVehicleNearTheCamera(const APlayerC
 
 	if (Movement != nullptr)
 	{
-		RacetrackDrivenVehicle::ScaleTheBodyBeforeSpawning(*Movement);
+		RacetrackDrivenVehicle::KeepTheFullSizeBodyDynamicsBeforeSpawning(*Movement);
 	}
 
 	Vehicle->FinishSpawning(SpawnTransform);
 
 	if (Movement != nullptr)
 	{
-		RacetrackDrivenVehicle::ScaleTheWheels(*Movement);
+		RacetrackDrivenVehicle::KeepTheFullSizeWheelDynamics(*Movement);
 	}
 
 	RacetrackDrivenVehicle::AimTheChaseCamera(*Vehicle);
