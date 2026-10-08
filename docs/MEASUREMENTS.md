@@ -4093,8 +4093,12 @@ marbles under it, as G6's sweep should.
 
 **Not verified:** any of this at the default deposition of 1x, where the marble band holds less
 than these near-saturated values; the rubber channel at this apex, which was not captured; whether
-the map renders with Lumen; one GPU and driver. The game's frame counter reached 268 and 278
-frames 45 s after frame 0 in the two kept runs, about 6 frames a second at 20x time dilation. That
-is a counter read from the log, on mains, with whether the window had the foreground not recorded,
-not a profiled frame time, and its cause was not investigated.
+the map renders with Lumen; one GPU and driver; the frame rate.
+
+**Corrected the same day: these logs give no frame rate.** As first committed, this entry read the
+bracketed numbers 268 and 278 on the lines logging the pair as frame counts, and gave about 6 frames
+a second. The bracket is `GFrameCounter % 1000`
+(`Engine/Source/Runtime/Core/Private/Misc/OutputDeviceHelper.cpp:30`), so it wraps every thousand
+frames; `C:/RSBuild/h1-0-debug-marbles-1x.log` has it going from 757 to 274 within 34 s. The true
+counts are 268 or 278 plus an unknown multiple of 1000.
 
