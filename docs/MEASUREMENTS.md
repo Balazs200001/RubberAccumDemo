@@ -4234,3 +4234,92 @@ The cause of the shortfall is arithmetic rather than colour. The lerp's alpha is
 **Not verified:** the 1x change against a 1x before; whether this reads as marbles, which is the
 user's call; one GPU and driver.
 
+## 2026-10-08 — H1 step 2: marble pellets on screen, and a 1x shortfall not yet explained
+
+`MF_MarbleLayer` and the rewired `M_SurfaceAsphalt`, commits `e2e9c52` and `d823698`, recorded in
+`EDITOR_SETUP.md` under *H1 step 2*. Same method, camera and rows as the H1 baseline.
+
+```
+Build:    as the baseline: -game, editor target, host C++ unchanged since b586a12, plugin ec4209e.
+          The editor was open alongside, idle, in every run here
+Power:    MAINS, BatteryStatus.PowerOnline True at each launch: 14:44:46, 14:48:26, 14:55:52, 15:02:31 local
+Logs:     C:/RSBuild/h1-2-pellets-32x.log, h1-3-pellets-capped-1x.log,
+          h1-4-debug-marbles-1x-editor-open.log, h1-5-pellets-capped-32x.log
+```
+
+| Still | Shader | Deposition | Note |
+|---|---|---|---|
+| `h1-step2-pellets-longest-apex-32x-deposition` | presence uncapped | 32x | |
+| `h1-step2-pellets-60pc-cap-longest-apex-32x-deposition` | `MarbleMaxPresence` 0.6 | 32x | |
+| `h1-step2-pellets-60pc-cap-longest-apex-1x-deposition-57-laps` | `MarbleMaxPresence` 0.6 | 1x | V pressed in the window six times, 12:51:11 to 12:51:17 UTC, ending on the asphalt 70 s before the grab |
+| `h1-debug-marble-channel-longest-apex-1x-deposition-57-laps-repeat` | debug view, marbles | 1x | V pressed twice, back on the debug view 5 s before the grab |
+
+The cap went in on the user's request after the uncapped 32x still: *"the pellets are very dense,
+reduce the max density about 40 %"*. The uncapped 1x run was stopped by the user before it ran, so
+there is no uncapped 1x still.
+
+### Dark pellet share across the band
+
+Share of pixels in rows 560 to 620, 40 px blocks, that are more than 15 levels below the block's own
+median luma. The step 1 stills, which have no pellets, are the control.
+
+| x | step 1, 32x | pellets, 32x | capped, 32x | step 1, 1x | capped, 1x |
+|---|---|---|---|---|---|
+| 240 | 0.009 | 0.011 | 0.012 | 0.010 | 0.013 |
+| 800 | 0.118 | 0.325 | 0.297 | 0.040 | 0.065 |
+| 880 | 0.001 | 0.254 | 0.182 | 0.022 | 0.073 |
+| 960 | 0.005 | 0.261 | 0.220 | 0.076 | 0.119 |
+| 1040 | 0.001 | 0.228 | 0.175 | 0.026 | 0.055 |
+| 1120 | 0.008 | 0.216 | 0.155 | 0.042 | 0.052 |
+| 1200 | 0.012 | 0.095 | 0.086 | 0.032 | 0.051 |
+| 1280 | 0.012 | 0.039 | 0.033 | 0.022 | 0.020 |
+
+**At 32x the cap behaves as designed.** In the band core the dark share falls from 0.22 to 0.26 to
+0.16 to 0.22, about three quarters. Fewer pellets overlap at 60 % presence, so area falls less than
+count. Bare asphalt at x 240 is unchanged in every still, so the tarmac between pellets is
+untouched, as asked.
+
+### The 1x shortfall
+
+At 1x the net pellet share in the core is about **0.03 to 0.05**, a quarter or less of the capped
+32x figure. Enlarged crops of x 820 to 1140, y 500 to 680 show why: the 1x pellets are both fewer
+and much smaller, 1 to 2 px across against 5 to 8 px at 32x.
+
+That is not what the measured coverage predicts. The 1x debug still put the core at 0.41 to 0.52.
+With `MarblePresenceGain` 2, fill is saturated from 0.5, so the 1x core should look like the capped
+32x core. **Both size and count follow fill alone in the HLSL, so the layer is behaving as if it
+saw a much lower coverage at 1x than the debug view shows.**
+
+**Ruled out, each by a measurement or a read:**
+
+- **The shader version.** The capped 32x still was taken after the capped 1x still, with the same
+  shader, and shows full-size pellets at about three quarters of the uncapped share.
+- **A frame-rate dependence in how marbles are laid.** `AppendMarbleFan`
+  (`SurfaceAccumulationSubsystem.cpp:1006` and `1021`) scales each fan by
+  `SweptShare = L / (L + W)`, so a texel receives the same total per pass whatever the frame
+  length.
+- **A different marble field when the editor is open.** The repeat 1x debug still, taken with the
+  editor open, matches the first one, taken with it closed, to 0.4 levels at the core: 109.9
+  against 109.5 at x 840, and 92.0 against 91.1 at x 1000.
+- **A different quantity reaching the asphalt.** `MF_SampleRacetrackSurface.Marbles` is
+  `ComponentMask(B)` of the same `OneMinus` that feeds its `Coverage` output, read back over MCP.
+  The debug material displays that `Coverage`.
+- **Keys pressed during the run.** The log shows only `SurfaceLook` changes in the 1x pellet run:
+  no time, deposition, decay or field change.
+- **Contrast against bare tarmac**, as far as the data goes. The band's bare tarmac reads about the
+  same at both depositions, 103 at 32x and 105 to 109 at 1x, so the same pellets should stand out
+  equally. A per-pixel difference against the step 1 still was tried and is dominated by
+  run-to-run noise: 16 to 20 % of pixels change by more than 12 levels even where there are no
+  marbles. It decides nothing.
+
+**Not ruled out:**
+- The dark-share metric under-counting small, anti-aliased pellets.
+- A real difference between what the debug material and the asphalt material sample at 1x.
+
+The second would matter beyond the look, because the query API reads the same buffer. Deciding it
+needs the asphalt's own coverage at 1x, for example a temporary high-contrast `MarbleColour` or a
+temporary `MarblePresenceGain` on the asphalt. Neither was done in this session.
+
+**Not verified:** the cause above; whether the pellets read as marbles, which is the user's call;
+frame cost; shimmer at a distance; one GPU and driver.
+
