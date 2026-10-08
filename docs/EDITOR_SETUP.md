@@ -1762,3 +1762,44 @@ Read back unchanged at the same time: `Layout` Spa, `AuthoredLayoutLapLength` 18
 drive calibration values were left at their class defaults, which are uncalibrated placeholders.
 
 **Not verified here:** the car in PIE, which is the next step.
+
+### Corrected, 2026-10-08: the import broke the sports car, and four meshes were restored
+
+The first drive failed: the car shook violently, flipped and fell off the world. **The cause was the
+editor, not the circuit.** While the pack's files were being copied, the editor's auto-reimport saw
+the FBX source files arrive in `Content/Vehicles/SportsCar/` and reimported four assets from them:
+`SKM_SportsCar`, `SM_SportsCar`, `SM_SportsCar_Glass` and `SM_SportsCar_Wheel`. The log line is
+`AssetReimport: Reimported asset SKM_SportsCar from …/SKM_SportsCar.FBX`. Those reimported versions
+are what `199a348` committed.
+
+**How it was found**, all in Simulate with no player and no input:
+
+| Placed | On | After about 3 s |
+|---|---|---|
+| Sports car | Spa road, spline point 0 | 18 m sideways, 3.6 m up, rolled 83° |
+| Sports car | A plain cube floor (`/Engine/BasicShapes/Cube` scaled to 100 m by 100 m), far below the track | Rose 3.7 m, rolled 100°, fell off |
+| Offroad car, not reimported | The same floor | Settled flat, roll 0.0° |
+
+So the fault was in the car asset, not in the road, the walls or the C++. A byte comparison against
+`Engine/../Templates/TemplateResources/Standard/Vehicles/Content/SportsCar/` showed exactly those
+four `.uasset` files differing. `SKM_SportsCar` was 68653 bytes against the template's 40444. Every
+other file was identical, including `PA_SportsCar` and the FBX sources.
+
+**Fix.** With the user's explicit permission to work in `Content/` with file tools, and with the
+editor closed:
+- The four original `.uasset` files were copied back from the template folder, each checked
+  byte-identical afterwards.
+- The four `.FBX` files were deleted from `Content/Vehicles/SportsCar/`, so nothing can reimport them
+  again. They were never in git, because the root `.gitignore` whitelists file types and FBX is not
+  on the list.
+
+The commit is `3d1388f`.
+
+**Verified after the fix, in Simulate:** the sports car settles on the cube floor (18.5 cm up, pitch
+0.49°, roll −0.10°) and on the Spa road at spline point 0 (19.7 cm above the surface, pitch 1.84°
+from the road's own grade, roll −0.53°). The test actors were removed and the level was not saved.
+
+**For a rebuild from scratch:** before adding the pack, untick **Editor Preferences → General →
+Loading & Saving → Auto Reimport → Monitor Content Directories** (`bMonitorContentDirectories`,
+`Engine/Source/Editor/UnrealEd/Classes/Settings/EditorLoadingSavingSettings.h:128`), or restore the
+four meshes as above afterwards.
