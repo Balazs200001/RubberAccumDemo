@@ -3917,3 +3917,94 @@ The 1.00 cm is `RoadHeightAboveSpline`. On Spa the extra comes from the road bei
 - The cook in a packaged build.
 - The car driving on the road, which is C11.5 onward.
 
+## 2026-10-08 — C11.3 re-taken on mains, C11.4's walls, and where the road's inner edge folds
+
+### Corrected: C11.3's 2.71 ms is not a number of record
+
+The entry above was taken on battery **and** with a `BuildPlugin` compile running alongside the test
+run. Both slow a CPU wall-clock figure, and neither is the standing method. A later battery run that
+also overlapped a compile measured 7.7245 ms for the road. A battery run with nothing else going
+measured 2.9690 ms. **The re-take on mains below is the number of record.**
+
+### The cook on mains
+
+```
+Build:    Development, editor target, headless (standing method)
+Hardware: standing
+Power:    MAINS, read immediately after each run (BatteryStatus PowerOnline true)
+Scene:    L_SpaHarness loaded; the test circuit spawned 3 km below its circuit
+Method:   automation tests RubberAccumDemo.Performance.RoadCollisionCook and .WallCollisionCook,
+          FPlatformTime::Seconds, 64 interleaved samples each way, median reported; nothing else
+          running on the machine
+Command:  -ExecCmds="Automation RunTests RubberAccumDemo.Performance", two runs back to back,
+          logs C:/RSBuild/c11-cook-mains-1.log and -2.log
+Commit:   e29f771
+```
+
+The same method as C11.3: the section is created on a probe component with and without collision,
+and the difference is the cook plus re-creating the body in the physics scene.
+
+| Section | Triangles | Run 1 | Run 2 | Fastest to slowest with collision |
+|---|---|---|---|---|
+| Spa road | 2812 | **2.0494 ms** | **2.0232 ms** | 1.95 to 3.28 ms |
+| Spa edge walls | 5624 | **4.2706 ms** | **4.1946 ms** | 4.06 to 5.43 ms |
+
+**Reading.** About **6.2 ms per road build** for the road and the walls together, paid once in
+`OnConstruction` at load and on `SetLayout`. It is a one-off, not a per-frame hitch, so
+asynchronous cooking is not needed. The walls cost about twice the road because they have twice the
+triangles: two sides, each a quad per segment. The cost is roughly linear in triangle count.
+
+### The walls
+
+`RubberAccumDemo.Vehicle.WallsStandOnTheTrackEdges` reads the walls' own vertices back:
+
+| Layout | Rings | Worst distance off the track edge | Worst foot or top height error | Gap between last and first ring |
+|---|---|---|---|---|
+| Stadium | 243 | 0.0000 cm | 0.0000 cm | 0.0000 cm |
+| Spa | 1407 | 0.0000 cm | 0.0000 cm | 0.0000 cm |
+
+Exact, because the walls are built from the very edge points the road mesh uses, in the same loop.
+
+`RubberAccumDemo.Vehicle.WallsBlockASweepAcrossTheTrack` sweeps a 35 cm sphere on the `Vehicle`
+channel from the centreline outward. That is 66 distances, the 65 of the road test plus half a
+segment before the seam, on both sides, 45 cm above the road:
+
+| Layout | Stopped by the walls | Within 2 cm of the painted edge where it does not fold | Sphere's outer edge, nearest to furthest |
+|---|---|---|---|
+| Stadium | 132 of 132 | 128 of 128 | 391.47 to 412.07 cm |
+| Spa | 132 of 132 | 132 of 132 | 397.70 to 401.17 cm |
+
+Two geometric effects explain every figure outside 400 cm. Neither is a gap.
+
+- **Chords.** The road and the walls are straight between 128 cm rings. On the inside of a bend the
+  chord sits outside the true offset curve, by up to 1.17 cm here. It is the same chord the road mesh
+  paints, so the wall still stands on the painted edge.
+- **Folds.** Where the centreline is tighter than the 400 cm half width, the inner offset curve
+  folds back on itself, in the road mesh and in the walls alike. A sweep there stops on the walls up
+  to 12 cm past the analytic edge. The test reports these and holds them only to stopping on the
+  walls.
+
+### Where the inner edge folds
+
+Found by this work, and **not changed**. It is a property of the two layouts' splines, and the walls
+inherit it from the road. The test scans the centreline every 10 cm, taking the radius from the turn
+in direction over 20 cm:
+
+| Layout | Tightest centreline radius | Samples tighter than 400 cm |
+|---|---|---|
+| Stadium | 234 cm at 30000 cm | 36 of 3093, about 3.6 m of lap, near the corner exits |
+| Spa | 387 cm at 10570 cm | 2 of 18001, about 20 cm of lap |
+
+Stadium's corners are authored at 3000 cm, so 234 cm is the spline's own doing.
+`BuildStadiumPoints` gives each 6000 cm straight only its two end points. The tangent there is
+automatic (`ApplySplinePoints` sets `ESplinePointType::Curve`, which is `CIM_CurveAuto`,
+`Engine/Source/Runtime/Engine/Private/Components/SplineComponent.cpp:481`), so it is long, and it
+bends the curve hard just before each corner ends. On Spa, the demo
+layout, the fold is about 20 cm of lap, 13 cm inside the half width.
+
+**Not verified**
+- The cook in a packaged build.
+- Whether the folds are visible on screen. The road mesh has always had them; nothing here
+  looked.
+- The walls against a real car, and whether 150 cm holds on Spa's crests. That is C11.5 onward, in PIE.
+
