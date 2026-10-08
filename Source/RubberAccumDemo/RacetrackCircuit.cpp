@@ -9,6 +9,7 @@
 #include "InputMappingContext.h"
 #include "SurfaceTrackSpace.h"
 #include "WheeledVehiclePawn.h"
+#include "WheelSurfaceSlip.h"
 #include "Components/PostProcessComponent.h"
 #include "Engine/Engine.h"
 #include "HAL/IConsoleManager.h"
@@ -431,7 +432,7 @@ void ARacetrackCircuit::Tick(float DeltaSeconds)
 
 	if (bDriving)
 	{
-		ReadAndDrawTheDrivenWheels();
+		ReadWriteAndDrawTheDrivenWheels(DeltaSeconds);
 	}
 	else
 	{
@@ -1055,6 +1056,8 @@ void ARacetrackCircuit::StartDriving()
 		Movement->SetHandbrakeInput(false);
 	}
 
+	DrivenWheelPreviousContacts.Reset();
+	DrivenWheelHadContact.Reset();
 	bDriving = true;
 
 	UE_LOG(LogRacetrackSurface, Log, TEXT("%s handed %s to the player"), *GetName(), *Vehicle->GetName());
@@ -1182,7 +1185,7 @@ void ARacetrackCircuit::ParkTheDrivenVehicle() const
 	Movement->SetHandbrakeInput(true);
 }
 
-void ARacetrackCircuit::ReadAndDrawTheDrivenWheels()
+void ARacetrackCircuit::ReadWriteAndDrawTheDrivenWheels(float DeltaSeconds)
 {
 	UWorld* World = GetWorld();
 
@@ -1203,6 +1206,8 @@ void ARacetrackCircuit::ReadAndDrawTheDrivenWheels()
 
 	const int32 WheelCount = FMath::Min(Movement->GetNumWheels(), LeaderWheelQueries.Num());
 
+	DrivenWheelPreviousContacts.SetNum(WheelCount);
+	DrivenWheelHadContact.SetNum(WheelCount);
 	LeaderWheelSamples.SetNum(LeaderWheelQueries.Num());
 
 	FSurfaceTrackCoordinate AtTheCar;
@@ -1217,13 +1222,45 @@ void ARacetrackCircuit::ReadAndDrawTheDrivenWheels()
 		Basis.Along * RacetrackCircuitDisplay::OverlayAheadOfTheCar
 		+ Basis.Across * RacetrackCircuitDisplay::OverlayBesideTheCar;
 
+	FWheelSlipCalibration Calibration;
+	Calibration.FullRubberSlipRatio = DriveFullRubberSlipRatio;
+	Calibration.FullRubberSlipAngle = DriveFullRubberSlipAngle;
+	Calibration.LockedWheelSpeedFraction = DriveLockedWheelSpeedFraction;
+	Calibration.SlowestSkiddingGroundSpeed = DriveSlowestSkiddingGroundSpeed;
+
 	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
 	{
 		const FWheelStatus& State = Movement->GetWheelState(Wheel);
 
 		if (!State.bInContact)
 		{
+			DrivenWheelHadContact[Wheel] = false;
 			continue;
+		}
+
+		const FVector Velocity = DrivenWheelHadContact[Wheel] && DeltaSeconds > UE_SMALL_NUMBER
+			? (State.ContactPoint - DrivenWheelPreviousContacts[Wheel]) / DeltaSeconds
+			: Vehicle->GetVelocity();
+
+		DrivenWheelPreviousContacts[Wheel] = State.ContactPoint;
+		DrivenWheelHadContact[Wheel] = true;
+
+		const UChaosVehicleWheel* WheelSetup =
+			Movement->Wheels.IsValidIndex(Wheel) ? Movement->Wheels[Wheel].Get() : nullptr;
+
+		if (WheelSetup != nullptr)
+		{
+			FWheelSlipReading Reading;
+			Reading.BrakeTorque = State.BrakeTorque;
+			Reading.SlipMagnitude = State.SlipMagnitude;
+			Reading.SlipAngle = State.SlipAngle;
+			Reading.GroundSpeed = static_cast<float>(Velocity.Size());
+
+			Subsystem->RegisterSurfaceContact(
+				State.ContactPoint,
+				Velocity,
+				WheelSurfaceSlip::SurfaceSlipFromWheel(Reading, Calibration),
+				WheelSetup->WheelWidth);
 		}
 
 		LeaderWheelSamples[Wheel] = Subsystem->QuerySurfaceState(LeaderWheelQueries[Wheel], State.ContactPoint);

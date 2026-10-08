@@ -383,9 +383,17 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive", meta = (ClampMin = "0.0"))
 	double DriveSpawnHeight = 50.0;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive", meta = (ClampMin = "0.001"))
+	float DriveFullRubberSlipRatio = 0.1f;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive", meta = (ClampMin = "0.001"))
+	float DriveFullRubberSlipAngle = 0.1f;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float DriveLockedWheelSpeedFraction = 0.1f;
 
+	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Drive", meta = (ClampMin = "0.0"))
+	float DriveSlowestSkiddingGroundSpeed = 200.0f;
 
 private:
 	double WrapDistance(double DistanceAlongTrack) const;
@@ -471,7 +479,7 @@ private:
 
 	void ParkTheDrivenVehicle() const;
 
-	void ReadAndDrawTheDrivenWheels();
+	void ReadWriteAndDrawTheDrivenWheels(float DeltaSeconds);
 
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<USplineComponent> Spline;
@@ -506,6 +514,9 @@ private:
 
 	bool bDriving = false;
 
+	TArray<FVector> DrivenWheelPreviousContacts;
+
+	TArray<bool> DrivenWheelHadContact;
 
 	bool bFieldPaused = false;
 
