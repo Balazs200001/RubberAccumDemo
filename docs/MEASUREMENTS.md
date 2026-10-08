@@ -4102,3 +4102,54 @@ a second. The bracket is `GFrameCounter % 1000`
 frames; `C:/RSBuild/h1-0-debug-marbles-1x.log` has it going from 757 to 274 within 34 s. The true
 counts are 268 or 278 plus an unknown multiple of 1000.
 
+### The marble band at the default 1x deposition, about 57 laps
+
+Taken because H1's step 1 sets presentation values, and G5 showed that a curve set before the
+quantity is read back gets the range wrong. The 32x stills above show the band near saturation,
+which is not what the demo runs at.
+
+```
+Same build, scene, capture and camera as above
+Power:    MAINS, BatteryStatus.PowerOnline True at launch, 14:05:56 local
+Settings: RacetrackDemo.TimeDilation 20, r.RacetrackSurface.DrawQueryOverlay 0,
+          RacetrackDemo.Channel 3, RacetrackDemo.SkidMarkPair 3600. Deposition left at its 1x default
+Grabbed:  240 s after launch
+Log:      C:/RSBuild/h1-0-debug-marbles-1x.log
+```
+
+The pair was laid 180.0 s after frame 0, at 3600 s of track time, so time ran at the full 20x up to
+then. The grab came about 50 s later. **About 57 laps** is therefore wall time at 20x, confirmed to
+45 laps and assumed for the rest. The pair landed 99630 cm round the lap, as at 32x: on the line at
+alpha -0.2461 over rubber 0.388 exposure, off it at 0.2539.
+
+Still: `h1-debug-marble-channel-longest-apex-1x-deposition-57-laps`. Profiled exactly as above:
+
+| x | Debug blue | Marble coverage |
+|---|---|---|
+| 160 | 0.0 | 0.00 |
+| 240 | 0.0 | 0.00 |
+| 320 | 3.0 | 0.01 |
+| 440 | 13.3 | 0.06 |
+| 600 | 27.4 | 0.13 |
+| 760 | 39.6 | 0.19 |
+| 800 | 86.3 | 0.41 |
+| 840 | 109.5 | 0.52 |
+| 880 | 105.2 | 0.50 |
+| 960 | 90.9 | 0.43 |
+| 1040 | 85.6 | 0.41 |
+| 1120 | 74.4 | 0.35 |
+| 1200 | 61.2 | 0.29 |
+| 1280 | 47.3 | 0.22 |
+| 1360 | 32.6 | 0.16 |
+| 1400 | 33.1 | 0.16 |
+
+**Reading.** At the demo's deposition the band runs from **0.52 coverage** just outside the line
+down to **0.16** at the outer edge. The line itself carries 0.01 to 0.19, and the inside strip
+nothing. The same columns read 0.82 to 0.98 at 32x, so the 32x band is saturated and only the 1x
+range is a fair basis for the material's values. G5 measured 0.1 to 0.3 before W2 changed how
+marbles are thrown, so the band now reaches higher than the range the debug dots were calibrated
+against.
+
+**Not verified:** the asphalt at 1x, which was not captured because the values it would show are
+the ones being changed; laps beyond about 57.
+
