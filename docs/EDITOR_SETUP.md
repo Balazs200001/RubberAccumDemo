@@ -2241,3 +2241,157 @@ Not verified:
   probably because pellets look dark mostly through shading, not albedo.
 - The pellet layer's frame cost, before or after.
 - The cooked shader.
+
+---
+
+## 2026-10-12 — H2 amended: pellets drawn out to 1 px a cell with area-kept analytic edges, a tone gain
+
+**Why.** The user drove the 4-to-2 fade and judged it: *"I only see marbles in the [nearest few
+metres] but I want to see it all in the [band out past the car] too."* At the defaults above, the
+chase camera showed pellets only within about 3 m of the camera. The decision is on
+[#74](https://github.com/Balazs200001/RubberAccumDemo/issues/74).
+
+To draw pellets further out without bringing H1's shimmer back, each pellet's edge now comes from
+the pixel's footprint analytically, and keeps the pellet's area. That is the part of option C that
+was not chosen on 2026-10-08.
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. One node added, one Custom input added, one
+connection made, two parameter defaults changed, the Custom node's code replaced. Nothing deleted.
+**Also saved:** `/Game/Materials/M_SurfaceAsphalt`, for the same reason as in the entry above: it
+was recompiled explicitly and re-saved. Its graph is untouched. Host commit `6e9c9e8`.
+
+Made via the same tools as the entry above. `IsPIERunning` returned false, and both assets were not
+dirty and matched their committed state before the edit. There was no material or shader error in
+the log after either recompile. All ten Custom inputs were read back.
+
+| Node | Parameter | Before | After |
+|---|---|---|---|
+| `MaterialExpressionScalarParameter_4` | `MarblePelletFullDetailCellPixels` | 4 | **1** |
+| `MaterialExpressionScalarParameter_5` | `MarblePelletToneOnlyCellPixels` | 2 | **0.5** |
+| `MaterialExpressionScalarParameter_6`, new | `MarblePelletToneGain`, group `Marble Pellets` | | **1** |
+
+```
+MarblePelletToneGain --> Custom.ToneGain   (new input, 10th)
+```
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+```hlsl
+const float SmallestSizeShare = 0.6;
+const float SizeShareSpread = 0.4;
+const float WideEdgeAreaExcess = 0.2;
+const float NarrowEdgeAreaConstant = 0.1;
+const float NarrowEdgeAreaLinear = 0.3;
+const float NarrowEdgeAreaQuadratic = 0.8;
+float2 Scaled = Position.xy / CellSize;
+float2 Cell = floor(Scaled);
+float2 Local = Scaled - Cell;
+float2 FootprintX = DDX(Scaled);
+float2 FootprintY = DDY(Scaled);
+float Fill = saturate(Coverage * PresenceGain);
+float Presence = Fill * MaxPresence;
+float Growth = 0.5 + 0.5 * Fill;
+float LargestRadius = MaxRadius * Growth;
+float MeanSquaredSizeShare = SmallestSizeShare * SmallestSizeShare + SmallestSizeShare * SizeShareSpread + SizeShareSpread * SizeShareSpread / 3.0;
+float Tone = saturate(Presence * PI * LargestRadius * LargestRadius * MeanSquaredSizeShare * ToneGain);
+float CellsPerPixel = max(length(FootprintX), length(FootprintY));
+float CellPixels = 1.0 / max(CellsPerPixel, 1e-6);
+float Resolved = smoothstep(ToneOnlyCellPixels, FullDetailCellPixels, CellPixels);
+float Uncovered = 1.0;
+float BestHeight = 0.0;
+float2 BestOffset = 0.0;
+float BestRadius = 1.0;
+[branch]
+if (Resolved > 0.0)
+{
+    for (int Row = -1; Row <= 1; ++Row)
+    {
+        for (int Column = -1; Column <= 1; ++Column)
+        {
+            float2 Neighbour = float2(Column, Row);
+            float4 Draw = Rand32ToFloat(Rand4DPCG32(int4(int2(Cell + Neighbour), 0, 0)));
+            if (Draw.z >= Presence)
+            {
+                continue;
+            }
+            float Radius = LargestRadius * (SmallestSizeShare + SizeShareSpread * Draw.w);
+            float2 Offset = Local - (Neighbour + Draw.xy);
+            float Distance = max(length(Offset), 1e-6);
+            float2 Direction = Offset / Distance;
+            float EdgeWidth = max(abs(dot(Direction, FootprintX)) + abs(dot(Direction, FootprintY)), 1e-4);
+            float SizeOverEdge = Radius / EdgeWidth;
+            float FilteredArea = SizeOverEdge >= 1.0
+                ? SizeOverEdge * SizeOverEdge + WideEdgeAreaExcess
+                : NarrowEdgeAreaConstant + SizeOverEdge * (NarrowEdgeAreaLinear + NarrowEdgeAreaQuadratic * SizeOverEdge);
+            float PelletCoverage = (1.0 - smoothstep(-EdgeWidth, EdgeWidth, Distance - Radius)) * SizeOverEdge * SizeOverEdge / FilteredArea;
+            Uncovered *= 1.0 - PelletCoverage;
+            float Height = Radius * Radius - Distance * Distance;
+            if (Height > BestHeight)
+            {
+                BestHeight = Height;
+                BestOffset = Offset;
+                BestRadius = Radius;
+            }
+        }
+    }
+}
+float Mask = 1.0 - Uncovered;
+float2 Tilt = BestOffset / BestRadius;
+float3 TiltWorld = float3(Tilt, 0.0);
+TiltWorld -= dot(TiltWorld, SurfaceNormal) * SurfaceNormal;
+float Rise = sqrt(saturate(1.0 - dot(Tilt, Tilt)));
+float3 PelletNormal = normalize(TiltWorld + SurfaceNormal * Rise);
+float3 BlendedNormal = normalize(lerp(SurfaceNormal, PelletNormal, Resolved));
+return float4(BlendedNormal, lerp(Tone, Mask, Resolved));
+```
+
+Inputs in order: `Position`, `SurfaceNormal`, `Coverage`, `CellSize`, `MaxRadius`, `PresenceGain`,
+`MaxPresence`, `FullDetailCellPixels`, `ToneOnlyCellPixels`, `ToneGain`.
+
+**What changed from the 2026-10-08 version, in prose:**
+
+- **The edge is analytic, per pellet.**
+  - The screen derivatives of the cell coordinate, `FootprintX` and `FootprintY`, are taken once
+    before the loop.
+  - For each pellet, the edge width is the pixel's footprint along the pellet's radial direction:
+    `abs(dot(Direction, FootprintX)) + abs(dot(Direction, FootprintY))`. That is exactly what
+    `DDX(Distance)` and `DDY(Distance)` would be for that one disc, but per pixel rather than per
+    2x2 quad, and without jumping between pellets.
+  - Up close it gives the same edge as before. `DDX(NearestEdge)` is gone, and so are the 2x2
+    blocks.
+- **Each pellet keeps its area.**
+  - A disc of radius `r` with the edge `1 - smoothstep(-W, W, rho - r)` covers `pi (r^2 + W^2/5)`
+    when `r >= W`. This is exact: `W^2/5` is the variance of a smoothstep's derivative over `-W`
+    to `W`.
+  - Below that, the profile is cut at the centre, and `pi W^2 (0.1 + 0.3 t + 0.8 t^2)`, with
+    `t = r / W`, fits the numerically integrated area within 3.5 % (`edge_model.py`).
+  - Each pellet's coverage is scaled by `pi r^2` over that area. So as a pellet shrinks below its
+    filter it becomes a fainter, wider dot of the same area, instead of the darker halo that made
+    H1's far band 1.3 to 1.5 times too dark.
+- **Pellets combine as independent coverages.** The mask is `1 - product of (1 - PelletCoverage)`
+  over the nine neighbours, not the nearest edge. With the nearest edge, overlapping filtered tails
+  were lost: modelled at 0.6 coverage, the band fell to 0.66 of its true share at 1 px a cell. With
+  the product it stays at 0.93 to 1.00 down to 1 px, and falls to 0.86 to 0.94 by 0.75 px, where
+  tails start to reach past the 3x3 search (`edge_union.py`). Hence the tone takes over below
+  1 px.
+- **The thresholds** are now 1 and 0.5 px a cell, on the most compressed axis as before.
+- **`ToneGain`** scales the tone's alpha. It is a lever for making the far band read darker than its
+  true average. At 1 it matches the filtered pellets: in the 1 to 2 px band, run 4 drew tone at gain
+  1 and run 5 drew resolved pellets on the same frozen field, and they differ by 0.3 levels
+  (`MEASUREMENTS.md`, *H2 amended*).
+- **Not changed:** the dome normal is still point-sampled at the pixel centre and weighted by the
+  mask in `M_SurfaceAsphalt`.
+
+### What was verified, and what was not
+
+Verified:
+- Both assets compile, are saved and are not dirty, and `git status` showed only these two.
+- In a running `-game` demo under the H2 pan, band flicker is 1.62x bare tarmac at 15 m, 1.63x at
+  30 m and 0.83x at 60 m. That is within #74's 2x exit, though above the 4-to-2 fade's 0.8 to 0.9x,
+  because pellets are now drawn further out.
+- The chase view shows pellets well beyond where the car sits.
+
+Not verified:
+- whether it now shows what the user wants, which is the user's call;
+- the frame cost, now that the 3x3 search runs on more pixels and does more work per neighbour;
+- the cooked shader.
