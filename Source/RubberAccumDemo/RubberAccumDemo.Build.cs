@@ -10,7 +10,7 @@ public class RubberAccumDemo : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "RacetrackSurface" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "ChaosVehicles" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "ChaosVehicles", "Slate", "SlateCore" });
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

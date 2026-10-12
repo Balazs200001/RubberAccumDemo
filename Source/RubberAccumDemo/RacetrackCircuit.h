@@ -10,6 +10,7 @@ class APlayerController;
 class ASkyLight;
 class ASplineFollowingCar;
 class AWheeledVehiclePawn;
+class SWidget;
 class UInputMappingContext;
 class UMaterialInstanceDynamic;
 class UPostProcessComponent;
@@ -474,6 +475,14 @@ private:
 
 	FRotator LowSunAheadOfTheCamera(const FRotator& MapSunRotation) const;
 
+	void AddTimeReadout();
+
+	void RemoveTimeReadout();
+
+	FText TimeReadoutText() const;
+
+	FText TimeReadoutKeysText() const;
+
 	void PublishTrackRibbon();
 
 	void GenerateTrackSpline();
@@ -565,6 +574,8 @@ private:
 	TWeakObjectPtr<ASkyLight> SkyLight;
 
 	TOptional<FMapLighting> MapLighting;
+
+	TSharedPtr<SWidget> TimeReadout;
 
 	TArray<double> CorneringProfile;
 

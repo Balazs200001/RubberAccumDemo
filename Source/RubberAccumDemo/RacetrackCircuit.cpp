@@ -14,8 +14,10 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Components/SkyLightComponent.h"
+#include "CoreGlobals.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/SkyLight.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
@@ -36,8 +38,12 @@
 #include "SurfaceAccumulationMapping.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceQueryDebugDraw.h"
+#include "Styling/CoreStyle.h"
 #include "SurfaceTrackRibbon.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
 
 namespace RacetrackFieldSwitches
 {
@@ -183,6 +189,19 @@ namespace RacetrackDrivenVehicle
 			Camera->SetRelativeRotation(LookingDownAtTheRoad);
 		}
 	}
+}
+
+namespace RacetrackTimeReadout
+{
+	constexpr float DilationFontSize = 30.0f;
+
+	constexpr float KeysFontSize = 14.0f;
+
+	constexpr float MarginFromTheTop = 24.0f;
+
+	constexpr float MarginFromTheRight = 32.0f;
+
+	constexpr int32 ViewportZOrder = 10;
 }
 
 namespace RacetrackSceneLighting
@@ -536,11 +555,13 @@ void ARacetrackCircuit::BeginPlay()
 	SetFieldPaused(StartsPausedAfterCommandLine());
 	CaptureMapLighting();
 	BindTimeControls();
+	AddTimeReadout();
 	PlaceObserverAboveTrack();
 }
 
 void ARacetrackCircuit::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RemoveTimeReadout();
 	ReleaseLeaderWheelQueries();
 
 	Super::EndPlay(EndPlayReason);
@@ -1670,6 +1691,95 @@ void ARacetrackCircuit::ApplyTimeDilation(float Dilation)
 		this,
 		TEXT("RubberAccumDemo.TimeDilation"),
 		FString::Printf(TEXT("Time dilation now %.2fx"), Clamped));
+}
+
+void ARacetrackCircuit::AddTimeReadout()
+{
+	UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+
+	if (Viewport == nullptr || TimeReadout.IsValid())
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<ARacetrackCircuit> Circuit(this);
+
+	TimeReadout = SNew(SBox)
+		.HAlign(HAlign_Right)
+		.VAlign(VAlign_Top)
+		.Padding(FMargin(0.0f, RacetrackTimeReadout::MarginFromTheTop, RacetrackTimeReadout::MarginFromTheRight, 0.0f))
+		.Visibility_Lambda([]()
+		{
+			return GAreScreenMessagesEnabled ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
+		})
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.HAlign(HAlign_Right)
+			[
+				SNew(STextBlock)
+				.Font(FCoreStyle::GetDefaultFontStyle("Bold", RacetrackTimeReadout::DilationFontSize))
+				.ColorAndOpacity(FLinearColor::White)
+				.ShadowOffset(FVector2D(2.0, 2.0))
+				.Text_Lambda([Circuit]()
+				{
+					return Circuit.IsValid() ? Circuit->TimeReadoutText() : FText::GetEmpty();
+				})
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.HAlign(HAlign_Right)
+			[
+				SNew(STextBlock)
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", RacetrackTimeReadout::KeysFontSize))
+				.ColorAndOpacity(FLinearColor::White)
+				.ShadowOffset(FVector2D(1.0, 1.0))
+				.Text_Lambda([Circuit]()
+				{
+					return Circuit.IsValid() ? Circuit->TimeReadoutKeysText() : FText::GetEmpty();
+				})
+			]
+		];
+
+	Viewport->AddViewportWidgetContent(TimeReadout.ToSharedRef(), RacetrackTimeReadout::ViewportZOrder);
+}
+
+void ARacetrackCircuit::RemoveTimeReadout()
+{
+	if (!TimeReadout.IsValid())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+
+	if (Viewport != nullptr)
+	{
+		Viewport->RemoveViewportWidgetContent(TimeReadout.ToSharedRef());
+	}
+
+	TimeReadout.Reset();
+}
+
+FText ARacetrackCircuit::TimeReadoutText() const
+{
+	return FText::FromString(FString::Printf(TEXT("TIME  %.2fx"), UGameplayStatics::GetGlobalTimeDilation(this)));
+}
+
+FText ARacetrackCircuit::TimeReadoutKeysText() const
+{
+	if (bDriving)
+	{
+		return FText::FromString(TEXT("held at 1x while driving"));
+	}
+
+	return FText::FromString(FString::Printf(
+		TEXT("[ . ] faster     [ , ] slower     %.1fx to %.0fx"),
+		SlowestTimeDilation,
+		FastestTimeDilation));
 }
 
 void ARacetrackCircuit::DecayFaster()
