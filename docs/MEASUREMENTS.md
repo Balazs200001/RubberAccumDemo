@@ -4762,3 +4762,78 @@ In `2627-Y3A-PR-243663/assets/media/`:
   4-to-2 fade on the left and the analytic edge on the right, over the pan.
 - `h2-analytic-edge-vs-fade-view-<view>.png`: the full frame of the analytic version.
 - `h2-analytic-edge-vs-fade-chase-still.png`: the chase view, both versions side by side.
+
+## 2026-10-12 — H2: the tone gain, measured against the road without marbles
+
+**Question.** The user wanted the marble band visible as at least a darker patch from the car
+view (#74). How much does the band actually darken the road at each distance, and what tone gain
+makes the unresolved part read?
+
+```
+Build:    host 6e9c9e8 for the reference and gain-1 runs, 8372c53 for gain 4. Editor open
+Power:    MAINS, BatteryStatus 2 before each run
+Scene:    the H2 exit-check schedule, unchanged
+Runs:     run 5, gain 1 (entry above), C:/RSBuild/h2-run5-analytic-gain1.log;
+          run 6, MarbleMaxPresence 0 so no marbles, C:/RSBuild/h2-run6-no-marbles.log;
+          run 7, gain 4, C:/RSBuild/h2-run7-gain4.log
+Field:    each about 60 laps at 60 fps. Peak marbles 0.8192, 0.8119 and 0.8112;
+          peak rubber 0.8579, 0.8633 and 0.8508
+Check:    bare tarmac, marbles run minus reference: +0.09 to +0.26 levels in every view
+```
+
+### Method
+
+Band pixels as before, binned by each pixel's projected cell size. Darkening is
+`1 - L(marbles) / L(no marbles)`, summed over the bin, and also divided by the mean screen coverage
+of the debug mask as a proxy.
+
+**This replaces the cross-road comparison.** That comparison is confounded at grazing angles: it
+put the tone-only band lighter than bare tarmac.
+
+### Result
+
+Darkening of the band against the same pixels without marbles:
+
+| View | Cells, px | Gain 1 | Gain 4 |
+|---|---|---|---|
+| near | 6 and up | 3.9 % | 3.9 % |
+| near | 2 to 6 | 3.5 to 3.6 % | 3.4 to 3.5 % |
+| chase | 4 to 6 | 5.0 % | 4.8 % |
+| chase | 1.5 to 4 | 3.1 to 4.1 % | 2.9 to 3.9 % |
+| chase | 0.3 to 1 | 2.7 % | **10.6 to 11.3 %** |
+| m15 | 0.5 to 1 | 3.4 to 3.5 % | **13.0 to 13.5 %** |
+| m30 | 0.3 to 0.75 | 3.3 to 3.6 % | **12.7 to 13.6 %** |
+| m60 | under 0.3 | 2.7 % | **10.3 %** |
+
+- **Resolved pellets darken the band only 3.5 to 5 % on average.** They read up close because each
+  dark dot is visible, not because the patch is darker.
+- **At gain 1 the tone darkens it 2.5 to 3.6 %.** Per unit coverage, that is 1.5 to 1.8 times less
+  than the resolved pellets in the chase view, and about the same in the near view.
+- **At gain 4 the unresolved band darkens 10 to 14 %**, and the resolved bins are unchanged within
+  0.2 %, as designed.
+- Bins at 1 to 1.5 px rise from 2.7 to about 5.5 %. The projected flat-road cell size puts some
+  pixels there that the shader's own derivatives place in the transition.
+- Each unit of tone alpha darkens by about 18 %. That is the ceiling with `MarbleColour` 0.010 and
+  `MarbleRoughness` 0.95, short of a darker colour.
+
+### Flicker under the pan, band over bare tarmac
+
+| View | 5.6 m | 15 m | 30 m | 60 m | chase |
+|---|---|---|---|---|---|
+| Gain 1 | 1.42x | 1.62x | 1.63x | 0.83x | 1.38x |
+| Gain 4 | 1.45x | 1.66x | **1.74x** | **1.04x** | 1.40x |
+
+**#74's exit still holds** at 30 m and 60 m.
+
+### Not verified
+
+- Whether gain 4 is the right amount, which is the user's call.
+- The step where pellets hand over to the darker tone, judged in motion.
+- The frame cost.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`:
+- `h2-tone-gain-chase-reference-gain1-gain4.png` and `h2-tone-gain-m15-reference-gain1-gain4.png`:
+  no marbles, gain 1 and gain 4, side by side.
+- `h2-tone-gain-1-vs-4-<view>.gif` and `h2-tone-gain-1-vs-4-view-<view>.png`.
