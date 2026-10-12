@@ -4837,3 +4837,67 @@ In `2627-Y3A-PR-243663/assets/media/`:
 - `h2-tone-gain-chase-reference-gain1-gain4.png` and `h2-tone-gain-m15-reference-gain1-gain4.png`:
   no marbles, gain 1 and gain 4, side by side.
 - `h2-tone-gain-1-vs-4-<view>.gif` and `h2-tone-gain-1-vs-4-view-<view>.png`.
+
+## 2026-10-12 — H2: the smooth footprint, pellets to 0.5 px with the gain ramped in, the pan re-run
+
+**Question.** The user asked for marbles beyond the resolved band, and for the stripes over a crest
+to go (#74). How much flicker does that bring back, and does the band's darkening now rise
+continuously with distance? The change is `50d92fb`, recorded in `EDITOR_SETUP.md`.
+
+```
+Build:    host 50d92fb. Thresholds 0.5 and 0.25 px a cell, unity gain at 2 px, gain 4. Editor open
+Power:    MAINS, BatteryStatus 2 before the run
+Scene:    the H2 exit-check schedule, unchanged
+Field:    about 60 laps at 60 fps. Peak marbles 0.8175, rubber 0.8546
+Log:      C:/RSBuild/h2-run8-smooth-footprint.log, with no shader or material error
+Reference: run 6, no marbles, the entry above. Bare tarmac against it: -0.08 to +0.15 levels
+```
+
+### Darkening against the road without marbles
+
+| View | Cells, px | Gain 4, fade at 1 px (run 7) | Smooth, ramped (run 8) |
+|---|---|---|---|
+| near | 3 and up | 3.5 to 3.9 % | 3.5 to 3.8 % |
+| near | 2 to 3 | 3.4 % | 9.0 % |
+| chase | 2 to 6 | 3.5 to 4.8 % | 3.7 to 4.9 % |
+| chase | 1.5 to 2 | 2.9 % | 7.1 % |
+| chase | 1 to 1.5 | 5.5 % | 10.3 % |
+| chase | 0.3 to 1 | 10.6 to 11.3 % | 10.4 to 11.1 % |
+| m15 | 1 to 2 | 3.6 to 5.9 % | 8.0 to 11.5 % |
+| m30 | 1 to 2 | 4.3 to 4.6 % | 8.7 to 12.5 % |
+
+- **The light ring is gone.** Darkening now rises with distance, from about 4 % where pellets are
+  resolved, through 7 to 12 % across the ramp, to 10 to 14 % in the far patch.
+- The near view's 2 to 3 px bin already reads 9 %. The shader's own footprint, from depth and the
+  facing, evidently puts some of those pixels under 2 px, where the flat-road projection used for
+  binning does not. Why the two differ there is not investigated.
+
+### Flicker under the pan, band over bare tarmac
+
+| View | H1 | Gain 4, fade at 1 px | **Smooth, to 0.5 px, ramped** | Band pixels over 20 levels, now |
+|---|---|---|---|---|
+| 5.6 m | 1.84x | 1.45x | **1.75x** | 6.8 % |
+| 15 m | 5.59x | 1.66x | **3.06x** | 8.2 % |
+| 30 m | 6.54x | 1.74x | **3.96x** | 14.6 % |
+| 60 m | 14.58x | 1.04x | **1.05x** | 1.2 % |
+| chase | 2.31x | 1.40x | **1.81x** | 8.9 % |
+| overview | 2.03x | 0.26x | 0.26x | 0.4 % |
+
+**#74's exit, within 2x at 30 m and 60 m, is no longer met at 30 m:** 3.96x. Drawing dark, gained
+pellets down to half a pixel a cell brings back about half of H1's flicker at 15 to 30 m. Band
+pixels swinging over 20 levels are 8 to 15 %, against H1's 19 to 26 %. At 60 m everything is tone
+and still within the exit. The user asked to judge for themselves whether this flicker is
+noticeable while driving.
+
+### Not verified
+
+- The crest stripes: no measured view is on a crest.
+- The flicker in motion.
+- The frame cost.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`:
+- `h2-smooth-footprint-chase-still.png`: the chase view, gain 4 against the smooth version.
+- `h2-smooth-footprint-vs-gain4-<view>.gif`: the pan, previous on the left and smooth on the right.
+- `h2-smooth-footprint-vs-gain4-view-<view>.png`.
