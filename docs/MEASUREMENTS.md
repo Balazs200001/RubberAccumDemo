@@ -4672,3 +4672,93 @@ In `2627-Y3A-PR-243663/assets/media/`:
 - `h2-fade-<view>-before-vs-after.gif` for `5m6`, `15m`, `30m`, `60m`, `chase` and `overview`. H1 is
   on the left and the fade on the right, cropped the same way as above.
 - `h2-fade-view-<view>-after.png`: the full frame.
+
+## 2026-10-12 — H2 amended: analytic pellet edges out to 1 px a cell, the pan re-run, and the tone gain calibrated
+
+**Question.** The user wanted marbles visible across the band beyond the car, not just within a few
+metres of the camera (#74). Can pellets be drawn out to 1 px a cell without H1's shimmer? And does
+the far tone then read as dark as the pellets beside it? The change is `6e9c9e8`, recorded in
+`EDITOR_SETUP.md`.
+
+```
+Build:    as the H2 entries above, host 6e9c9e8, MF_MarbleLayer at 1 and 0.5 px a cell, tone gain 1
+Power:    MAINS, Win32_Battery BatteryStatus 2, checked just before the run. The editor was open
+          in the background
+Scene:    the H2 exit-check schedule, unchanged
+Field:    20x from 10:44:52 to 10:48:53 UTC, about 60 laps, at 60 fps. Peak over 48 columns:
+          rubber 0.8579, marbles 0.8192. The exit check above froze at 0.8566 and 0.8150, so
+          the two runs share almost the same field
+Log:      C:/RSBuild/h2-run5-analytic-gain1.log
+```
+
+### The edge, modelled first
+
+These are offline models of the HLSL at 0.6 marble coverage, against hard discs sampled 16 x 16 per
+cell. The mean is relative to the true covered share; flicker is the mean mask change per
+quarter-pixel shift. Scripts: `edge_model.py`, `edge_union.py`.
+
+| Px a cell | H1 mean, flicker | Analytic, nearest edge, mean | Analytic, union of pellets, mean, flicker |
+|---|---|---|---|
+| 4 | 1.13, 0.029 | 0.97 | 0.99, 0.024 |
+| 2 | 1.32, 0.056 | 0.86 | 0.97, 0.030 |
+| 1.5 | 1.37, 0.072 | 0.80 | 0.97, 0.029 |
+| 1 | 1.45, 0.101 | 0.66 | 0.97, 0.026 |
+| 0.75 | | | 0.91, 0.024 |
+| 1.8 x 0.8 | 1.37, 0.057 | 0.70 | 0.97, 0.019 |
+
+- **Isolated pellets keep their area** to within 4 % down to 1 px a cell. The loss with the nearest
+  edge is overlapping filtered tails.
+- At 1.0 coverage, the union holds 0.93 at 1 px and 0.86 at 0.75 px. Below about 1 px the 3x3 search
+  starts to miss tails, which sets `MarblePelletFullDetailCellPixels` at 1.
+
+### The pan, on screen
+
+| View | H1 | Fade 4 to 2 | **Analytic, 1 to 0.5** | Band pixels swinging over 20 levels |
+|---|---|---|---|---|
+| 5.6 m | 1.84x | 1.12x | **1.42x** | 4.1 % |
+| 15 m | 5.59x | 0.91x | **1.62x** | 1.5 % |
+| 30 m | 6.54x | 0.82x | **1.63x** | 2.1 % |
+| 60 m | 14.58x | 0.85x | **0.83x** | 0.2 % |
+| chase | 2.31x | 1.06x | **1.38x** | 5.7 % |
+
+Band flicker over bare tarmac per quarter-pixel step. **#74's exit still holds:** 30 m and 60 m are
+within 2x. There is more flicker than with the 4-to-2 fade, because pellets are now drawn where a
+cell spans 1 to 4 px.
+
+### The tone gain
+
+Runs 4 and 5 froze on nearly the same field and use identical poses, so a pixel can be compared
+across them. Mean luma over the nine pan frames, band and bare as before, binned by the
+projected cell size of each pixel:
+
+| View | Cells, px | Run 4, fade 4 to 2 | Run 5, analytic | Band, run 4 minus run 5 | Bare, run 4 minus run 5 |
+|---|---|---|---|---|---|
+| chase | 4 and up | resolved | resolved | -0.12 | -0.03 |
+| chase | 1 to 2 | **tone, gain 1** | **resolved** | **+0.30** | +0.06 |
+| m15 | 1 to 2 | **tone, gain 1** | **resolved** | **+0.31** | +0.09 |
+| m30 | 1 to 2 | **tone, gain 1** | **resolved** | **+0.34** | +0.03 |
+| chase | under 0.5 | tone | tone | +0.15 | +0.01 |
+
+**Filtered pellets and the gain-1 tone render the same within 0.3 levels**, so `MarblePelletToneGain`
+stays at 1. The far band reads faint because the pellets cover about 14 % of it, and correctly
+averaged that darkens the road little. H1's far band read darker only because aliased dots were
+drawn at full contrast, with halos that added 30 to 47 % of dark area (the exit-check entry
+above).
+
+**A first calibration attempt is not used.** Comparing the band against bare tarmac across the road,
+row by row, made the tone-only band lighter than bare, with a darkening of -0.17 per unit coverage.
+That comparison is confounded at grazing angles.
+
+### Not verified
+
+- The frame cost, now that the search runs where cells span 1 to 4 px.
+- Forward motion.
+- Whether this is what the user wants to see.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`:
+- `h2-analytic-edge-vs-fade-<view>.gif` for `5m6`, `15m`, `30m`, `60m`, `chase` and `overview`: the
+  4-to-2 fade on the left and the analytic edge on the right, over the pan.
+- `h2-analytic-edge-vs-fade-view-<view>.png`: the full frame of the analytic version.
+- `h2-analytic-edge-vs-fade-chase-still.png`: the chase view, both versions side by side.
