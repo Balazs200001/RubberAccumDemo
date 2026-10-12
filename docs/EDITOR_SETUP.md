@@ -2898,3 +2898,61 @@ Not verified:
 - the `scalability <n>` console command itself. It sets `sg.EffectsQuality` among the other groups
   (`Scalability.cpp:767-879`) but was not run;
 - the cooked shaders per quality level.
+
+## 2026-10-12 — What the sports car is drawn with, read back over MCP (no change)
+
+**No asset was changed.** No Play-In-Editor session was started, and the level was neither edited nor
+saved. Every value here was read with `SkeletalMeshTools`, `StaticMeshTools` and
+`ObjectTools.get_properties` while the editor was open for H5 (#77).
+
+### `SKM_SportsCar` is not the visible car
+
+| Read | Value |
+|---|---|
+| `SkeletalMeshTools.get_lod_count` | 1 |
+| `get_vertex_count`, LOD 0 | 4 |
+| `get_bounds` | origin (0, 0, 5.59), box extent (1.26, 1.26, 0) |
+| `get_material_slots` | `M_SportsCarChasis_003` |
+
+It is a flat quad 2.5 cm across, 5.6 cm up. The Vehicle template uses it as the skeleton and physics
+carrier, `VehicleMesh`, with the wheel bones `Phys_Wheel_FL/FR/BL/BR`.
+
+### `BP_VehicleAdvSportsCar`'s visible components
+
+Read from the component templates `<Name>_GEN_VARIABLE` in
+`/Game/VehicleTemplate/Blueprints/SportsCar/BP_VehicleAdvSportsCar.BP_VehicleAdvSportsCar_C`:
+
+| Component | `StaticMesh` | Relative rotation | Relative scale |
+|---|---|---|---|
+| `Chasis_Main` | `/Game/Vehicles/SportsCar/SM_SportsCar` | 0 | 1 |
+| `Chasis_Glass` | `/Game/Vehicles/SportsCar/SM_SportsCar_Glass` | 0 | 1 |
+| `FL_Wheel_0` | `/Game/Vehicles/SportsCar/SM_SportsCar_Wheel` | yaw −90 | X −1 |
+| `FR_Wheel_0` | `/Game/Vehicles/SportsCar/SM_SportsCar_Wheel` | yaw +90 | 1 |
+| `BL_Wheel_0` | `/Game/Vehicles/SportsCar/SM_SportsCar_Wheel` | yaw −90 | X −1 |
+| `BR_Wheel_0` | `/Game/Vehicles/SportsCar/SM_SportsCar_Wheel` | yaw +90 | 1 |
+
+- Every relative location is 0, and no component has `OverrideMaterials`.
+- The Blueprint also has a `Mesh Material` dynamic material instance variable, which was not read.
+- **Not read:** each component's attach parent and socket. They live on the Blueprint's construction
+  nodes, which `get_properties` cannot reach on the template (`AttachParent` and `AttachSocketName`
+  could not be read). The wheels are taken to be attached at their wheel bones. The `-game` stills
+  of `59db3b0` agree: the rims face out on both sides and the tyres sit on the road.
+
+### The static meshes
+
+| Mesh | `get_bounds` min | max | Notes |
+|---|---|---|---|
+| `SM_SportsCar` | (−223.3, −114.1, −2.4) | (247.5, 114.1, 120.9) | Nanite on, 11,093 triangles, LOD 0 |
+| `SM_SportsCar_Glass` | (−216.3, −94.7, 7.8) | (218.7, 94.7, 73.9) | |
+| `SM_SportsCar_Wheel` | (−39.3, −7.8, −39.3) | (39.3, 27.1, 39.3) | radius 39.3 cm, axle along Y |
+
+### What uses this
+
+`ASplineFollowingCar` (`59db3b0`) builds the AI cars the same way, in C++:
+- `CarBody` is `SM_SportsCar` and `CarGlass` is `SM_SportsCar_Glass`.
+- The four wheels are `SM_SportsCar_Wheel`, placed at the wheel bones' reference pose read from
+  `SKM_SportsCar`, with the same per-side yaw and mirror.
+- The body is scaled to the car's 140 cm wheelbase and grounded at the tyres: the lowest wheel
+  centre minus the wheel's Z extent.
+
+There is no editor-side change to rebuild.
