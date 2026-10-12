@@ -5058,3 +5058,219 @@ Log:      C:/RSBuild/h3-run12-tiers.log, with no shader or material error
   capture.
 
 **Not verified:** `scalability <n>`; cooked shaders; a timing series.
+
+## 2026-10-12 — H4: the final profiling pass
+
+**Question.** What does the pellet layer cost against the lit asphalt without it? What does the
+surface system cost per frame, on the CPU and on the GPU, in the running demo? The CSV stats this
+needed are plugin `2b1e6e6`, bumped in host `ab0b8ea`.
+
+```
+Build:    host ab0b8ea, plugin 2b1e6e6. Build.bat finished 19:40 and BuildPlugin 19:42, local time.
+          No compile ran during any run below
+Power:    MAINS, BatteryStatus 2 before every run, and after suite 2
+Editor:   closed. -game from the Development editor binary, L_SpaHarness, -ReleaseField
+Screen:   1600 x 900 window, rendered at 1336 x 751 (r.ScreenPercentage.Default.Desktop.Mode 1),
+          anti-aliasing off, t.MaxFPS 0 so uncapped, DisableAllScreenMessages
+Scene:    20 cars, FollowTheLeader 1 with the camera on the leader, r.RacetrackSurface.DecayRate 1
+Atlas:    1800 m of track, 14401 x 1024 in 4 rows, RGBA32f, 235945984 bytes
+Logs:     C:/RSBuild/h4-*.log and h4-*.csv
+```
+
+| Run | Local time | What it measures |
+|---|---|---|
+| suite 1 | 19:44 to 19:46 | headless suite, `RacetrackSurface+RubberAccumDemo`, 137 of 137 passed |
+| A, `h4-pellets-ab` | 19:48 to 19:54 | pellet layer A/B on a frozen field |
+| B, `h4-running` | 19:54 to 19:57 | the running scene: frame totals, CSV stats, two `ProfileGPU` frames |
+| C, `h4-timepaint` | 20:01 to 20:04 | `r.RacetrackSurface.TimePaint 1` in the running scene |
+| suite 2 | 20:05 to 20:06 | headless suite, `RacetrackSurface` only, 89 of 89 passed |
+| D, `h4-decay` | 20:11 to 20:12 | the decay pass forced every frame, two `ProfileGPU` frames |
+
+Suite 1 started two minutes after BuildPlugin. Suite 2 is the re-take away from any compile.
+
+### The pellet layer against the asphalt without it
+
+- **Run A.** The field ran at 20x to frame 14400 and then froze, with peaks of rubber 0.8530, skid
+  1.0000 and marbles 0.8132.
+- **The A/B.** At each of three poses, the H2 `chase`, `near` and `m15`, `r.MaterialQualityLevel`
+  alternated between 1 and 0 in 360-frame blocks.
+  - 1, High, is the shipped pellets.
+  - 0, Low, is H3's dark patch, with no pellet search.
+- **Blocks.** The first 60 frames of each block are dropped and the other 300 kept, giving four
+  pairs per pose. The script is `parse_ab.py` in the session scratchpad.
+
+| Pose | `GPUTime`, pellets | `GPUTime`, patch only | Difference, mean | Difference, median | Pellet block higher |
+|---|---|---|---|---|---|
+| chase | 4.194 | 4.174 | **+0.019** | +0.020 | 4 of 4 |
+| near | 3.508 | 3.468 | **+0.040** | +0.035 | 4 of 4 |
+| m15 | 3.211 | 3.186 | **+0.026** | +0.024 | 4 of 4 |
+
+- **The pellet layer costs 0.02 to 0.04 ms of GPU time, under 1.2 % of the GPU frame**, and every
+  pair agrees on the sign.
+- **No frame time effect is measurable.** The frame is 5.1 to 5.3 ms and render-thread-bound, and
+  `FrameTime` and `RenderThreadTime` move by up to 0.05 ms either way between the two tiers.
+- **The A/B is of the whole quality switch, not the pellet node alone.** `r.MaterialQualityLevel`
+  changes every material with a quality switch, and the other materials in the map were not checked
+  for one. So 0.02 to 0.04 ms is an upper bound on the pellets.
+
+### The running scene, frame totals
+
+- **Run B schedule.** 20x to frame 9000, 1x to frame 15000, then `RacetrackDemo.Field 0` froze the
+  cars, to frame 19060.
+- **Frames kept.** The first 300 frames after each command are dropped. The `ProfileGPU` frames,
+  14500 and 14700, fall outside the kept segments.
+- **Field.** At frame 3000 the peaks were rubber 0.1890, skid 1.0000 and marbles 0.1499. At frame
+  19000 they were rubber 0.4604, skid 1.0000 and marbles 0.3679.
+
+| Segment, frames | `FrameTime` | `GameThreadTime` | `RenderThreadTime` | `GPUTime` |
+|---|---|---|---|---|
+| 20x, 3300 to 9000 | 6.828 (p90 7.663) | 3.514 (4.301) | 6.803 (7.651) | 4.840 (5.281) |
+| 1x, 9300 to 14400 | 6.710 (7.538) | 3.531 (4.257) | 6.687 (7.537) | 4.550 (4.896) |
+| frozen, 15300 to 19060 | 6.496 (6.992) | 2.094 (2.458) | 6.470 (6.935) | 4.389 (4.676) |
+
+These are medians in ms, with the p90 in brackets. **The frame is render-thread-bound at every
+speed.** The game thread has about 3 ms of slack.
+
+### The surface system's CPU cost, from the CSV stats
+
+These are per-frame totals in ms on the game thread, from run B's `RacetrackSurface/GameThread/*`
+columns, as median and p90.
+
+| Stat | 20x | 1x | frozen |
+|---|---|---|---|
+| `SubsystemTick`, the whole tick | 0.206 (0.268) | 0.204 (0.265) | 0.043 (0.064) |
+| inside it, `Paint`, the flush | 0.182 (0.238) | 0.180 (0.236) | 0 |
+| inside it, `ResolveQueries` | 0.022 (0.029) | 0.022 (0.028) | 0.042 (0.063) |
+| inside it, `Decay` | 0.000 | 0.000 | 0.000 |
+| `RegisterContact`, 80 calls from the cars | **0.937 (1.460)** | **1.019 (1.554)** | 0 |
+| `QuerySurfaceState`, the leader's 4 wheels | 0.064 (0.086) | 0.066 (0.087) | 0.054 (0.083) |
+
+- **The surface system's own per-frame CPU cost is about 1.2 to 1.3 ms with 20 cars.** That is the
+  tick, about 0.2 ms, plus contact registration, about 1.0 ms, plus the leader's queries, about
+  0.07 ms. The tick and the two API calls do not nest, so they add.
+- **The decay step costs the game thread almost nothing.** Over the whole run only 52 frames read
+  over 0.005 ms, the largest 0.099 ms. Run D puts a forced pass at 0.003 ms. The cost of a decay
+  step is on the GPU.
+- **Contact registration is most of the CPU cost, about 0.012 ms per contact.** The suite measured
+  `WorldToTrack` at 0.0041 ms per point on its 625 m, 64-point circuit. The in-situ call is about
+  three times that on the 1800 m circuit. The spline's point count in `L_SpaHarness` was not read,
+  and the cost was not broken down further. The figure also includes 80 CSV scopes per frame.
+- **R2's written trigger for the per-contact segment cache is now met.** R2's mains re-take, on #5
+  for #39, said to implement
+  it *"when any world-space caller reaches 80 contacts per frame in a real scene"*. At the time,
+  `ASplineFollowingCar` used the track-space overload. It now calls the world-space
+  `RegisterSurfaceContact` for each of its four wheels (`SplineFollowingCar.cpp:320`), so 20 cars
+  make 80 world-space contacts per frame. The measured cost, 0.94 to 1.02 ms, sits at R2's 1 ms
+  crossover. **Not implemented, and recorded for a decision.**
+
+### The surface system's GPU cost
+
+**Paint and gather, from `ProfileGPU`.** These are run B's frames 14501 and 14701, at 1x, from the
+graphics pipeline.
+
+| Pass | Draws, primitives | Frame 14501 | Frame 14701 |
+|---|---|---|---|
+| `DrawCanvasToTarget: TextureRenderTarget2D_0` | 1, 148 | 0.021 | 0.023 |
+| `DrawCanvasToTarget: TextureRenderTarget2D_0` | 80, 160 | 0.023 | 0.022 |
+| `DrawCanvasToTarget: TextureRenderTarget2D_0` | 80, 160 | 0.021 | 0.021 |
+| `DrawCanvasToTarget: TextureRenderTarget2D_1` | 1, 144 | 0.015 | 0.013 |
+| **total** | | **0.080** | **0.079** |
+
+- **Which target is which is inferred, not read.** The plugin creates two render targets:
+  - the atlas, at `SurfaceAccumulationBuffer.cpp:289`, on allocation;
+  - the gather target, at `:689`, on the first query.
+
+  The demo creates none outside its tests, so `_0` is taken as the atlas and `_1` as the gather.
+- **Which pass is which is also inferred, from the draw counts.** One draw for the marble fans, then
+  80 for the sweep and 80 for the strokes, which is the order `PaintFrame` draws them in.
+- **At 20x the canvas passes are larger.** Run D's frames at 20x read 0.095, 0.056 and 0.062 ms, and
+  then 0.142, 0.100 and 0.101 ms.
+
+**Paint, from `r.RacetrackSurface.TimePaint 1`, run C.** The RHI timestamps bracket each flush's
+fans, sweep and strokes. The first 200 flushes of each segment are dropped.
+
+| Segment | Flushes | Median | Mean | p10 | p90 | Max | Strokes, fans per flush |
+|---|---|---|---|---|---|---|---|
+| 20x | 8800 | **0.253** | 0.439 | 0.181 | 1.090 | 4.204 | 80, 76 |
+| 1x | 5862 | **0.138** | 0.141 | 0.083 | 0.163 | 1.119 | 80, 74 |
+
+- **At 1x a flush costs the GPU about 0.14 ms.** That is against 0.065 to 0.066 ms for the three
+  atlas passes in `ProfileGPU`. The bracket also holds whatever the GPU ran between the two timestamps, so it is
+  the upper of the two figures.
+- **At 20x the median is 0.25 ms, with a tail to 1.1 ms at p90.** A car covers 20 times the distance
+  per frame, so each stroke is 20 times longer, which would explain the median. The tail is not
+  explained.
+- **Run C's frame times are not used.** `TimePaint` synchronises the game thread with the render
+  thread on every flush, which put the frame at 12.4 ms.
+- **Field.** At frame 3000 the peaks were rubber 0.2836 and marbles 0.2349. At frame 15000 they were
+  rubber 0.5799 and marbles 0.5107.
+
+**The decay pass, run D.** It is the same scene as run B at 20x. At frame 3000,
+`r.RacetrackSurface.DecayStepsPerHalfLife` went from 256 to 65536, a step every 0.069 s of track
+time, so a pass every frame at 20x. It went back to 256 at frame 4500. This is a console variable
+set at runtime for the measurement, not a Config change.
+
+| | Frame 3601 | Frame 3801 |
+|---|---|---|
+| `RenderGraphExecute - RacetrackSurfaceDecay` | 1.569 | 1.389 |
+| `CoupledSkidDecay 14401x1024` | **1.555** | **1.381** |
+| Graphics pipeline total | 6.363 | 6.126 |
+
+| Run D segment | `GPUTime` median (p90) | `FrameTime` median |
+|---|---|---|
+| before, 256 steps | 4.855 (5.279) | 6.860 |
+| a pass every frame | 6.327 (6.841) | 7.327 |
+| after, 256 steps | 4.812 (5.263) | 7.043 |
+
+- **One decay pass costs about 1.4 to 1.6 ms of GPU time on the in-situ atlas.** `ProfileGPU` gives
+  1.381 to 1.555 ms, and a pass every frame adds 1.47 to 1.52 ms to the `GPUTime` median.
+- **Run B agrees without the forced rate.** Its 20x segment has GPU spikes of over 1.0 ms above the
+  median, mostly 126 to 130 frames apart, with a median excess of 1.55 ms. At 4504.6 s / 256 = 17.6 s
+  of track time per step, and 0.137 s of track time per 20x frame, a step falls about every 129
+  frames.
+- **In the demo at 1x that is one 1.5 ms GPU frame every 17.6 s.** Run B's 1x segment has one spike
+  over 1.0 ms, at 1.46 ms. The GPU frame stays under the render thread's 6.7 ms. A pass every frame
+  did lengthen the frame, by 0.47 ms.
+- **The pass is 2.9 times the suite's 10000 x 512 buffer.** The suite measured 1.07 ms empty and
+  2.19 to 2.55 ms filled with noise. The in-situ field is mostly empty texels.
+
+### Headless suite timings, two runs
+
+| Test line | Suite 1, 19:44 | Suite 2, 20:05 |
+|---|---|---|
+| Paint 1 contact | 0.118 | 0.096 |
+| Paint 4 contacts | 0.109 | 0.091 |
+| Paint 80 contacts, uniform heading | 0.104 | 0.111 |
+| Paint 80 contacts, 80 headings | 0.122 | 0.107 |
+| Gate total, 4 contacts plus one decay, against 0.50 ms | 0.494 | 0.472 |
+| Decay, coupled compute, RGBA32f production, empty | 1.073 | 1.174 |
+| Decay, coupled compute, RGBA32f production, noise | 2.187 | 2.547 |
+| Decay, C10 quad, RGBA32f production, empty | 1.586 | 1.598 |
+| Decay, C10 quad, RGBA32f production, noise | 2.105 | 2.470 |
+| Decay, coupled compute, RGBA16f with a UAV, empty | 0.254 | 0.247 |
+| Decay, coupled compute, RGBA16f with a UAV, noise | 1.159 | 1.337 |
+| Sweep and paint, 80, uniform, RGBA32f, cleared | 0.597 | 0.688 |
+| Sweep and paint, 80, 80 headings, RGBA32f, cleared | 0.924 | 0.918 |
+| Sweep and paint, 80, uniform, RGBA32f, noise | 0.605 | 0.702 |
+| Sweep and paint, 80, 80 headings, RGBA32f, noise | 0.980 | 0.891 |
+| Query, 4 points: gather GPU, `WorldToTrack` CPU | 0.0990, 0.0164 | 0.0940, 0.0161 |
+| Query, 80 points: gather GPU, `WorldToTrack` CPU | 0.1460, 0.3237 | 0.1270, 0.3290 |
+
+- These are medians in ms.
+- **The two runs differ by up to 23 %, and neither is higher throughout.**
+  - The widest gap is Paint 1 contact.
+  - The noise-filled decay passes rose by up to 16.5 % in suite 2, which ran after three GPU-heavy
+    `-game` runs.
+  - Most of the paint lines fell.
+- **The 0.50 ms gate holds in both runs, with 1.2 % and 5.6 % to spare.**
+
+### Not verified
+
+- Which canvas pass is which, and which render target is which: both are inferred, as above.
+- Whether other materials in the map have a quality switch, which bounds the pellet figure.
+- Why in-situ contact registration costs about three times the suite's per-point conversion.
+- The 1.1 ms p90 tail of the paint flush at 20x.
+- Cooked or Shipping builds. Every number here is a Development editor binary.
+- Another GPU, or another resolution.
+- **No Insights capture was needed.** `ProfileGPU` named the decay pass directly, and the CSV stats
+  covered the CPU side.
