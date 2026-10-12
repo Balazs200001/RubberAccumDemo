@@ -5023,3 +5023,38 @@ Band flicker over bare tarmac, per quarter-pixel step under the H2 pan:
 - `h2-tone-only-14-vs-20m-chase-still.png`;
 - `h2-tone-only-14-vs-20m-<view>.gif`;
 - `h2-tone-only-14-vs-20m-view-<view>.png`.
+
+## 2026-10-12 — H3: the quality tiers switched at runtime
+
+**Question.** Do the standard console variables drive the marble layer's tiers? Does the gameplay
+buffer stay identical across them? The change is `f791db2`, recorded in `EDITOR_SETUP.md`.
+
+```
+Build:    host f791db2, the editor open in the background, -game from the editor binary
+Power:    MAINS, BatteryStatus 2 before the run
+Scene:    L_SpaHarness, the H2 field schedule: 20x to frame 14400, then frozen at 1x
+Commands: sg.EffectsQuality 3, then 1, then 0, then 3, by -csvExecCmds. At each tier, 1800 frames to
+          settle, the chase and near poses captured, three ProfileGPU frames at the chase pose, and
+          RacetrackDemo.SurfaceReport
+Log:      C:/RSBuild/h3-run12-tiers.log, with no shader or material error
+```
+
+| Tier | Look | Graphics pipeline, ms | `BasePass`, ms | Surface peaks: rubber, skid, marbles |
+|---|---|---|---|---|
+| `sg.EffectsQuality 3` | pellets, 5, 10 and 20 m | 5.306, 5.310, 5.959 | 0.239, 0.240, 0.254 | 0.8529, 1.0000, 0.8184 |
+| `sg.EffectsQuality 1` | pellets, 2.5, 5 and 10 m | 4.559, 4.999, 4.958 | 0.222, 0.240, 0.240 | 0.8529, 1.0000, 0.8184 |
+| `sg.EffectsQuality 0` | dark patch only | 4.696, 5.435, 4.851 | 0.216, 0.247, 0.217 | 0.8529, 1.0000, 0.8184 |
+
+- **The tiers switch on the standard cvar**, with each look as designed. The captures are
+  `h3-sg-effectsquality-3-1-0-chase.png` and `-near.png` in `2627-Y3A-PR-243663/assets/media/`.
+- **The accumulation buffer, which the query API reads, is identical at every tier.** These are
+  peaks over 48 columns.
+- **`BasePass` differs by about 0.02 ms between tiers, within the single-frame spread.** So in this
+  view the pellet layer costs little either way. These are single `ProfileGPU` frames, and a proper
+  A/B is H4's.
+- `sg.EffectsQuality` also changes other engine cvars, such as particles and r.MaterialQualityLevel
+  for all materials. So the whole-frame totals are not the pellet layer's alone.
+- The second tier-3 visit has captures but no profiles: the script closed the game after the last
+  capture.
+
+**Not verified:** `scalability <n>`; cooked shaders; a timing series.
