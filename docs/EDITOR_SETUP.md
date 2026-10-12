@@ -2605,3 +2605,150 @@ Not verified:
 - whether the flicker is noticeable while driving, which is the user's call;
 - the frame cost;
 - the cooked shader.
+
+---
+
+## 2026-10-12 — H2: the pellets decided by camera distance alone
+
+**Why.** The user judged the smooth-footprint version: *"It definitely feels better while driving
+now. I like all the distance settings, but for some reason there is a problem still with elevation
+changes, where sometimes even when the road I'm looking at is close and right behind the car the
+marbles don't show up at all. If you can't pinpoint the bug, maybe it's better to use a simpler
+system which just measures distance to the camera of the pixel to decide to draw the marbles or
+not."* The decision is on [#74](https://github.com/Balazs200001/RubberAccumDemo/issues/74).
+
+**What was found first** (`MEASUREMENTS.md`, *H2: on the slopes*):
+- **Straights get no marbles by design.** `AppendMarbleFan` only throws a fan where the
+  curvature exceeds `MinimumMarbleCurvature` (`SurfaceAccumulationSubsystem.cpp:983`). A straight
+  climb or descent receives none, however steep, so most of the missing pellets there were correct.
+- **Where marbles do exist on a slope, the facing term made them faint.** The chase camera does not
+  pitch with the car, so on a descent it sees the road at a grazing angle. The footprint along the
+  view was the across footprint divided by `Facing`, so the fade came closer and each near pellet
+  was smeared along the view, keeping its area but too faint to read.
+- **Ruled out by reading the source:** the paint-versus-sample mapping on slopes (both use the 3D
+  arc length), the road's winding and normals (the spline's up vector tilts with the slope), and
+  mipmapping of the accumulation target (it has no mips).
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. Three parameters renamed and their defaults
+changed, three Custom inputs renamed, the Custom node's code replaced. No node added or deleted.
+**Also saved:** `/Game/Materials/M_SurfaceAsphalt`, recompiled and re-saved as before, with its
+graph untouched. Host commit `f07843f`.
+
+Before the edit there was no `-game` process, PIE was not running and git was clean. After it:
+no error after either recompile, all eleven inputs read back under their new names, both assets
+saved, and no shader error in the `-game` log of the run that followed.
+
+| Node | Before | After |
+|---|---|---|
+| `MaterialExpressionScalarParameter_4` | `MarblePelletFullDetailCellPixels`, 0.5 | **`MarblePelletFullDetailDistance`, 1000 cm** |
+| `MaterialExpressionScalarParameter_5` | `MarblePelletToneOnlyCellPixels`, 0.25 | **`MarblePelletToneOnlyDistance`, 1400 cm** |
+| `MaterialExpressionScalarParameter_7` | `MarblePelletUnityGainCellPixels`, 2 | **`MarblePelletUnityGainDistance`, 500 cm** |
+| `MaterialExpressionScalarParameter_6` | `MarblePelletToneGain`, 4 | unchanged |
+
+Custom inputs renamed to match: `FullDetailDistance`, `ToneOnlyDistance` and `UnityGainDistance`.
+
+**The distances keep the settings the user liked.** On flat road in the chase view, the
+pixels-per-cell version put a cell at 2 px at about 4.7 m from the camera, at 0.5 px at about
+9.5 m and at 0.25 px at about 13.4 m. That uses `4h / (r^2 x pixel angle)`, with the camera
+167.5 cm above the road and a pixel angle of 2 / 1336. These are rounded to 5, 10 and 14 m.
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+```hlsl
+const float SmallestSizeShare = 0.6;
+const float SizeShareSpread = 0.4;
+const float WideEdgeAreaExcess = 0.2;
+const float NarrowEdgeAreaConstant = 0.1;
+const float NarrowEdgeAreaLinear = 0.3;
+const float NarrowEdgeAreaQuadratic = 0.8;
+float2 Scaled = Position.xy / CellSize;
+float2 Cell = floor(Scaled);
+float2 Local = Scaled - Cell;
+float CameraDistance = length(Parameters.WorldPosition_CamRelative);
+float PixelAngle = 2.0 / (ResolvedView.ViewToClip[0][0] * ResolvedView.ViewSizeAndInvSize.x);
+float EdgeWidth = max(CameraDistance * PixelAngle / CellSize, 1e-4);
+float Fill = saturate(Coverage * PresenceGain);
+float Presence = Fill * MaxPresence;
+float Growth = 0.5 + 0.5 * Fill;
+float LargestRadius = MaxRadius * Growth;
+float MeanSquaredSizeShare = SmallestSizeShare * SmallestSizeShare + SmallestSizeShare * SizeShareSpread + SizeShareSpread * SizeShareSpread / 3.0;
+float Tone = saturate(Presence * PI * LargestRadius * LargestRadius * MeanSquaredSizeShare);
+float Resolved = 1.0 - smoothstep(FullDetailDistance, ToneOnlyDistance, CameraDistance);
+float Gain = lerp(1.0, ToneGain, smoothstep(UnityGainDistance, FullDetailDistance, CameraDistance));
+float Uncovered = 1.0;
+float BestHeight = 0.0;
+float2 BestOffset = 0.0;
+float BestRadius = 1.0;
+[branch]
+if (Resolved > 0.0)
+{
+    for (int Row = -1; Row <= 1; ++Row)
+    {
+        for (int Column = -1; Column <= 1; ++Column)
+        {
+            float2 Neighbour = float2(Column, Row);
+            float4 Draw = Rand32ToFloat(Rand4DPCG32(int4(int2(Cell + Neighbour), 0, 0)));
+            if (Draw.z >= Presence)
+            {
+                continue;
+            }
+            float Radius = LargestRadius * (SmallestSizeShare + SizeShareSpread * Draw.w);
+            float2 Offset = Local - (Neighbour + Draw.xy);
+            float Distance = length(Offset);
+            float SizeOverEdge = Radius / EdgeWidth;
+            float FilteredArea = SizeOverEdge >= 1.0
+                ? SizeOverEdge * SizeOverEdge + WideEdgeAreaExcess
+                : NarrowEdgeAreaConstant + SizeOverEdge * (NarrowEdgeAreaLinear + NarrowEdgeAreaQuadratic * SizeOverEdge);
+            float PelletCoverage = (1.0 - smoothstep(-EdgeWidth, EdgeWidth, Distance - Radius)) * SizeOverEdge * SizeOverEdge / FilteredArea;
+            Uncovered *= 1.0 - PelletCoverage;
+            float Height = Radius * Radius - Distance * Distance;
+            if (Height > BestHeight)
+            {
+                BestHeight = Height;
+                BestOffset = Offset;
+                BestRadius = Radius;
+            }
+        }
+    }
+}
+float Mask = 1.0 - Uncovered;
+float2 Tilt = BestOffset / BestRadius;
+float3 TiltWorld = float3(Tilt, 0.0);
+TiltWorld -= dot(TiltWorld, SurfaceNormal) * SurfaceNormal;
+float Rise = sqrt(saturate(1.0 - dot(Tilt, Tilt)));
+float3 PelletNormal = normalize(TiltWorld + SurfaceNormal * Rise);
+float3 BlendedNormal = normalize(lerp(SurfaceNormal, PelletNormal, Resolved));
+return float4(BlendedNormal, saturate(lerp(Tone, Mask, Resolved) * Gain));
+```
+
+Inputs in order: `Position`, `SurfaceNormal`, `Coverage`, `CellSize`, `MaxRadius`, `PresenceGain`,
+`MaxPresence`, `FullDetailDistance`, `ToneOnlyDistance`, `ToneGain`, `UnityGainDistance`.
+
+**What changed, in prose:**
+- **One quantity decides everything: the pixel's distance to the camera**,
+  `length(Parameters.WorldPosition_CamRelative)`, in cm.
+  - Pellets are fully drawn within `FullDetailDistance`, and only the tone remains beyond
+    `ToneOnlyDistance`, with a smoothstep between.
+  - The darkness gain is 1 within `UnityGainDistance` and rises to `ToneGain` by
+    `FullDetailDistance`.
+  - The viewing angle and the road normal take no part, so a slope, a crest or the camera's fixed
+    pitch cannot move the fade.
+- **Each pellet's edge width is the size of one pixel at that distance**: distance times
+  `PixelAngle`, in cells, the same in every direction. The area-keeping normalisation is unchanged.
+- **What this gives up.** Where the road runs nearly parallel to the view, a cell is compressed
+  along the view by `1 / facing`, and the edge no longer widens to match. Pellets there stay visible
+  as pellets but can alias along the view. Measured in the chase view, band flicker went from 1.8x
+  to 2.1x bare tarmac.
+- `SurfaceNormal` is now used only for the dome normal.
+
+### What was verified, and what was not
+
+Verified:
+- The materials compile, and so does the shader in `-game`, with no error logged.
+- Under the H2 pan, #74's exit is met again: 0.72x bare tarmac at 30 m and 1.14x at 60 m.
+- Pellets render on the crest and climb captures wherever the marble channel has coverage.
+
+Not verified:
+- the spot the user drove, which is the user's to see;
+- the frame cost;
+- the cooked shader.
