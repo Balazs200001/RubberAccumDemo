@@ -5,7 +5,9 @@
 #include "RacetrackSurfaceTypes.h"
 #include "RacetrackCircuit.generated.h"
 
+class ADirectionalLight;
 class APlayerController;
+class ASkyLight;
 class ASplineFollowingCar;
 class AWheeledVehiclePawn;
 class UInputMappingContext;
@@ -35,6 +37,23 @@ enum class ESurfaceLook : uint8
 {
 	Debug,
 	Asphalt
+};
+
+UENUM()
+enum class ESceneLighting : uint8
+{
+	MapSun,
+	LowSun,
+	Overcast
+};
+
+struct FMapLighting
+{
+	FRotator SunRotation = FRotator::ZeroRotator;
+
+	float SunIntensity = 0.0f;
+
+	float SkyLightIntensity = 0.0f;
 };
 
 struct FSkidMarkPairPlacement
@@ -241,6 +260,15 @@ public:
 
 	static const TCHAR* SurfaceLookName(ESurfaceLook Look);
 
+	ESceneLighting GetSceneLighting() const
+	{
+		return SceneLighting;
+	}
+
+	void SetSceneLighting(ESceneLighting Lighting);
+
+	static const TCHAR* SceneLightingName(ESceneLighting Lighting);
+
 	static constexpr double AsphaltScanCentimetres = 200.0;
 
 	static constexpr const TCHAR* AsphaltTilesAlongLapParameterName = TEXT("AsphaltTilesAlongLap");
@@ -440,6 +468,12 @@ private:
 
 	void ApplySurfaceLookToRoad();
 
+	void CaptureMapLighting();
+
+	void CycleSceneLighting();
+
+	FRotator LowSunAheadOfTheCamera(const FRotator& MapSunRotation) const;
+
 	void PublishTrackRibbon();
 
 	void GenerateTrackSpline();
@@ -523,6 +557,14 @@ private:
 	ESurfaceDebugView DebugView = ESurfaceDebugView::AllChannels;
 
 	ESurfaceLook SurfaceLook = ESurfaceLook::Debug;
+
+	ESceneLighting SceneLighting = ESceneLighting::MapSun;
+
+	TWeakObjectPtr<ADirectionalLight> Sun;
+
+	TWeakObjectPtr<ASkyLight> SkyLight;
+
+	TOptional<FMapLighting> MapLighting;
 
 	TArray<double> CorneringProfile;
 

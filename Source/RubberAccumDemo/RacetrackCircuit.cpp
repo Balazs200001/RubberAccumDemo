@@ -11,8 +11,12 @@
 #include "SurfaceTrackSpace.h"
 #include "WheeledVehiclePawn.h"
 #include "WheelSurfaceSlip.h"
+#include "Components/DirectionalLightComponent.h"
 #include "Components/PostProcessComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Engine/DirectionalLight.h"
 #include "Engine/Engine.h"
+#include "Engine/SkyLight.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -181,6 +185,15 @@ namespace RacetrackDrivenVehicle
 	}
 }
 
+namespace RacetrackSceneLighting
+{
+	constexpr double LowSunElevationDegrees = 8.0;
+
+	constexpr float OvercastSunIntensityFraction = 0.15f;
+
+	constexpr float OvercastSkyLightIntensityScale = 2.0f;
+}
+
 namespace RacetrackDemoCommands
 {
 	ARacetrackCircuit* FindCircuit(UWorld* World)
@@ -294,6 +307,29 @@ namespace RacetrackDemoCommands
 		TEXT("RacetrackDemo.SurfaceLook"),
 		TEXT("0 shows the debug view, 1 the lit asphalt. The same handler the V key calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetSurfaceLook));
+
+	void SetSceneLighting(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit == nullptr || Arguments.Num() == 0)
+		{
+			return;
+		}
+
+		const int32 Requested = FMath::Clamp(
+			FCString::Atoi(*Arguments[0]),
+			0,
+			static_cast<int32>(ESceneLighting::Overcast));
+
+		Circuit->SetSceneLighting(static_cast<ESceneLighting>(Requested));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs SceneLightingCommand(
+		TEXT("RacetrackDemo.Lighting"),
+		TEXT("0 is the map's own sun, 1 a low sun placed ahead of the camera as it points now, 2 an overcast "
+			"sky with the sun dimmed and the sky light raised. The same handler the L key calls."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetSceneLighting));
 
 	void ArmSkidMarkPair(const TArray<FString>& Arguments, UWorld* World)
 	{
@@ -498,6 +534,7 @@ void ARacetrackCircuit::BeginPlay()
 	SpawnField();
 	AcquireLeaderWheelQueries();
 	SetFieldPaused(StartsPausedAfterCommandLine());
+	CaptureMapLighting();
 	BindTimeControls();
 	PlaceObserverAboveTrack();
 }
@@ -1547,6 +1584,7 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::N, IE_Pressed, this, &ARacetrackCircuit::DecaySlower);
 	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARacetrackCircuit::CycleDebugView);
 	InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ARacetrackCircuit::ToggleSurfaceLook);
+	InputComponent->BindKey(EKeys::L, IE_Pressed, this, &ARacetrackCircuit::CycleSceneLighting);
 	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ARacetrackCircuit::ToggleDriving);
 
 	UE_LOG(LogRacetrackSurface, Log,
@@ -1554,8 +1592,9 @@ void ARacetrackCircuit::BindTimeControls()
 			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
 			"%.0fx of the derived rate. Press M and N for how fast it fades, between off and %.0fx of a "
 			"%.0f lap half-life, which is %.0f s on this layout. Press C to look at one accumulation "
-			"channel at a time. Press V to switch between the debug view and the lit asphalt. Press F to "
-			"drive the car and F again for the fly camera. W A S D, Q E and the mouse fly the camera"),
+			"channel at a time. Press V to switch between the debug view and the lit asphalt. Press L for "
+			"the map's sun, a low sun ahead of the camera and an overcast sky. Press F to drive the car and "
+			"F again for the fly camera. W A S D, Q E and the mouse fly the camera"),
 		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
@@ -1568,7 +1607,7 @@ void ARacetrackCircuit::BindTimeControls()
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		this,
 		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   F drive"));
+		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   L light   F drive"));
 }
 
 void ARacetrackCircuit::DepositFaster()
@@ -1903,6 +1942,157 @@ void ARacetrackCircuit::ApplySurfaceLookToRoad()
 	{
 		Road->SetMaterial(0, Shown);
 	}
+}
+
+void ARacetrackCircuit::CaptureMapLighting()
+{
+	UWorld* World = GetWorld();
+
+	if (World == nullptr)
+	{
+		return;
+	}
+
+	for (TActorIterator<ADirectionalLight> It(World); It; ++It)
+	{
+		Sun = *It;
+		break;
+	}
+
+	for (TActorIterator<ASkyLight> It(World); It; ++It)
+	{
+		SkyLight = *It;
+		break;
+	}
+
+	const ADirectionalLight* FoundSun = Sun.Get();
+
+	if (FoundSun == nullptr || FoundSun->GetComponent() == nullptr)
+	{
+		UE_LOG(LogRacetrackSurface, Warning,
+			TEXT("%s found no directional light, so L has no sun to move"),
+			*GetName());
+		return;
+	}
+
+	const ASkyLight* FoundSkyLight = SkyLight.Get();
+	const USkyLightComponent* SkyLightComponent =
+		FoundSkyLight != nullptr ? FoundSkyLight->GetLightComponent() : nullptr;
+
+	FMapLighting Captured;
+	Captured.SunRotation = FoundSun->GetActorRotation();
+	Captured.SunIntensity = FoundSun->GetComponent()->Intensity;
+	Captured.SkyLightIntensity = SkyLightComponent != nullptr ? SkyLightComponent->Intensity : 0.0f;
+
+	MapLighting = Captured;
+	SceneLighting = ESceneLighting::MapSun;
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s keeps the map's lighting to return to: %s at %.2f lux, pitch %.1f, yaw %.1f, and %s at %.2f"),
+		*GetName(),
+		*FoundSun->GetName(),
+		Captured.SunIntensity,
+		Captured.SunRotation.Pitch,
+		Captured.SunRotation.Yaw,
+		FoundSkyLight != nullptr ? *FoundSkyLight->GetName() : TEXT("no sky light"),
+		Captured.SkyLightIntensity);
+}
+
+void ARacetrackCircuit::CycleSceneLighting()
+{
+	switch (SceneLighting)
+	{
+	case ESceneLighting::MapSun:
+		SetSceneLighting(ESceneLighting::LowSun);
+		break;
+	case ESceneLighting::LowSun:
+		SetSceneLighting(ESceneLighting::Overcast);
+		break;
+	default:
+		SetSceneLighting(ESceneLighting::MapSun);
+		break;
+	}
+}
+
+const TCHAR* ARacetrackCircuit::SceneLightingName(ESceneLighting Lighting)
+{
+	switch (Lighting)
+	{
+	case ESceneLighting::LowSun:
+		return TEXT("low sun ahead of the camera");
+	case ESceneLighting::Overcast:
+		return TEXT("overcast sky");
+	default:
+		return TEXT("map's own sun");
+	}
+}
+
+FRotator ARacetrackCircuit::LowSunAheadOfTheCamera(const FRotator& MapSunRotation) const
+{
+	const APlayerCameraManager* Camera = UGameplayStatics::GetPlayerCameraManager(this, 0);
+
+	const double TowardTheCameraYaw = Camera != nullptr
+		? Camera->GetCameraRotation().Yaw + 180.0
+		: MapSunRotation.Yaw;
+
+	return FRotator(-RacetrackSceneLighting::LowSunElevationDegrees, TowardTheCameraYaw, 0.0);
+}
+
+void ARacetrackCircuit::SetSceneLighting(ESceneLighting Lighting)
+{
+	ADirectionalLight* FoundSun = Sun.Get();
+
+	if (!MapLighting.IsSet() || FoundSun == nullptr || FoundSun->GetComponent() == nullptr)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			this,
+			TEXT("RubberAccumDemo.Lighting"),
+			TEXT("There is no directional light in the map, so the lighting stays as it is"));
+		return;
+	}
+
+	const FMapLighting& Map = MapLighting.GetValue();
+
+	FRotator SunRotation = Map.SunRotation;
+	float SunIntensity = Map.SunIntensity;
+	float SkyLightIntensity = Map.SkyLightIntensity;
+
+	if (Lighting == ESceneLighting::LowSun)
+	{
+		SunRotation = LowSunAheadOfTheCamera(Map.SunRotation);
+	}
+	else if (Lighting == ESceneLighting::Overcast)
+	{
+		SunIntensity *= RacetrackSceneLighting::OvercastSunIntensityFraction;
+		SkyLightIntensity *= RacetrackSceneLighting::OvercastSkyLightIntensityScale;
+	}
+
+	SceneLighting = Lighting;
+
+	FoundSun->SetActorRotation(SunRotation);
+	FoundSun->GetComponent()->SetIntensity(SunIntensity);
+
+	ASkyLight* FoundSkyLight = SkyLight.Get();
+	USkyLightComponent* SkyLightComponent = FoundSkyLight != nullptr ? FoundSkyLight->GetLightComponent() : nullptr;
+
+	if (SkyLightComponent != nullptr)
+	{
+		SkyLightComponent->SetIntensity(SkyLightIntensity);
+	}
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s now shows the %s: sun at %.2f lux, pitch %.1f, yaw %.1f, sky light at %.2f"),
+		*GetName(),
+		SceneLightingName(SceneLighting),
+		SunIntensity,
+		SunRotation.Pitch,
+		SunRotation.Yaw,
+		SkyLightIntensity);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		TEXT("RubberAccumDemo.Lighting"),
+		FString::Printf(TEXT("Lighting: %s"), SceneLightingName(SceneLighting)));
 }
 
 void ARacetrackCircuit::SpawnField()
