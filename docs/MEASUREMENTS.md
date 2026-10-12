@@ -5068,7 +5068,8 @@ needed are plugin `2b1e6e6`, bumped in host `ab0b8ea`.
 ```
 Build:    host ab0b8ea, plugin 2b1e6e6. Build.bat finished 19:40 and BuildPlugin 19:42, local time.
           No compile ran during any run below
-Power:    MAINS, BatteryStatus 2 before every run, and after suite 2
+Power:    MAINS, BatteryStatus 2 at every check: after suite 1, A and B, before C and D, and before
+          and after suite 2
 Editor:   closed. -game from the Development editor binary, L_SpaHarness, -ReleaseField
 Screen:   1600 x 900 window, rendered at 1336 x 751 (r.ScreenPercentage.Default.Desktop.Mode 1),
           anti-aliasing off, t.MaxFPS 0 so uncapped, DisableAllScreenMessages
