@@ -4901,3 +4901,92 @@ In `2627-Y3A-PR-243663/assets/media/`:
 - `h2-smooth-footprint-chase-still.png`: the chase view, gain 4 against the smooth version.
 - `h2-smooth-footprint-vs-gain4-<view>.gif`: the pan, previous on the left and smooth on the right.
 - `h2-smooth-footprint-vs-gain4-view-<view>.png`.
+
+## 2026-10-12 — H2: on the slopes, and the pellets decided by camera distance
+
+**Question.** The user reported pellets missing close to the car where the road changes elevation
+(#74). Is the marble data missing there, or is the shader failing to draw it? Does a fade by camera
+distance alone, the user's suggestion, hold the exit?
+
+```
+Build:    run 9: host 50d92fb, the smooth footprint. Run 10: f07843f, distance only
+          (5, 10 and 14 m, gain 4). Editor open
+Power:    MAINS, BatteryStatus 2 before each run
+Scene:    the H2 field schedule. Run 10 adds the same pan views, plus the five slope poses below
+Field:    run 9 peak marbles 0.8799; run 10 peak marbles 0.8769, rubber 0.9066. Both ran slower than
+          60 fps, so the freeze came later and both fields are more developed than runs 5 to 8
+Logs:     C:/RSBuild/h2-run9-slopes.log, h2-run10-distance.log, with no shader error in either
+```
+
+### The slope poses
+
+The poses are taken from the circuit's spline, read over MCP: 78 points, evaluated as cubic Hermite.
+
+| Pose | Spline key | Car at | Slope |
+|---|---|---|---|
+| dip | 13.4 | (1689, -20422, 105) | +8.9 deg |
+| climb | 14.6 | (3212, -19169, 633) | +18.9 deg |
+| crest | 17.25 | (7111, -15046, 2322) | +8.9 deg |
+| descent | 9.5 | (-6012, -23861, 1079) | -8.4 deg |
+| flat | 40.0 | (3672, 4685, 2575) | -4.2 deg |
+
+Each camera is the chase camera's: 350 cm behind the car along its heading, 167.5 cm above the
+car's pivot, yaw along the track, pitch -18 deg from the horizon, with no pitch from the slope.
+Each pose has a lit asphalt frame and a debug marbles-only frame. Run 9 also has a debug
+all-channels frame.
+
+### Result
+
+- **Dip and climb, smooth footprint.** Sparse pellets are drawn near the camera wherever the marble
+  channel shows coverage. That coverage is low on these straights.
+- **Descent, smooth footprint.** The marble channel shows faint coverage close to the camera; the
+  lit asphalt shows no pellets at all. That fits the facing term. With the camera level and the
+  road falling 8.4 deg, the near road is seen at a grazing angle, the footprint along the view grows
+  by about `1 / facing`, and each pellet is smeared to the same area but too faint to read.
+- **Descent, distance only.** Still no visible pellets. The marbles-only frame is almost black right
+  in front of the camera, so there is practically no marble coverage there to draw.
+- **Crest, both versions.** Faint pellets near the camera where the channel has coverage.
+
+**Straights have no marbles by construction.** A read-only workflow traced it to `AppendMarbleFan`,
+which returns before throwing a fan unless the curvature exceeds `MinimumMarbleCurvature`
+(`SurfaceAccumulationSubsystem.cpp:983-986`). The curvature profile comes from the spline's change
+of direction, so it is zero on a straight climb or descent however steep it is.
+
+Ruled out by the same workflow:
+- the paint-versus-sample mapping on slopes (`SurfaceTrackSpace.cpp:20` uses a 3D nearest point and
+  the same arc length the mesh is built on);
+- the road's winding;
+- the spline's up vector, which tilts with the slope (`SplineComponent.cpp:1051-1096`);
+- mipmapping of the accumulation target, which is created without mips
+  (`SurfaceAccumulationBuffer.cpp:289-296`).
+
+### Flicker under the pan, band over bare tarmac
+
+| View | H1 | Smooth footprint (run 8) | **Distance only (run 10)** | Band pixels over 20 levels, run 10 |
+|---|---|---|---|---|
+| 5.6 m | 1.84x | 1.75x | **2.18x** | 11.5 % |
+| 15 m | 5.59x | 3.06x | **1.98x** | 4.6 % |
+| 30 m | 6.54x | 3.96x | **0.72x** | 0.5 % |
+| 60 m | 14.58x | 1.05x | **1.14x** | 1.5 % |
+| chase | 2.31x | 1.81x | **2.08x** | 13.3 % |
+| overview | 2.03x | 0.26x | 0.30x | 0.7 % |
+
+- **#74's exit is met again** at 30 m and 60 m, because beyond 14 m only the tone is drawn.
+- Close up, at 5.6 m and in the chase view, flicker is a little above the smooth footprint's. The
+  edge width no longer widens along the view at grazing angles.
+- At 15 m it is lower, because in that view 15 m is already past the full-detail distance.
+- Run 10's field is more developed than run 8's, at peak marbles 0.877 against 0.818, so these
+  comparisons are approximate.
+
+### Not verified
+
+- The exact spot the user drove.
+- The frame cost.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`:
+- `h2-slope-<pose>-smooth-footprint-asphalt-and-debug.png`: run 9, with the lit asphalt, the
+  marbles-only view and all channels.
+- `h2-distance-<pose>-previous-now-mask.png`: run 9 against run 10, with run 10's marbles-only
+  view.
