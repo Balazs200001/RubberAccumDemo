@@ -4586,3 +4586,89 @@ eight pan steps:
   boxed
 - `h2-shimmer-heat-30m-aa-off.png` and `h2-shimmer-heat-30m-tsr.png`: per-pixel temporal standard
   deviation over the pan, times 12
+
+## 2026-10-08 — H2 exit check: the pan re-run on the footprint fade, and why the faded band is lighter
+
+**Question.** Does the fade (`f840584`, recorded in `EDITOR_SETUP.md`) meet #74's rescoped exit?
+The exit is *"under the H2 pan, the marble band's flicker at 30 m and 60 m within 2x bare
+tarmac, and no visible step in tone at the transition"*.
+
+```
+Build:    as the entry above, host f840584 (MF_MarbleLayer with the fade, defaults 4 and 2 px a cell)
+Power:    MAINS, as above. The editor was open in the background
+Scene:    identical schedule to the entry above, without the TSR pass: same six poses, same pan,
+          same masks, the same 14400-frame freeze
+Field:    20x from 17:56:52 to 18:00:52 UTC, 240.4 s real, 4807 s of track time, about 59.8 laps.
+          This run held 60 fps, where the run above held about 46.5, so the same freeze frame came
+          17 laps earlier. Peak over 48 columns at the freeze: rubber 0.8566, marbles 0.8150, against
+          0.9113 and 0.8769 above. THE TWO FIELDS DIFFER, which matters for the tone comparison below
+Log:      C:/RSBuild/h2-run4-fade.log
+```
+
+### Flicker
+
+Band and bare are as in the entry above, mean absolute luma change per quarter-pixel step:
+
+| View | Before: band, bare, ratio | After: band, bare, ratio | Band pixels swinging over 20 levels, before to after |
+|---|---|---|---|
+| near, 5.6 m | 1.40, 0.76, 1.8x | 0.85, 0.76, **1.12x** | 8.5 % to 1.9 % |
+| 15 m | 2.48, 0.44, 5.6x | 0.40, 0.44, **0.91x** | 18.5 % to 0.06 % |
+| 30 m | 3.26, 0.50, 6.5x | 0.40, 0.49, **0.82x** | 26.3 % to 0.05 % |
+| 60 m | 6.18, 0.42, 14.6x | 0.36, 0.42, **0.85x** | 43.7 % to 0.17 % |
+| chase | 2.00, 0.87, 2.3x | 0.95, 0.90, **1.06x** | 14.6 % to 3.5 % |
+| overview | 3.53 | 0.31 | 13.2 % to 0.46 % |
+
+- **The flicker half of the exit is met:** 0.82x at 30 m and 0.85x at 60 m, against a limit of 2x.
+- The static frames still change by 0.18 to 0.27 levels.
+- The near view also improves, because its upper half is far enough away to fade.
+
+### Tone
+
+I compared the band's mean luma row by row, over the nine pan frames, before against after.
+
+- **Rows where the pellets are fully resolved differ by +0.4 to +0.5.** For example, the near view's
+  rows 720 to 899 read 98.8, 95.4 and 91.8 before against 99.2, 95.9 and 92.3 after. That is about
+  what the less-developed field would give.
+- **Rows where the band has faded are +2.5 to +5 lighter after.** Examples: the near view's rows 0
+  to 299, the 15 m view throughout, and the chase view's rows 240 to 479.
+
+**Why: the old mask over-darkened with distance.** I modelled the H1 mask offline:
+- per pixel, at a given pixels-per-cell, at 0.6 coverage;
+- with `DDX` and `DDY` taken per 2x2 quad, as on hardware;
+- against the hard-disc covered share, sampled at 16 x 16 per cell (`edge_bias.py`).
+
+| Pixels per cell | 8 | 6 | 4 | 3 | 2 | 1.5 | 1 | 0.5 |
+|---|---|---|---|---|---|---|---|---|
+| H1 mask mean / true share | 1.03 | 1.06 | 1.13 | 1.21 | 1.31 | 1.36 | 1.47 | 1.48 |
+
+- The H2 tone formula gives 0.1431 against a true share of 0.1385, that is **1.03x**.
+- Once the derivative-sized edge is as wide as a pellet, the smoothstep spreads every pellet into a
+  darker halo. At 2 px a cell the old band carried about 4 % more dark mask than the pellets
+  cover. On screen, a pellet reads roughly 60 levels below tarmac, so that is about 2.5 levels:
+  most of the +2.5 to +5. The rest is the field difference, which the resolved rows put at about
+  0.5, plus anything the model does not capture.
+- **Within the new transition**, from 4 px a cell, where the output is still H1's mask at 1.13x, to
+  2 px, where it is the tone at 1.03x, the band's mean drifts by about 10 % of the pellets'
+  darkening. That is about 1 to 1.5 levels, spread over the whole fade distance rather than at
+  one row.
+
+**So there is no measured step. But the faded band reads close to bare tarmac.** Pellets look dark
+on screen mostly through shading. Their 0.95 roughness and dome normals catch less sky than the
+tarmac's 0.80, and their albedo, 0.010, is not far below the scan's mean of about 0.015. Blending
+colour, roughness and normal by area is linear in the parameters, but shading is not, so the tone
+can only approximate how the pellets look on average. Whether it reads right is the user's call.
+This is not measured separately. It is the likely reason, not a verified one.
+
+### Not verified
+
+- A clean before-and-after on one field: the two runs froze about 60 and 77 laps in.
+- The tone against a supersampled render of resolved pellets.
+- Forward motion.
+- The frame cost.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`:
+- `h2-fade-<view>-before-vs-after.gif` for `5m6`, `15m`, `30m`, `60m`, `chase` and `overview`. H1 is
+  on the left and the fade on the right, cropped the same way as above.
+- `h2-fade-view-<view>-after.png`: the full frame.
