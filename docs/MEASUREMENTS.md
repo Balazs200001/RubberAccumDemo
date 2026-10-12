@@ -5275,3 +5275,110 @@ set at runtime for the measurement, not a Config change.
 - Another GPU, or another resolution.
 - **No Insights capture was needed.** `ProfileGPU` named the decay pass directly, and the CSV stats
   covered the CPU side.
+
+## 2026-10-12 — H5: the lighting presets, the time readout and the AI cars' sports car body
+
+**Question.** Do the H5 changes work in `-game`? What do the AI cars' sports car bodies cost against
+the cubes?
+- The lighting presets are host `a58dd33`.
+- The Slate time readout is `8fbfc66`.
+- The body is `59db3b0`.
+
+```
+Build:    host 59db3b0 (with a58dd33 and 8fbfc66), plugin 2b1e6e6, unchanged
+Power:    MAINS, BatteryStatus 2 before and after the cost run and the suite
+Editor:   closed. -game from the Development editor binary, L_SpaHarness, -ReleaseField
+Screen:   1600 x 900 window, rendered at 1336 x 751, anti-aliasing off
+Logs:     C:/RSBuild/h5-lighting.log, h5-readout2.log, h5-parked-static.log, h5-car-sides.log,
+          h5-running-sportscar.log and .csv, h5-suite.log, h5-suite-2.log
+```
+
+### The lighting presets, `RacetrackDemo.Lighting 0|1|2`
+
+- **The schedule.** The field ran at 20x for 6000 frames, capped at 60 fps, then froze at 1x. Each
+  preset was set, held 240 frames, then captured at the H2 chase pose and at m30.
+- **What each preset logged** (`h5-lighting.log`):
+
+| Preset | Sun | Sky light | Mean luma, chase still | Mean luma, m30 still |
+|---|---|---|---|---|
+| 0, the map's sun | 6.00 lux, pitch −49.5, yaw −10.3 | 1.00 | 142.3 | 141.5 |
+| 1, low sun ahead of the camera | 6.00 lux, pitch −8.0, yaw 8.3 | 1.00 | 112.4 | 115.7 |
+| 2, overcast | 0.90 lux, pitch −49.5, yaw −10.3 | 2.00 | 52.5 | 49.9 |
+
+- The low sun's yaw is the camera's −171.66° plus 180°.
+- The overcast stills are much darker. They were taken 240 frames, about 4 s, after the switch,
+  and eye adaptation settling was not checked.
+- **Whether any preset looks right was not judged here.**
+
+### The time readout
+
+- **Shown in the stills** (`h5-readout2`):
+  - it reads "TIME 20.00x" at 20x and "TIME 1.00x" after `RacetrackDemo.TimeDilation 1`;
+  - "[ . ] faster [ , ] slower 0.1x to 20x" sits under it;
+  - after `DisableAllScreenMessages` it is gone.
+- Every profiling and capture script passes `DisableAllScreenMessages`, so none of them draws it.
+- Its cost was not measured on its own.
+
+### The AI cars' sports car body
+
+**Why the first attempt drew nothing.** `/Game/Vehicles/SportsCar/SKM_SportsCar` has one LOD of
+4 vertices. Its bounds are 2.5 × 2.5 × 0 cm, a flat quad 5.6 cm up, read over MCP. The Vehicle
+template draws the car from static meshes on that skeleton, as `EDITOR_SETUP.md` records. At the
+0.53 fit, the quad was about 1.3 cm across. The nine render experiments in #77 could not have
+shown anything.
+
+**The fit, logged at spawn:**
+- the 140.0 cm wheelbase is matched exactly;
+- the body's wheels stand **95.4 cm apart against the 80.0 cm contact track**. Each visible tyre
+  centre is about 7.7 cm outboard of the line its contact is painted along.
+
+**Shown in stills** (`h5-parked-static`, `h5-car-sides`), with the field frozen at its spawn:
+- the body, the glass and four wheels draw;
+- the rims face outward on both sides;
+- the tyres sit on the road;
+- the other cars are visible down the track.
+
+**The cost.** H4's run B schedule was re-run unchanged: 20x to frame 9000, 1x to 15000, then frozen
+to 19060, uncapped, with the camera following the leader.
+
+| Segment | `FrameTime`, cube, then body | `GameThreadTime` | `RenderThreadTime` | `GPUTime` |
+|---|---|---|---|---|
+| 20x | 6.828 → 7.111, **+0.28** | 3.514 → 3.738, +0.22 | 6.803 → 7.087, +0.28 | 4.840 → 5.322, **+0.48** |
+| 1x | 6.710 → 7.022, **+0.31** | 3.531 → 3.659, +0.13 | 6.687 → 6.997, +0.31 | 4.550 → 5.065, **+0.52** |
+| frozen | 6.496 → 6.725, **+0.23** | 2.094 → 2.091, 0.00 | 6.470 → 6.696, +0.23 | 4.389 → 4.784, **+0.40** |
+
+- These are medians in ms. The cube run is H4's `h4-running` (host `ab0b8ea`, 19:54). The body run is
+  `h5-running-sportscar` (21:38 to 21:41). Both dropped 300 frames after each command.
+- **The bodies cost about 0.4 to 0.5 ms of GPU time and 0.23 to 0.31 ms of frame time.** The frame is
+  render-thread-bound, so the frame grows with the render thread.
+- **The game thread grows only while the cars move**, by 0.13 to 0.22 ms. Six components per car move
+  every frame instead of one. Frozen, it is unchanged.
+- **The surface system's own stats did not change.** `SubsystemTick` is 0.206 against 0.220 at 20x.
+  `RegisterContact` is 0.937 against 0.937 at 20x, and 1.019 against 0.949 at 1x.
+- **The fields are close, not identical.** At frame 3000 the peaks were rubber 0.1890 for the cube
+  and 0.2050 for the body. At frame 19000 they were rubber 0.4604 against 0.4803, and marbles 0.3679
+  against 0.3755. The frame times differ, so the 20x steps sample differently.
+
+**Where the GPU time goes**, in the `ProfileGPU` frames 14501 and 14701 of each run, at 1x:
+
+| Pass | Cube | Body |
+|---|---|---|
+| Graphics pipeline total | 4.902, 4.085 | 5.654, 4.890 |
+| `ShadowDepths` | 0.986, 0.922 | 1.165, 1.161 |
+| `BasePass` | 0.258, 0.240 | 0.331, 0.326 |
+| `NaniteBasePass` | 0.047, 0.046 | 0.056, 0.055 |
+
+These are single frames, each the first entry of that name in the dump. They point at the shadows
+and the base pass, and they are not a breakdown of the 0.5 ms.
+
+**The suite.** `RacetrackSurface+RubberAccumDemo` passed 137 of 137 on the body build
+(`h5-suite-2.log`), and 137 of 137 before it, on `8fbfc66` (`h5-suite.log`).
+
+### Not verified
+
+- Any H5 change in PIE.
+- The lighting presets while driving.
+- The readout's own cost.
+- The run-to-run spread of the body cost: one run per build, about two hours apart.
+- Which body component costs what: the body, the glass or the wheels.
+- Whether the bodies look right, which is the user's call.
