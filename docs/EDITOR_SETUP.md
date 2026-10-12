@@ -2752,3 +2752,31 @@ Not verified:
 - the spot the user drove, which is the user's to see;
 - the frame cost;
 - the cooked shader.
+
+---
+
+## 2026-10-12 — H2: the dark-patch-only distance moved to 20 m
+
+**Why.** The user asked: *"I think you could maybe increase the max distance to camera where the
+dark patch only happens to about 20, and decide the appropriate levels for the others yourself."*
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. One parameter default; no nodes, connections or
+code changed. `M_SurfaceAsphalt` was not recompiled and is not dirty. Host commit `f79e224`.
+
+| Node | Parameter | Before | After |
+|---|---|---|---|
+| `MaterialExpressionScalarParameter_5` | `MarblePelletToneOnlyDistance` | 1400 cm | **2000 cm** |
+
+**The other two are deliberately unchanged, and why:**
+- **`MarblePelletUnityGainDistance` stays at 500 cm.** That is where a cell still spans about 2 px
+  in the chase view, the band the user called good. Moving it out would leave sub-pixel pellets
+  drawn at their natural, faint darkness, a lighter ring before the gain takes over.
+- **`MarblePelletFullDetailDistance` stays at 1000 cm.** That is where a cell shrinks to about
+  0.5 px along the view in the chase view. Beyond it, the 3x3 search loses filtered area and flicker
+  climbs.
+
+So the crossfade from pellets to the dark patch now runs from 10 to 20 m instead of 10 to 14 m.
+
+**Verified:** saved, read back as 2000, and no shader error in the `-game` run that measured it.
+`MEASUREMENTS.md`, *H2: the dark patch from 20 m*, has the numbers. **Not verified:** how it looks
+while driving, which is the user's call; frame cost.
