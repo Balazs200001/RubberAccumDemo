@@ -2780,3 +2780,121 @@ So the crossfade from pellets to the dark patch now runs from 10 to 20 m instead
 **Verified:** saved, read back as 2000, and no shader error in the `-game` run that measured it.
 `MEASUREMENTS.md`, *H2: the dark patch from 20 m*, has the numbers. **Not verified:** how it looks
 while driving, which is the user's call; frame cost.
+
+---
+
+## 2026-10-12 — H3: the marble layer on the engine's material quality switch
+
+**Why.** H3 (#75), *"Scalability tiers wired to the standard system"*. The user chose option A: a
+`QualitySwitch` in `MF_MarbleLayer`, driven by `sg.EffectsQuality` through `r.MaterialQualityLevel`.
+The upscaling is left alone. The decision and the engine facts are on
+[#75](https://github.com/Balazs200001/RubberAccumDemo/issues/75).
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. Five nodes added, one Custom input added, eleven
+connections made, two connections moved, the pellet node's code changed in two lines.
+**Also saved:** `/Game/Materials/M_SurfaceAsphalt`, recompiled and re-saved as before, with its
+graph untouched. Host commit `f791db2`.
+
+Before the edit there was no `-game` process, PIE was not running and the host was clean.
+
+### Nodes added
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionQualitySwitch_0` | `QualitySwitch` | Chooses the layer's output |
+| `MaterialExpressionCustom_1` | `Custom` | `MarbleTone`, `CMOT_Float4`, HLSL below |
+| `MaterialExpressionQualitySwitch_1` | `QualitySwitch` | Chooses the distance scale |
+| `MaterialExpressionScalarParameter_8` | `ScalarParameter` | `MarblePelletMediumDistanceScale`, **0.5**, group `Marble Pellets` |
+| `MaterialExpressionConstant_0` | `Constant` | 1.0 |
+
+### Wiring
+
+```
+Constant_0 (1.0)                  --> QualitySwitch_1.Default
+MarblePelletMediumDistanceScale   --> QualitySwitch_1.Medium
+QualitySwitch_1                   --> Custom_0.DistanceScale            (new input, 12th)
+
+VertexNormalWS_0                  --> Custom_1.SurfaceNormal
+FunctionInput_0 (Marbles)         --> Custom_1.Coverage
+MarblePelletMaxRadius             --> Custom_1.MaxRadius
+MarblePresenceGain                --> Custom_1.PresenceGain
+MarbleMaxPresence                 --> Custom_1.MaxPresence
+MarblePelletToneGain              --> Custom_1.ToneGain
+
+Custom_0 (MarblePellets)          --> QualitySwitch_0.Default
+Custom_1 (MarbleTone)             --> QualitySwitch_0.Low
+QualitySwitch_0 --> ComponentMask_0 (RGB, PelletNormal) and ComponentMask_1 (A, PelletMask)
+                                   (both moved; they read Custom_0 before)
+```
+
+Every input was read back with `get_expression_inputs`: both switches, `MarbleTone`'s six inputs,
+the pellet node's twelve inputs and both masks.
+
+**What each quality level gets:**
+
+| `r.MaterialQualityLevel` | Reached by | Output |
+|---|---|---|
+| Low | `sg.EffectsQuality 0`, `scalability 0` | `MarbleTone`: the dark patch everywhere. The pellet node is not in this variant at all |
+| Medium | `sg.EffectsQuality 1` | `MarblePellets` with `DistanceScale` 0.5: 2.5, 5 and 10 m |
+| High, Epic | `sg.EffectsQuality 2` and up | `MarblePellets` with `DistanceScale` 1: 5, 10 and 20 m |
+
+A `QualitySwitch` input left unconnected falls back to `Default`
+(`MaterialExpressions.cpp:9067-9113`), so High and Epic need no wire.
+
+**Setting a new Custom node's inputs.** A new Custom node starts with one empty input. Setting all
+six named, connected inputs in one `set_properties` call was refused:
+*"ArrayAdd: elements changed alongside the size change; insertion points are ambiguous."*
+It worked in three steps:
+1. rename the existing element, with the same size;
+2. pass it back unchanged with five names appended;
+3. connect each input with `connect_expressions`.
+
+### `MarbleTone`'s HLSL, recorded verbatim
+
+```hlsl
+const float SmallestSizeShare = 0.6;
+const float SizeShareSpread = 0.4;
+float Fill = saturate(Coverage * PresenceGain);
+float Presence = Fill * MaxPresence;
+float LargestRadius = MaxRadius * (0.5 + 0.5 * Fill);
+float MeanSquaredSizeShare = SmallestSizeShare * SmallestSizeShare + SmallestSizeShare * SizeShareSpread + SizeShareSpread * SizeShareSpread / 3.0;
+float Tone = saturate(Presence * PI * LargestRadius * LargestRadius * MeanSquaredSizeShare);
+return float4(normalize(SurfaceNormal), saturate(Tone * ToneGain));
+```
+
+Inputs: `SurfaceNormal`, `Coverage`, `MaxRadius`, `PresenceGain`, `MaxPresence`, `ToneGain`. It is the
+same expected cover as the pellet node's `Tone`, with the full gain, and the flat surface normal.
+**The formula is duplicated across the two nodes**, so a change to the pellets' size distribution
+has to be made in both.
+
+### The pellet node's HLSL, changed in two lines
+
+The full code is in the entry *H2: the pellets decided by camera distance alone*, with these two
+lines replaced:
+
+```hlsl
+float Resolved = 1.0 - smoothstep(FullDetailDistance * DistanceScale, ToneOnlyDistance * DistanceScale, CameraDistance);
+float Gain = lerp(1.0, ToneGain, smoothstep(UnityGainDistance * DistanceScale, FullDetailDistance * DistanceScale, CameraDistance));
+```
+
+Inputs now in order: `Position`, `SurfaceNormal`, `Coverage`, `CellSize`, `MaxRadius`,
+`PresenceGain`, `MaxPresence`, `FullDetailDistance`, `ToneOnlyDistance`, `ToneGain`,
+`UnityGainDistance`, `DistanceScale`.
+
+### What was verified, and what was not
+
+Verified:
+- Both materials recompiled in the editor with no error, and both are saved.
+- In a `-game` run, `sg.EffectsQuality` was switched 3 → 1 → 0 → 3 by console command:
+  - the three looks appear as designed;
+  - no shader error was logged, so the Low and Medium variants compiled. The editor compiles only
+    the active level;
+  - `RacetrackDemo.SurfaceReport` gave identical peaks at every tier.
+
+The numbers are in `MEASUREMENTS.md`, *H3: the quality tiers switched at runtime*.
+
+Not verified:
+- each tier's frame cost beyond single `ProfileGPU` frames, which is H4's;
+- the `scalability <n>` console command itself. It sets `sg.EffectsQuality` among the other groups
+  (`Scalability.cpp:767-879`) but was not run;
+- the cooked shaders per quality level.
