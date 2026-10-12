@@ -2074,3 +2074,170 @@ neighbours overlap, which reads as clumping.
 does not exist"*. The editor log said why: `LogUtils: Error: The Editor is currently in a play
 mode`. The user had started PIE. Nothing was changed until the user stopped it. Asset tools over
 MCP need PIE stopped, and they report it as a missing asset rather than as play mode.
+
+---
+
+## 2026-10-08 — H2: the pellets fade to their prefiltered tone by pixel footprint
+
+**Why.** The pellets shimmered where a 4 cm cell is smaller than about 2 pixels: 5.6 to 14.6 times
+bare tarmac under a quarter-pixel pan from 15 m out (`MEASUREMENTS.md`, *H2: the marble pellets
+shimmer with distance*). The user chose option B and kept anti-aliasing off. The decision and the
+rejected options are on [#74](https://github.com/Balazs200001/RubberAccumDemo/issues/74).
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. Two nodes added, two Custom inputs added,
+two connections made, the Custom node's code replaced. Nothing deleted.
+
+**Also saved:** `/Game/Materials/M_SurfaceAsphalt`. Its graph is unchanged. It was recompiled
+explicitly to check the new HLSL compiles inside it, which marked it dirty, and it was saved so no
+editor state is left unsaved. `git status` showed it modified on disk afterwards. That is the
+material's cached data refreshed from the changed function. No node, connection or parameter
+default of it was touched.
+
+Made via: `MaterialTools.get_expressions`, `add_expression`, `connect_expressions`, `recompile`
+(the function, then the material), `get_expression_inputs`; `ObjectTools.get_properties` and
+`set_properties`; `AssetTools.is_dirty` and `save_assets` with the two paths;
+`EditorAppToolset.IsPIERunning`, false before the edit; `LogsToolset.GetLogEntries`, no material or
+shader error after either recompile.
+
+### Nodes added to `MF_MarbleLayer`
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionScalarParameter_4` | `ScalarParameter` | `MarblePelletFullDetailCellPixels`, default **4.0**, group `Marble Pellets` |
+| `MaterialExpressionScalarParameter_5` | `ScalarParameter` | `MarblePelletToneOnlyCellPixels`, default **2.0**, group `Marble Pellets` |
+
+```
+MarblePelletFullDetailCellPixels --> Custom.FullDetailCellPixels   (new input, 8th)
+MarblePelletToneOnlyCellPixels   --> Custom.ToneOnlyCellPixels     (new input, 9th)
+```
+
+The seven existing inputs were passed back exactly as read and the two appended, then each of the
+nine read back with `get_expression_inputs`. Every input comes from a different node, so the
+read-back defect recorded under H1 step 2 does not apply.
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `MarblePelletFullDetailCellPixels` | 4 | A cell at least this many pixels across, along its most compressed screen axis, draws the pellets exactly as before |
+| `MarblePelletToneOnlyCellPixels` | 2 | A cell this many pixels across or fewer draws only the pellets' average tone, and skips the 3x3 search |
+
+The defaults come from the measurement. At 4.8 px a cell the band flickered 1.8 times bare
+tarmac, which is the close range the user judged convincing in H1. At 1.8 px it flickered 5.6
+times.
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+```hlsl
+const float SmallestSizeShare = 0.6;
+const float SizeShareSpread = 0.4;
+float2 Scaled = Position.xy / CellSize;
+float2 Cell = floor(Scaled);
+float2 Local = Scaled - Cell;
+float Fill = saturate(Coverage * PresenceGain);
+float Presence = Fill * MaxPresence;
+float Growth = 0.5 + 0.5 * Fill;
+float LargestRadius = MaxRadius * Growth;
+float MeanSquaredSizeShare = SmallestSizeShare * SmallestSizeShare + SmallestSizeShare * SizeShareSpread + SizeShareSpread * SizeShareSpread / 3.0;
+float Tone = saturate(Presence * PI * LargestRadius * LargestRadius * MeanSquaredSizeShare);
+float CellsPerPixel = max(length(DDX(Scaled)), length(DDY(Scaled)));
+float CellPixels = 1.0 / max(CellsPerPixel, 1e-6);
+float Resolved = smoothstep(ToneOnlyCellPixels, FullDetailCellPixels, CellPixels);
+float NearestEdge = 1.0;
+float BestHeight = 0.0;
+float2 BestOffset = 0.0;
+float BestRadius = 1.0;
+[branch]
+if (Resolved > 0.0)
+{
+    for (int Row = -1; Row <= 1; ++Row)
+    {
+        for (int Column = -1; Column <= 1; ++Column)
+        {
+            float2 Neighbour = float2(Column, Row);
+            float4 Draw = Rand32ToFloat(Rand4DPCG32(int4(int2(Cell + Neighbour), 0, 0)));
+            if (Draw.z >= Presence)
+            {
+                continue;
+            }
+            float Radius = LargestRadius * (SmallestSizeShare + SizeShareSpread * Draw.w);
+            float2 Offset = Local - (Neighbour + Draw.xy);
+            float Distance = length(Offset);
+            NearestEdge = min(NearestEdge, Distance - Radius);
+            float Height = Radius * Radius - Distance * Distance;
+            if (Height > BestHeight)
+            {
+                BestHeight = Height;
+                BestOffset = Offset;
+                BestRadius = Radius;
+            }
+        }
+    }
+}
+float EdgeWidth = max(abs(DDX(NearestEdge)) + abs(DDY(NearestEdge)), 1e-4);
+float Mask = 1.0 - smoothstep(-EdgeWidth, EdgeWidth, NearestEdge);
+float2 Tilt = BestOffset / BestRadius;
+float3 TiltWorld = float3(Tilt, 0.0);
+TiltWorld -= dot(TiltWorld, SurfaceNormal) * SurfaceNormal;
+float Rise = sqrt(saturate(1.0 - dot(Tilt, Tilt)));
+float3 PelletNormal = normalize(TiltWorld + SurfaceNormal * Rise);
+float3 BlendedNormal = normalize(lerp(SurfaceNormal, PelletNormal, Resolved));
+return float4(BlendedNormal, lerp(Tone, Mask, Resolved));
+```
+
+Inputs in order: `Position`, `SurfaceNormal`, `Coverage`, `CellSize`, `MaxRadius`, `PresenceGain`,
+`MaxPresence`, `FullDetailCellPixels`, `ToneOnlyCellPixels`. Output unchanged, `CMOT_Float4`: xyz
+the world-space normal, w the mask.
+
+**What changed from H1's version, in prose, since the source carries no comments:**
+- **The size spread is named.** The pellet's radius was `MaxRadius x Growth x (0.6 + 0.4 x Draw.w)`.
+  It is the same expression with `0.6` and `0.4` as `SmallestSizeShare` and `SizeShareSpread`, so
+  the tone can use the same two numbers.
+- **The footprint.** `Scaled` is the position in cells. Its screen derivatives give how many cells
+  one pixel steps across, along each screen axis. The larger of the two lengths is the axis along
+  which a cell is most compressed, and `CellPixels` is its inverse: how many pixels one cell spans
+  along that axis. This is the quantity texture mip selection uses. It accounts for grazing
+  angles, field of view and the render resolution without retuning.
+- **Resolved.** This is 1 where a cell spans `FullDetailCellPixels` or more, 0 where it spans
+  `ToneOnlyCellPixels` or fewer, and a smoothstep between.
+- **The tone.** This is the share of road the pellets cover on average:
+  `Presence x pi x (MaxRadius x Growth)^2 x E[(0.6 + 0.4u)^2]`.
+  - The expectation is `0.6^2 + 0.6 x 0.4 + 0.4^2 / 3 = 0.6533`.
+  - A NumPy model of this HLSL, sampled at 24 x 24 points per cell over 192 x 192 cells, measured
+    the true covered share. The formula overstates it by at most 4 % up to 0.7 coverage, and by 9 %
+    at full coverage, because it ignores overlaps.
+  - The colour, roughness and normal lerps in `M_SurfaceAsphalt` all take this mask as their
+    alpha. So where only the tone remains, they give the average of what the pellets would have
+    drawn, as a mipmap does for a texture.
+- **The search is skipped** with `[branch]` where `Resolved` is 0. The loop holds no derivative
+  instruction. `DDX(NearestEdge)` is taken after the branch, where every lane is active again.
+- **The output blends.** The mask is `lerp(Tone, Mask, Resolved)`, and the normal blends from the
+  surface normal to the dome normal by the same `Resolved`. Up close, `Resolved` is 1 and the output
+  is exactly H1's.
+- **Where derivatives do not exist.** `DDX` and `DDY` return 0 (`Common.ush:828`), so
+  `CellsPerPixel` is 0, `CellPixels` is a million and `Resolved` is 1, which is H1's behaviour.
+
+**Engine facts this rests on, each read in the 5.8 source:**
+- `PI` is `const static MaterialFloat PI` at `Common.ush:133`, in scope for Custom nodes.
+- The `float2` overloads of `DDX` and `DDY` are at `Common.ush:828` to `898`.
+- `AntialiasedTextureMask`, the engine's own derivative-based mask edge, carries the note "ddx/ddy
+  only for every 2x2 block (bad for distant stuff)" at `Common.ush:1756`. That is the 2x2 speckle
+  this fade replaces with the tone at distance.
+
+**Not done:** C's per-pixel edge width (`ddx_fine`) inside the transition, which was not chosen.
+The edge is still sized by `DDX(NearestEdge)`.
+
+### What was verified, and what was not
+
+Verified:
+- `MF_MarbleLayer` and `M_SurfaceAsphalt` recompiled, with no material or shader error in the
+  editor log. The material recompile raises if its shader fails to compile, and it did not.
+- Every one of the nine Custom inputs was read back.
+- Both assets are saved and not dirty. `git status` showed only these two files.
+- In a running `-game` demo, the pellets render up close as before and fade with distance. Under
+  the H2 pan the band's flicker is now 0.82 to 0.91 times bare tarmac at 15, 30 and 60 m, against
+  5.6 to 14.6 times before. The numbers are in `MEASUREMENTS.md`, *H2 exit check*.
+
+Not verified:
+- Whether the faded band reads right, which is the user's call. It reads close to bare tarmac,
+  probably because pellets look dark mostly through shading, not albedo.
+- The pellet layer's frame cost, before or after.
+- The cooked shader.
