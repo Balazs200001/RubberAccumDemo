@@ -4990,3 +4990,36 @@ In `2627-Y3A-PR-243663/assets/media/`:
   marbles-only view and all channels.
 - `h2-distance-<pose>-previous-now-mask.png`: run 9 against run 10, with run 10's marbles-only
   view.
+
+## 2026-10-12 — H2: the dark patch from 20 m
+
+```
+Build:    host f79e224. Distances 5, 10 and 20 m, gain 4. Editor open
+Power:    MAINS, BatteryStatus 2 before the run
+Scene:    the H2 exit-check schedule, unchanged
+Field:    peak marbles 0.8122, rubber 0.8556, which is close to runs 5 to 8. Run 10 (14 m) had 0.8769
+Log:      C:/RSBuild/h2-run11-tone-20m.log, with no shader error
+```
+
+Band flicker over bare tarmac, per quarter-pixel step under the H2 pan:
+
+| View | H1 | Patch from 14 m (run 10) | **Patch from 20 m (run 11)** | Band pixels over 20 levels, run 11 |
+|---|---|---|---|---|
+| 5.6 m | 1.84x | 2.18x | **2.02x** | 11.0 % |
+| 15 m | 5.59x | 1.98x | **2.82x** | 8.4 % |
+| 30 m | 6.54x | 0.72x | **1.29x** | 0.8 % |
+| 60 m | 14.58x | 1.14x | **1.04x** | 1.1 % |
+| chase | 2.31x | 2.08x | **2.03x** | 12.8 % |
+| overview | 2.03x | 0.30x | 0.26x | 0.3 % |
+
+- **#74's exit, within 2x at 30 m and 60 m, still holds.**
+- The 15 m view rises from 1.98x to 2.82x, because at 15 m the band is now half pellets.
+- The chase view and the near view are unchanged within the run-to-run spread.
+- Runs 10 and 11 froze on different fields, so the comparison is approximate.
+
+**Not verified:** flicker in motion; the frame cost.
+
+**Captures**, in `2627-Y3A-PR-243663/assets/media/`:
+- `h2-tone-only-14-vs-20m-chase-still.png`;
+- `h2-tone-only-14-vs-20m-<view>.gif`;
+- `h2-tone-only-14-vs-20m-view-<view>.png`.
