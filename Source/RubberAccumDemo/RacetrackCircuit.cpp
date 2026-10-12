@@ -104,9 +104,11 @@ namespace RacetrackDrivenVehicle
 {
 	constexpr float Scale = 0.5f;
 
-	constexpr float ChaseCameraDistance = 900.0f;
+	constexpr float ChaseCameraDistance = 350.0f;
 
-	constexpr float ChaseCameraHeight = 450.0f;
+	constexpr float ChaseCameraHeight = 130.0f;
+
+	constexpr double ChaseCameraLookDownDegrees = 18.0;
 
 	constexpr float SecondsToFullBrake = 2.0f;
 
@@ -158,10 +160,7 @@ namespace RacetrackDrivenVehicle
 
 	void AimTheChaseCamera(AWheeledVehiclePawn& Vehicle)
 	{
-		const FRotator LookingDownAtTheCar(
-			-FMath::RadiansToDegrees(FMath::Atan2(ChaseCameraHeight, ChaseCameraDistance)),
-			0.0,
-			0.0);
+		const FRotator LookingDownAtTheRoad(-ChaseCameraLookDownDegrees, 0.0, 0.0);
 
 		TArray<UCameraComponent*> Cameras;
 		Vehicle.GetComponents(Cameras);
@@ -177,7 +176,7 @@ namespace RacetrackDrivenVehicle
 
 			Arm->TargetArmLength = ChaseCameraDistance;
 			Arm->SocketOffset = FVector(0.0, 0.0, ChaseCameraHeight);
-			Camera->SetRelativeRotation(LookingDownAtTheCar);
+			Camera->SetRelativeRotation(LookingDownAtTheRoad);
 		}
 	}
 }
