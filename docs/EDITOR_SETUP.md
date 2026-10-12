@@ -2434,3 +2434,174 @@ It is not a physical match. `MEASUREMENTS.md`, *H2: the tone gain*, has the numb
 - The gain multiplies only the tone: the output is `lerp(Tone, Mask, Resolved)`, with `ToneGain`
   inside `Tone`. So where pellets are resolved, a cell spanning 1 px or more, nothing changes, and
   the tarmac between near pellets stays untouched.
+
+---
+
+## 2026-10-12 — H2: a smooth footprint against the road's facets, pellets to 0.5 px a cell, the gain ramped in
+
+**Why.** The user drove the gain-4 version with the new chase camera and judged it: *"There is a
+pretty obvious problem when there is elevation change with your marble implementation at this
+spot, but I also think the [band beyond the resolved pellets] again should be marbles. Let me see
+if the flickering is even noticeable, and if it should be something I should worry about."* Their
+screenshot showed horizontal stripes across the marble band over a crest. The decision is on
+[#74](https://github.com/Balazs200001/RubberAccumDemo/issues/74).
+
+**The cause of the stripes, from the code.** It is not separately measured.
+- The road mesh is flat 128 cm segments (`RoadSegmentLength`), so over a crest each segment tilts
+  slightly differently.
+- `DDX` and `DDY` of the world position are constant across one flat segment and jump at its edge.
+- At grazing angles, a one-degree change of tilt changes the footprint by 10 to 20 %. So
+  `Resolved`, and with it the choice between pellets and the much darker gain-4 tone, changed
+  segment by segment.
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. One node added, one Custom input added, one
+connection made, two parameter defaults changed, the Custom node's code replaced.
+**Also saved:** `/Game/Materials/M_SurfaceAsphalt`, recompiled and re-saved as before, with its
+graph untouched. Host commit `50d92fb`.
+
+Before the edit: no `-game` process was running, `IsPIERunning` was false, and git was clean. After
+it: no material or shader error after either recompile, all eleven Custom inputs read back, both
+assets saved and not dirty, and no shader error in the `-game` log of the run that followed.
+
+| Node | Parameter | Before | After |
+|---|---|---|---|
+| `MaterialExpressionScalarParameter_4` | `MarblePelletFullDetailCellPixels` | 1 | **0.5** |
+| `MaterialExpressionScalarParameter_5` | `MarblePelletToneOnlyCellPixels` | 0.5 | **0.25** |
+| `MaterialExpressionScalarParameter_7`, new | `MarblePelletUnityGainCellPixels`, group `Marble Pellets` | | **2** |
+
+`MarblePelletToneGain` stays at 4. Its meaning changes, as described below.
+
+```
+MarblePelletUnityGainCellPixels --> Custom.UnityGainCellPixels   (new input, 11th)
+```
+
+### The Custom node's HLSL, recorded verbatim because it exists nowhere else
+
+```hlsl
+const float SmallestSizeShare = 0.6;
+const float SizeShareSpread = 0.4;
+const float WideEdgeAreaExcess = 0.2;
+const float NarrowEdgeAreaConstant = 0.1;
+const float NarrowEdgeAreaLinear = 0.3;
+const float NarrowEdgeAreaQuadratic = 0.8;
+const float GrazingFacingLimit = 0.01;
+float2 Scaled = Position.xy / CellSize;
+float2 Cell = floor(Scaled);
+float2 Local = Scaled - Cell;
+float3 ViewRay = normalize(Parameters.WorldPosition_CamRelative);
+float3 Up = normalize(SurfaceNormal);
+float Facing = max(abs(dot(ViewRay, Up)), GrazingFacingLimit);
+float PixelAngle = 2.0 / (ResolvedView.ViewToClip[0][0] * ResolvedView.ViewSizeAndInvSize.x);
+float AcrossCellsPerPixel = GetPixelDepth(Parameters) * PixelAngle / CellSize;
+float AlongCellsPerPixel = AcrossCellsPerPixel / Facing;
+float2 AlongView = ViewRay.xy / max(length(ViewRay.xy), 1e-4);
+float2 AcrossView = float2(-AlongView.y, AlongView.x);
+float Fill = saturate(Coverage * PresenceGain);
+float Presence = Fill * MaxPresence;
+float Growth = 0.5 + 0.5 * Fill;
+float LargestRadius = MaxRadius * Growth;
+float MeanSquaredSizeShare = SmallestSizeShare * SmallestSizeShare + SmallestSizeShare * SizeShareSpread + SizeShareSpread * SizeShareSpread / 3.0;
+float Tone = saturate(Presence * PI * LargestRadius * LargestRadius * MeanSquaredSizeShare);
+float CellPixels = 1.0 / max(AlongCellsPerPixel, 1e-6);
+float Resolved = smoothstep(ToneOnlyCellPixels, FullDetailCellPixels, CellPixels);
+float Gain = lerp(ToneGain, 1.0, smoothstep(FullDetailCellPixels, UnityGainCellPixels, CellPixels));
+float Uncovered = 1.0;
+float BestHeight = 0.0;
+float2 BestOffset = 0.0;
+float BestRadius = 1.0;
+[branch]
+if (Resolved > 0.0)
+{
+    for (int Row = -1; Row <= 1; ++Row)
+    {
+        for (int Column = -1; Column <= 1; ++Column)
+        {
+            float2 Neighbour = float2(Column, Row);
+            float4 Draw = Rand32ToFloat(Rand4DPCG32(int4(int2(Cell + Neighbour), 0, 0)));
+            if (Draw.z >= Presence)
+            {
+                continue;
+            }
+            float Radius = LargestRadius * (SmallestSizeShare + SizeShareSpread * Draw.w);
+            float2 Offset = Local - (Neighbour + Draw.xy);
+            float Distance = max(length(Offset), 1e-6);
+            float2 Direction = Offset / Distance;
+            float EdgeWidth = max(abs(dot(Direction, AlongView)) * AlongCellsPerPixel + abs(dot(Direction, AcrossView)) * AcrossCellsPerPixel, 1e-4);
+            float SizeOverEdge = Radius / EdgeWidth;
+            float FilteredArea = SizeOverEdge >= 1.0
+                ? SizeOverEdge * SizeOverEdge + WideEdgeAreaExcess
+                : NarrowEdgeAreaConstant + SizeOverEdge * (NarrowEdgeAreaLinear + NarrowEdgeAreaQuadratic * SizeOverEdge);
+            float PelletCoverage = (1.0 - smoothstep(-EdgeWidth, EdgeWidth, Distance - Radius)) * SizeOverEdge * SizeOverEdge / FilteredArea;
+            Uncovered *= 1.0 - PelletCoverage;
+            float Height = Radius * Radius - Distance * Distance;
+            if (Height > BestHeight)
+            {
+                BestHeight = Height;
+                BestOffset = Offset;
+                BestRadius = Radius;
+            }
+        }
+    }
+}
+float Mask = 1.0 - Uncovered;
+float2 Tilt = BestOffset / BestRadius;
+float3 TiltWorld = float3(Tilt, 0.0);
+TiltWorld -= dot(TiltWorld, SurfaceNormal) * SurfaceNormal;
+float Rise = sqrt(saturate(1.0 - dot(Tilt, Tilt)));
+float3 PelletNormal = normalize(TiltWorld + SurfaceNormal * Rise);
+float3 BlendedNormal = normalize(lerp(SurfaceNormal, PelletNormal, Resolved));
+return float4(BlendedNormal, saturate(lerp(Tone, Mask, Resolved) * Gain));
+```
+
+Inputs in order: `Position`, `SurfaceNormal`, `Coverage`, `CellSize`, `MaxRadius`, `PresenceGain`,
+`MaxPresence`, `FullDetailCellPixels`, `ToneOnlyCellPixels`, `ToneGain`, `UnityGainCellPixels`.
+
+**What changed, in prose:**
+
+- **The footprint no longer uses screen derivatives.**
+  - A pixel spans `PixelAngle = 2 / (ViewToClip[0][0] x ViewSizeX)` radians. `ViewToClip[0][0]`
+    is the cotangent of half the horizontal field of view, and `ViewSizeX` is the render width, so
+    1336 here.
+  - At scene depth `GetPixelDepth(Parameters)`, a pixel covers depth times that across the view.
+  - Along the view it covers that divided by `Facing`, the cosine between the view ray
+    (`Parameters.WorldPosition_CamRelative`) and the **interpolated** vertex normal. The floor of
+    0.01 sends grazing angles to the tone.
+  - Depth and the interpolated normal are continuous across the road's facets, so the fade, the
+    gain and every pellet's edge width are continuous too.
+  - On a flat surface near the centre of the screen this equals what the derivatives gave. Away
+    from the centre it overstates the footprint slightly, by about `1 / cos` of the angle off the
+    view axis.
+  - `DDX` and `DDY` are no longer called.
+- **Each pellet's edge** is now this footprint along the pellet's radial direction:
+  `AlongCellsPerPixel` along the view's direction in XY, `AcrossCellsPerPixel` across it.
+- **The darkness gain is ramped, and applied after the blend.**
+  - `Gain` is 1 where a cell spans `UnityGainCellPixels` (2) or more. It rises to `ToneGain` (4) at
+    `FullDetailCellPixels` (0.5) and below.
+  - It multiplies `lerp(Tone, Mask, Resolved)`, so it darkens sub-pixel pellets as well as the
+    tone. Resolved pellets at 2 px and more are unchanged.
+  - Before this, the gain sat inside the tone only, so the filtered pellets between 1 and 4 px read
+    lighter than both the near dots and the far patch.
+- **Pellets are drawn down to 0.5 px a cell**, and are pure tone below 0.25. Below about 0.75 px the
+  3x3 search starts to miss filtered tails, which the gain more than covers.
+- `ToneGain` therefore now means *the darkness gain where pellets are smaller than half a pixel*.
+  `PI` and `GetPixelDepth` are as recorded above (`Common.ush:133`, `MaterialTemplate.ush:1120`).
+  `ResolvedView.ViewToClip` and `ResolvedView.ViewSizeAndInvSize` are read by `MaterialTemplate.ush`'s
+  own helpers, at `:2895` and `:1232`.
+
+### What was verified, and what was not
+
+Verified:
+- The materials compile, and the shader compiles in `-game`, with no error logged.
+- Under the H2 pan:
+  - the band's darkening rises continuously with distance;
+  - flicker is 3.1x bare tarmac at 15 m and 4.0x at 30 m, against #74's 2x exit;
+  - it is 1.05x at 60 m and 1.8x in the chase view.
+
+The numbers are in `MEASUREMENTS.md`, *H2: the smooth footprint*.
+
+Not verified:
+- **that the stripes over the crest are gone.** None of the measured views is on a crest. That is
+  the user's to see where they saw it;
+- whether the flicker is noticeable while driving, which is the user's call;
+- the frame cost;
+- the cooked shader.
