@@ -6,6 +6,8 @@
 #include "SplineFollowingCar.generated.h"
 
 class ARacetrackCircuit;
+class USceneComponent;
+class USkeletalMesh;
 class UStaticMeshComponent;
 
 enum class ECarWheel : uint8
@@ -87,6 +89,11 @@ public:
 	double GetWheelTrack() const
 	{
 		return WheelTrack;
+	}
+
+	double GetBodyWheelTrack() const
+	{
+		return BodyWheelTrack;
 	}
 
 	TOptional<ECarWheel> GetLockedWheel() const
@@ -214,7 +221,7 @@ protected:
 	double SameBrakingEventSeparationCentimetres = 600.0;
 
 private:
-	void ResizeCarMesh();
+	void FitCarBodyToTheWheels();
 
 	void PlaceOnTrack();
 
@@ -231,7 +238,21 @@ private:
 	double DrawTriangularCornerDeviationAlpha();
 
 	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
-	TObjectPtr<UStaticMeshComponent> CarMesh;
+	TObjectPtr<USceneComponent> CarRoot;
+
+	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
+	TObjectPtr<UStaticMeshComponent> CarBody;
+
+	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
+	TObjectPtr<UStaticMeshComponent> CarGlass;
+
+	UPROPERTY(VisibleAnywhere, Category = "Spline Following Car")
+	TArray<TObjectPtr<UStaticMeshComponent>> CarWheels;
+
+	UPROPERTY()
+	TObjectPtr<USkeletalMesh> WheelPlacement;
+
+	double BodyWheelTrack = 0.0;
 
 	double DistanceAlongTrack = 0.0;
 

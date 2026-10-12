@@ -2266,6 +2266,19 @@ void ARacetrackCircuit::SpawnField()
 		Spacing,
 		Reference != nullptr ? Reference->GetContactWidth() : 0.0f);
 
+	const ASplineFollowingCar* FirstCar = SpawnedField.Num() > 0 ? SpawnedField[0].Get() : nullptr;
+
+	if (FirstCar != nullptr)
+	{
+		UE_LOG(LogRacetrackSurface, Log,
+			TEXT("%s's cars are drawn with a body fitted to their %.1f cm wheelbase, whose wheels stand %.1f cm "
+				"apart against the %.1f cm track their contacts are laid on"),
+			*GetName(),
+			FirstCar->GetWheelbase(),
+			FirstCar->GetBodyWheelTrack(),
+			FirstCar->GetWheelTrack());
+	}
+
 	ReportLapsToSaturation();
 }
 

@@ -1,6 +1,9 @@
 #include "SplineFollowingCar.h"
 
+#include "AnimationRuntime.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -10,9 +13,28 @@
 
 namespace
 {
-	constexpr double DesiredCarLength = 220.0;
-	constexpr double DesiredCarWidth = 100.0;
-	constexpr double DesiredCarHeight = 60.0;
+	constexpr const TCHAR* WheelBoneNames[ASplineFollowingCar::WheelCount] = {
+		TEXT("Phys_Wheel_FL"),
+		TEXT("Phys_Wheel_FR"),
+		TEXT("Phys_Wheel_BL"),
+		TEXT("Phys_Wheel_BR")
+	};
+
+	constexpr const TCHAR* WheelComponentNames[ASplineFollowingCar::WheelCount] = {
+		TEXT("FrontLeftWheel"),
+		TEXT("FrontRightWheel"),
+		TEXT("RearLeftWheel"),
+		TEXT("RearRightWheel")
+	};
+
+	constexpr double LeftWheelYawOnItsBone = -90.0;
+
+	constexpr double RightWheelYawOnItsBone = 90.0;
+
+	bool IsLeftWheel(int32 Wheel)
+	{
+		return Wheel == static_cast<int32>(ECarWheel::FrontLeft) || Wheel == static_cast<int32>(ECarWheel::RearLeft);
+	}
 
 	constexpr int32 BrakingSeedOffset = 1000003;
 
@@ -26,15 +48,55 @@ ASplineFollowingCar::ASplineFollowingCar()
 	WheelPositions.SetNumZeroed(WheelCount);
 	PreviousWheelPositions.SetNumZeroed(WheelCount);
 
-	CarMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarMesh"));
-	CarMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	SetRootComponent(CarMesh);
+	CarRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CarRoot"));
+	SetRootComponent(CarRoot);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	CarBody = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarBody"));
+	CarBody->SetupAttachment(CarRoot);
+	CarBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	if (CubeMesh.Succeeded())
+	CarGlass = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarGlass"));
+	CarGlass->SetupAttachment(CarBody);
+	CarGlass->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BodyMesh(
+		TEXT("/Game/Vehicles/SportsCar/SM_SportsCar.SM_SportsCar"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> GlassMesh(
+		TEXT("/Game/Vehicles/SportsCar/SM_SportsCar_Glass.SM_SportsCar_Glass"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> WheelMesh(
+		TEXT("/Game/Vehicles/SportsCar/SM_SportsCar_Wheel.SM_SportsCar_Wheel"));
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> WheelBones(
+		TEXT("/Game/Vehicles/SportsCar/SKM_SportsCar.SKM_SportsCar"));
+
+	if (BodyMesh.Succeeded())
 	{
-		CarMesh->SetStaticMesh(CubeMesh.Object);
+		CarBody->SetStaticMesh(BodyMesh.Object);
+	}
+
+	if (GlassMesh.Succeeded())
+	{
+		CarGlass->SetStaticMesh(GlassMesh.Object);
+	}
+
+	if (WheelBones.Succeeded())
+	{
+		WheelPlacement = WheelBones.Object;
+	}
+
+	CarWheels.SetNum(WheelCount);
+
+	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
+	{
+		UStaticMeshComponent* WheelComponent = CreateDefaultSubobject<UStaticMeshComponent>(WheelComponentNames[Wheel]);
+		WheelComponent->SetupAttachment(CarBody);
+		WheelComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+		if (WheelMesh.Succeeded())
+		{
+			WheelComponent->SetStaticMesh(WheelMesh.Object);
+		}
+
+		CarWheels[Wheel] = WheelComponent;
 	}
 }
 
@@ -42,27 +104,80 @@ void ASplineFollowingCar::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 
-	ResizeCarMesh();
+	FitCarBodyToTheWheels();
 }
 
-void ASplineFollowingCar::ResizeCarMesh()
+void ASplineFollowingCar::FitCarBodyToTheWheels()
 {
-	if (CarMesh == nullptr || CarMesh->GetStaticMesh() == nullptr)
+	if (WheelPlacement == nullptr || CarBody == nullptr || CarWheels.Num() != WheelCount)
 	{
 		return;
 	}
 
-	const FVector MeshSize = CarMesh->GetStaticMesh()->GetBoundingBox().GetSize();
+	const FReferenceSkeleton& Skeleton = WheelPlacement->GetRefSkeleton();
+	FTransform WheelBoneTransforms[WheelCount];
 
-	if (MeshSize.X <= UE_DOUBLE_SMALL_NUMBER || MeshSize.Y <= UE_DOUBLE_SMALL_NUMBER || MeshSize.Z <= UE_DOUBLE_SMALL_NUMBER)
+	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
 	{
+		const int32 BoneIndex = Skeleton.FindBoneIndex(FName(WheelBoneNames[Wheel]));
+
+		if (BoneIndex == INDEX_NONE)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("%s's wheel placement has no %s bone, so the body is drawn at its own size"),
+				*GetName(),
+				WheelBoneNames[Wheel]);
+			return;
+		}
+
+		WheelBoneTransforms[Wheel] = FAnimationRuntime::GetComponentSpaceTransformRefPose(Skeleton, BoneIndex);
+	}
+
+	const FVector FrontLeft = WheelBoneTransforms[static_cast<int32>(ECarWheel::FrontLeft)].GetLocation();
+	const FVector FrontRight = WheelBoneTransforms[static_cast<int32>(ECarWheel::FrontRight)].GetLocation();
+	const FVector FrontAxle = (FrontLeft + FrontRight) * 0.5;
+	const FVector RearAxle = (WheelBoneTransforms[static_cast<int32>(ECarWheel::RearLeft)].GetLocation()
+		+ WheelBoneTransforms[static_cast<int32>(ECarWheel::RearRight)].GetLocation()) * 0.5;
+
+	const double MeshWheelbase = FrontAxle.X - RearAxle.X;
+
+	if (MeshWheelbase <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("%s's body does not face along X, so it is drawn at its own size"),
+			*GetName());
 		return;
 	}
 
-	CarMesh->SetRelativeScale3D(FVector(
-		DesiredCarLength / MeshSize.X,
-		DesiredCarWidth / MeshSize.Y,
-		DesiredCarHeight / MeshSize.Z));
+	const UStaticMesh* WheelMesh = CarWheels[0] != nullptr ? CarWheels[0]->GetStaticMesh() : nullptr;
+	const double WheelRadius = WheelMesh != nullptr ? WheelMesh->GetBoundingBox().GetExtent().Z : 0.0;
+
+	double LowestWheelCentre = FrontLeft.Z;
+
+	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
+	{
+		LowestWheelCentre = FMath::Min(LowestWheelCentre, WheelBoneTransforms[Wheel].GetLocation().Z);
+
+		const bool bLeft = IsLeftWheel(Wheel);
+		const FTransform OnItsBone(
+			FRotator(0.0, bLeft ? LeftWheelYawOnItsBone : RightWheelYawOnItsBone, 0.0),
+			FVector::ZeroVector,
+			FVector(bLeft ? -1.0 : 1.0, 1.0, 1.0));
+
+		if (CarWheels[Wheel] != nullptr)
+		{
+			CarWheels[Wheel]->SetRelativeTransform(OnItsBone * WheelBoneTransforms[Wheel]);
+		}
+	}
+
+	const double Scale = Wheelbase / MeshWheelbase;
+	const FVector BetweenTheAxles = (FrontAxle + RearAxle) * 0.5;
+	const double GroundUnderTheTyres = LowestWheelCentre - WheelRadius;
+
+	CarBody->SetRelativeScale3D(FVector(Scale));
+	CarBody->SetRelativeLocation(FVector(-BetweenTheAxles.X, -BetweenTheAxles.Y, -GroundUnderTheTyres) * Scale);
+
+	BodyWheelTrack = FMath::Abs(FrontRight.Y - FrontLeft.Y) * Scale;
 }
 
 void ASplineFollowingCar::ConfigureDriver(
