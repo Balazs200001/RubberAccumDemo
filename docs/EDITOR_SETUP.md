@@ -2395,3 +2395,42 @@ Not verified:
 - whether it now shows what the user wants, which is the user's call;
 - the frame cost, now that the 3x3 search runs on more pixels and does more work per neighbour;
 - the cooked shader.
+
+---
+
+## 2026-10-12 — H2: the tone gain raised to 4, so the unresolved band reads as a darker patch
+
+**Why.** The user drove the analytic-edge version and judged it: *"I still want to see it be more
+visible from further. When I am in the car view I expect to see all the marbles, or at least a
+darker road patch. The [near band, with resolved pellets] is good and looks fine."* The decision is
+on [#74](https://github.com/Balazs200001/RubberAccumDemo/issues/74).
+
+**Asset changed:** `/Game/Materials/MF_MarbleLayer`. One parameter default. No nodes or connections
+changed. Host commit `8372c53`. `M_SurfaceAsphalt` was not recompiled and is not dirty.
+
+| Node | Parameter | Before | After |
+|---|---|---|---|
+| `MaterialExpressionScalarParameter_6` | `MarblePelletToneGain` | 1 | **4** |
+
+**A temporary change, saved and reverted, never committed.** `MarbleMaxPresence`
+(`MaterialExpressionScalarParameter_3`) was set to 0 and saved, for one `-game` run that gives the
+road without marbles on the same pixels. It was then set back to 0.6 and read back as 0.6 before
+the gain was changed. Committed history holds 0.6 throughout.
+
+The first attempt to save the 0 failed, and nothing reached disk. The user's own `-game` window held
+`MF_MarbleLayer.uasset` open: `MoveFile` error 32, a sharing violation, retried ten times, then
+*"failed to save"*. **A running `-game` process locks the packages it loaded, so MCP saves fail
+until it exits.** The value was put back to 0.6 in memory at once, and the reference run waited
+until the user closed the game.
+
+**Why 4.** This is a deliberate exaggeration, chosen because the user asked for a visible patch.
+It is not a physical match. `MEASUREMENTS.md`, *H2: the tone gain*, has the numbers:
+- Measured against the marble-free road, resolved pellets darken the band by only 3.5 to 5 %.
+- At gain 1, the tone darkened it by 2.5 to 3.4 %.
+- A gain matching the resolved pellets per unit coverage would be about 1.5 to 1.8. That is still
+  under 5 %, and does not read at a distance.
+- Each unit of tone alpha darkens the road by about 18 %, which is also the ceiling with the current
+  pellet colour and roughness. At 4, the band core reaches about 0.6 alpha and 10 to 14 %.
+- The gain multiplies only the tone: the output is `lerp(Tone, Mask, Resolved)`, with `ToneGain`
+  inside `Tone`. So where pellets are resolved, a cell spanning 1 px or more, nothing changes, and
+  the tarmac between near pellets stays untouched.
