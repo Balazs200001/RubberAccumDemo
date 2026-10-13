@@ -5859,3 +5859,7 @@ They show that it renders. Whether it reads right is the user's call.
 - **The long frame after a modal dialog closes.**
 - **Whether the Vehicle pack's input mapping also uses K or O.**
 - **PIE, a cooked build, and a Shipping build.** In a Shipping build, the dialogs are compiled out.
+
+**Checked afterwards, 2026-10-13.** The user tried K and O by hand in the demo and reports that both
+work. That covers the first two items above. The rest are unchanged. This was recorded on
+[#128](https://github.com/Balazs200001/RubberAccumDemo/issues/128).
