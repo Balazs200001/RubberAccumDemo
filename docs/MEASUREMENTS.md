@@ -5609,3 +5609,112 @@ two tests, and the group passed (run 1). Why that test released the memory was n
   editor binary re-runs construction on uncooked data (`World.cpp:5985-5988`), and so does the
   editor when it loads the level, so neither shows the saved mesh. A cooked build was not checked.
 - **The frame cost of 4098 road vertices** against 2814 was not measured.
+
+## 2026-10-13 — H4.1: the AI cars' wheels registered in track space
+
+**Question.** If the AI cars register their wheels through the track-space overload, do the
+coordinates match `WorldToTrack`'s? What does it save on the game thread? The task and its exit are
+on [#127](https://github.com/Balazs200001/RubberAccumDemo/issues/127).
+
+```
+Build:    before: host 475293d, whose code is 168785f. After: H4.1 on top of it. Plugin 2b1e6e6
+Power:    MAINS, BatteryStatus 2 before and after both runs
+Editor:   closed
+Runs:     H4's run B, unchanged: -game L_SpaHarness -ReleaseField, 1600 x 900, SurfaceLook 1,
+          t.MaxFPS 0, FollowTheLeader 1, DisableAllScreenMessages, DecayRate 1, TimeDilation 20 to
+          frame 9000, 1x to 15000, Field 0 to 19060. The first 300 frames after each command dropped
+Logs:     C:/RSBuild/h41-before.log and .csv (14:02 to 14:08), h41-after.log and .csv (15:40 to
+          15:42), h41-equivalence-4.log, h41-suite-pass1.log and -pass2.log
+```
+
+### What was built
+
+**Each wheel's track coordinate is computed locally.**
+1. The distance starts as the car's own, plus the wheel's offset projected on the track direction at
+   the rear axle.
+2. It is then refined by `D += (P - C(D)) . T(D)`. `C` and `T` are the circuit spline's position and
+   direction at a distance, which is the distance-to-position mapping the road mesh is built on. It
+   repeats until a step is under 0.05 cm, at most 64 times.
+3. The lateral offset is `(P - C(D)) . Right(D)` over the half width.
+
+**Why the plan's projection alone was not enough.** Projecting a wheel onto the rear axle's track
+frame misses by the sagitta, `s^2 / 2R`. That is about 20 cm for the front axle, 140 cm ahead, at
+Spa's tightest radius of about 480 cm.
+
+**The contact is registered through `FSurfaceTrackContact`.** Both rates come from the wheel's
+previous coordinate, so each stroke starts exactly where the wheel was on the previous tick. On the
+first tick after `ConfigureDriver`, the rates are the car's own speed and lateral rate.
+
+`ARacetrackCircuit::WrapDistance` moved from private to public for this.
+
+### The equivalence test, `RubberAccumDemo.Car.WheelTrackCoordinatesMatchWorldToTrack`
+
+One lap each for three driver lines: baseline 0 with commitment 1.0, and ±0.6 with 0.5. That is
+62676 wheel positions, each compared with `WorldToTrack` of the wheel's world position.
+
+| Measure | Worst | Where |
+|---|---|---|
+| Along the track, against `WorldToTrack` | 3.3814 cm | 83199 cm, 46.2 % of the lap |
+| Across the track, against `WorldToTrack` | 0.0040 cm | 125036 cm |
+| Kept by one path, discarded by the other | 0 of 62676 | |
+| Mapped back through `TrackToWorld`, the track-space coordinate's along miss from the wheel | **0.0657 cm** | |
+| The same for `WorldToTrack`'s coordinate | 3.4841 cm | |
+| `WorldToTrack`'s round trip from the centreline, every 10 cm | 3.3750 cm | 83200 cm |
+| Along, with that round trip taken out at each wheel's distance | 3.0146 cm | 10560 cm, 5.9 %, alpha 0.890 |
+
+**Why `WorldToTrack` disagrees with everything else.** The engine's two spline conversions are not
+inverses of each other:
+- **Distance to key** is `ReparamTable.Eval`, linear between 10 samples per segment
+  (`SplineComponent.cpp:2587`, `ReparamStepsPerSegment` at `:389`). The road mesh, the cars,
+  `TrackToWorld` and the new path all use it.
+- **Key to distance** is the segment's start plus `GetSegmentLength`'s integral (`:1184`).
+  `WorldToTrack` uses it.
+
+On Spa the two differ by up to 3.375 cm. So `WorldToTrack` sits up to 3.4 cm along the track from
+the distance the road is built on, and the world-space path inherits that.
+
+**The 3.01 cm left at the tightest corner is ill-conditioning, not a miss on the road.**
+- It sits at 5.9 % of the lap, alpha 0.890. That is the inside of the corner the fold test flags as
+  the tightest, at the same 5.9 %.
+- Close to the centre of curvature, a shift along the centreline barely moves the point on the
+  road. So the refinement contracts slowly there, and stopping on a 0.05 cm step leaves a few cm of
+  ribbon distance.
+- On the road it is under 0.07 cm, which is the map-back miss above.
+
+**The exit was restated by the user.** As first written, "within one texel of `WorldToTrack`", it
+failed by 0.26 cm on the 3.38 cm above. The user chose to assert three things instead:
+- the coordinate maps back to the wheel within one texel;
+- it is within one texel of `WorldToTrack` once `WorldToTrack`'s own round trip is taken out;
+- the across difference is within one texel.
+
+All three pass. **The second passes by 0.11 cm**, at the corner above. The driver lines and seed
+are fixed, so it is deterministic, but a change to them could tip it.
+
+### Run B, before and after
+
+| Segment | `GameThreadTime` before | after | `RegisterContact` before | `SubsystemTick` before | after | `FrameTime` before | after |
+|---|---|---|---|---|---|---|---|
+| 20x | 3.798 | **3.015** | 0.938 | 0.219 | 0.246 | 7.191 | 7.230 |
+| 1x | 3.772 | **2.855** | 1.019 | 0.210 | 0.239 | 7.011 | 6.960 |
+| frozen | 2.153 | 2.147 | 0 | 0.043 | 0.042 | 6.652 | 6.660 |
+
+- These are medians in ms. `RegisterContact` has no column after, because no world-space call is
+  made: no car is possessed in run B.
+- **The game thread saves 0.78 ms at 20x and 0.92 ms at 1x.** That is `RegisterContact`'s 0.94 to
+  1.02 ms less the per-wheel refinement. The refinement has no stat of its own, so its cost, about
+  0.1 to 0.16 ms, is inferred and not measured.
+- `FrameTime` does not move, because the frame is render-thread-bound, as in H4.
+- `SubsystemTick` rose by about 0.03 ms. That is not explained.
+- **The fields are close, not identical.** At frame 3000 the peaks were rubber 0.2455 before and
+  0.2172 after, marbles 0.1687 and 0.1677. At frame 19000 they were rubber 0.4887 and 0.4766,
+  marbles 0.3760 both times.
+  - At 20x the steps sample differently from run to run. H5 saw 0.1890 against 0.2050 at frame
+    3000.
+  - The stroke lengths also changed by design, since they now come from the coordinate difference.
+    The two effects were not separated.
+
+### Not verified
+
+- The painted field texel by texel against the world-space path.
+- The refinement's cost on its own.
+- PIE and the cooked build.
