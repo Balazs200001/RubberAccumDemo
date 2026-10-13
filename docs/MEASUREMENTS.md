@@ -5382,3 +5382,228 @@ and the base pass, and they are not a breakdown of the 0.5 ms.
 - The run-to-run spread of the body cost: one run per build, about two hours apart.
 - Which body component costs what: the body, the glass or the wheels.
 - Whether the bodies look right, which is the user's call.
+
+## 2026-10-13 — E4 corrected: the asphalt's stripes, before and after
+
+**Question.** The user reported the tarmac looking stretched, with each section of road visible
+separately. Is that the road's UV0 being stored at half precision, and does sampling in world XY
+remove it? The decision and the engine source it rests on are on
+[#53](https://github.com/Balazs200001/RubberAccumDemo/issues/53#issuecomment-6141027625).
+
+```
+Build:    before: host de50b0b, plugin 2b1e6e6. After: host 3f8e6e1, which carries the asset change
+          06d0bfd; plugin unchanged. The ring-count change below is not in either run
+Power:    not recorded. Stills only, nothing timed
+Editor:   closed for the before run (2026-10-12 22:02), open in the background for the after run
+          (2026-10-13 10:03). The logs stamp UTC, two hours earlier
+Scene:    L_SpaHarness, -game from the Development editor binary, -FreezeField, so the field stays
+          parked at its spawn and no rubber is laid
+Settings: RacetrackDemo.SurfaceLook 1, t.MaxFPS 60, RacetrackDemo.FollowTheLeader 0,
+          DisableAllScreenMessages. 1600 x 900 window. r.AntiAliasingMethod 0, read back in both logs
+Driven:   -csvExecCmds, one BugItGo every 300 frames from frame 300. Each still was grabbed with
+          PrintWindow 2.5 s after its "BugItGo to:" log line
+Logs:     C:/RSBuild/uv-before.log, C:/RSBuild/uv-after-worldxy.log
+```
+
+### What half precision does to the ribbon UV
+
+`UProceduralMeshComponent` stores UVs as `FVector2DHalf`, which is round-to-nearest-even float16. The
+sources are on #53. U is distance over lap length on 1406 rings of 128.02 cm over 180000 cm. Rounding
+each ring's U to float16 gives the table below. **This is arithmetic, not a measurement.**
+
+| Lap fraction | U step | Texture across one 128 cm segment | Stretch | Largest along-lap error at a ring |
+|---|---|---|---|---|
+| 0 to 1/16 | up to 5.5 cm | 120.8 to 131.8 cm | 0.97x to 1.06x | 2.7 cm |
+| 1/16 to 1/8 | 11 cm | 120.8 to 131.8 cm | 0.97x to 1.06x | 5.4 cm |
+| 1/8 to 1/4 | 22 cm | 109.9 to 131.8 cm | 0.97x to 1.17x | 11.0 cm |
+| 1/4 to 1/2 | 44 cm | 87.9 to 131.8 cm | 0.97x to 1.46x | 21.9 cm |
+| 1/2 to 1 | 87.9 cm | 87.9 to 175.8 cm | 0.73x to 1.46x | 43.9 cm |
+
+The last column is what the accumulation lookup in `MF_SampleRacetrackSurface` suffers. It reads the
+same UV0, so it is the R5 finding on [#42](https://github.com/Balazs200001/RubberAccumDemo/issues/42).
+
+### The poses
+
+Positions come from the 78-point centreline, rotated, centred and scaled as `GenerateTrackSpline`
+does, and evaluated as the spline's auto-tangent cubic Hermite. That model reproduces the five H2
+slope poses' car positions to within 0.4 cm in XY, with the actor at the origin. At each lap fraction:
+- **chase** is 350 cm behind the centreline point along the heading, 170 cm above the spline, pitch −18°;
+- **down** is 250 cm behind, 450 cm above, pitch −55°.
+
+| Still | Lap fraction | Spline key | Grade | Command |
+|---|---|---|---|---|
+| 3 % chase | 0.03 | 2.11 | +0.6° | `BugItGo -9256.9 -22705.7 1958.3 -18.00 -135.25 0` |
+| 3 % down | 0.03 | 2.11 | +0.6° | `BugItGo -9327.9 -22776.1 2238.3 -55.00 -135.25 0` |
+| 55 % chase | 0.55 | 39.70 | −4.9° | `BugItGo 4587.8 4986.6 2755.3 -18.00 -157.68 0` |
+| 55 % down | 0.55 | 39.70 | −4.9° | `BugItGo 4495.2 4948.6 3035.3 -55.00 -157.68 0` |
+| 80 % chase | 0.80 | 59.53 | +0.3° | `BugItGo -11704.5 7390.6 1103.5 -18.00 -20.34 0` |
+| 80 % down | 0.80 | 59.53 | +0.3° | `BugItGo -11610.7 7355.8 1383.5 -55.00 -20.34 0` |
+
+The 3 % pose is the control. Between 2 % and 4 % of the lap, half precision keeps each segment
+within 0.97x to 1.01x.
+
+### Result
+
+- **Before.** At 80 % of the lap the road shows bands across it, close to regular stripes. At 55 %
+  it shows bands with sharp edges between them. At 3 %, under the same camera placement, it is
+  uniform.
+- **After.** No bands at any of the three places.
+- These are stills checked by eye for the bands. Whether the tarmac now looks right is the user's
+  call. That includes whether the scan's 2 m repeat, now regular in world space, shows from a height.
+
+### The corner stretch an exact ribbon UV would still have
+
+This comes from the same layout model, with the heading differenced over 128 cm, so it is
+approximate. The ribbon UV runs the same U along both edges, so the outside edge of a corner shows
+more tarmac per tile than the inside edge:
+
+| Centreline radius under | Share of the lap | Outside edge over inside edge, at least |
+|---|---|---|
+| 1000 cm | 1.0 % | 2.33 |
+| 2000 cm | 8.1 % | 1.50 |
+| 3000 cm | 16.3 % | 1.31 |
+| 5000 cm | 29.4 % | 1.17 |
+| 10000 cm | 44.1 % | 1.08 |
+
+World XY has none of this. What it gives up instead is 1/cos of the grade along the fall line: 5.7 %
+on the 18.9° climb and under 1.2 % below 9°.
+
+### Captures
+
+In `2627-Y3A-PR-243663/assets/media/`:
+- `e4-asphalt-ribbon-uv-before-<3|55|80>pc-of-lap-down.png` and `-80pc-of-lap-chase.png`;
+- `e4-asphalt-world-xy-after-<3|55|80>pc-of-lap-down.png` and `-80pc-of-lap-chase.png`;
+- `e4-asphalt-bands-<55|80>pc-of-lap-before-left-after-right-crop.png`: pixels 560 to 1040 by 60 to
+  420 of the down still, before on the left, after on the right, enlarged 1.5x.
+
+### Not verified
+
+- the look under other lighting presets, or with rubber laid;
+- any slope steeper than the 55 % pose's 4.9°;
+- PIE and the cooked build.
+
+## 2026-10-13 — R5 corrected: a power-of-two ring count, so every ring's UV is exact in float16
+
+**Question.** The accumulation lookup reads the ribbon coordinate from UV0. Does rounding the road's
+ring count up to a power of two make every ring's U exact in float16? What else does the change
+touch? The decision is on [#42](https://github.com/Balazs200001/RubberAccumDemo/issues/42).
+
+```
+Build:    run 1: the ring-count change on top of 3f8e6e1, before the Stadium tests were dropped.
+          Final: host 168785f, the ring-count change on top of 328563a. Plugin 2b1e6e6. Editor closed
+Command:  UnrealEditor-Cmd -ExecCmds="Automation RunTests <filter>", headless
+Logs:     C:/RSBuild/uv-ring-tests.log (run 1, the whole RubberAccumDemo group),
+          uv-ring-tests-2.log and -3.log (the whole group, both ended in the crash below),
+          uv-final-pass1.log and uv-final-pass2.log (the final verification, two processes)
+```
+
+### `RoadUVsSurviveFloat16Exactly`, the new test
+
+Each vertex's U goes through `FFloat16(float)`, the same conversion `FVector2DHalf` uses
+(`Vector2DHalf.h:119-125`), and is compared with what was sent.
+
+| Run | Layout | Segments | Segment | Vertices | UVs changed by float16 | Worst along-lap error |
+|---|---|---|---|---|---|---|
+| 1 | Stadium | 256 | 120.786 cm | 514 | 0 | 0 cm |
+| 1 | Spa | 2048 | 87.891 cm | 4098 | 0 | 0 cm |
+
+### What the finer rings exposed: a kink in the Stadium layout
+
+Run 1 failed two tests, both on the Stadium layout only. Spa passed both.
+- **`RoadNeverPassesThroughItself`:** the Stadium's left edge at 96.9 % of the lap advanced −44.98 cm
+  per 120.79 cm ring, an implied radius of 291 cm against the 400 cm half width.
+- **`WallsStandOnTheTrackEdges`:** 1016 of the Stadium's 1024 wall triangles faced the track. 8 were
+  flipped.
+
+The cause was already in the layout:
+- **The kink.** `BuildStadiumPoints` makes each 6000 cm straight a single spline span, next to
+  corner points 1178 cm apart. The auto tangent at a straight's end is dominated by the long span,
+  so the curve overshoots into the corner.
+- **Modelled** with the same cubic Hermite, the Stadium centreline dips to a **217 cm** radius. It
+  stays under 400 cm for 394 cm of the lap.
+- **Why it passed before.** At the old 242 rings of 127.78 cm, the tightest edge advance is
+  +2.69 cm. At the new 256 rings of 120.79 cm it is −43.78 cm, against the test's −44.98. So the
+  old mesh passed because of where its rings happened to fall.
+- `BothLayoutsFitTheCapAndTheMemoryBudget` had already been reporting it. Its info line gave the
+  Stadium's tightest radius over a 128 cm chord as 352 against 400, ratio 0.88, but that line was
+  never asserted.
+
+**The user's decision:** *"get rid of all the tests that use the stadium map instead of spa, there is
+no reason to use that map at all"*, and then *"strip mixed, delete the 18"*.
+
+`ARacetrackCircuit` defaults to the Stadium. So any test that spawns a circuit without `SetLayout`
+runs on it, and the count was **21, not the 18** given to the user. The three missed were
+`Demo.TheLeaderIsTheCarFurthestAroundTheTrack`, `Demo.FourHandlesSurviveAChangeOfLeader` and
+`Demo.SurfaceLookSwitchesRoadMaterial`. They were miscounted because the text "PIE" in an error
+string was taken for use of the level. All 21 were deleted, under the user's stated rule. The 8
+tests that ran Stadium and then Spa keep only Spa. Host commit `328563a`. The Stadium layout code is
+untouched.
+
+### The final run
+
+The group was run as two processes, for the reason in the next section:
+- **pass 1:** 27 of 27 passed, peak working set 16.2 GB;
+- **pass 2:** `Demo.MarblesReachTheBufferOnTheFoldedLayout` alone passed, peak 10.5 GB.
+
+So **28 of 28 host tests pass**. Read from pass 1:
+
+| Test | Line |
+|---|---|
+| `RoadUVsSurviveFloat16Exactly` | 2048 segments of 87.891 cm, 4098 vertices, 0 UVs changed by float16, worst along-lap error 0 cm |
+| `RoadNeverPassesThroughItself` | the tightest edge, right at 5.9 % of the lap, advances 4.59 of an 87.89 cm ring, an implied radius of 422 cm, 1.06 of the half width |
+| `SpaFitsTheCapAndTheMemoryBudget` | 14401 x 1024 atlas in 4 rows, 225.02 MiB; mark 6.40 texels; tightest radius 476 vs 400, ratio 1.19 |
+
+**The finer rings narrow Spa's fold margin.**
+- Before, `h5-suite-2.log` on 2026-10-12 gave 11.61 of a 128.02 cm ring, an implied radius of 440 cm, 1.10 of the half width.
+- After, it is 422 cm, 1.06.
+- Finer rings sample the tightest corner more closely. The road still does not fold, since 422 cm
+  is above the 400 cm half width.
+
+### The group no longer runs in one process: two demo tests exhaust memory back to back
+
+**Found, not fixed.** After `328563a` dropped the Stadium tests, the alphabetical order runs
+`Demo.EveryChannelIsVisibleAtSteadyStateUnderDecay` directly before
+`Demo.MarblesReachTheBufferOnTheFoldedLayout`.
+
+**What fails.** Three runs died during the second test with
+`Out of video memory trying to allocate a rendering resource` (`D3D12Util.cpp:815`): the whole
+group twice, and the pair on its own.
+- The process was at 19.5 to 21.7 GB physical.
+- The machine had 326 to 806 MB free of 32 GB.
+- GPU local memory was 3.3 of 7.2 GB, so it is system memory that runs out.
+
+**Measured by sampling the process every 500 ms:**
+- `EveryChannel` alone takes the process from 4.05 GB to 9.0 to 9.5 GB during its 2500-tick loop.
+  About 4 GB stays allocated after it ends, through 8 s of frames.
+- `Marbles` alone peaks at 10.3 to 10.5 GB.
+- An earlier reading of "2 GB each" sampled the `UnrealEditor-Cmd` launcher's own process, not the
+  editor it runs, and is discarded.
+
+**What holds the memory.**
+- At the crash, the D3D12 stats show **10240 MB** of `UAVBuffer StandAlone Allocated`, against
+  1108 MB of UAV textures.
+- The plugin creates no buffers of its own (searched). It paints with
+  `BeginDrawCanvasToRenderTarget` and decays with one RDG compute pass.
+- So these are engine allocations behind thousands of canvas draws issued inside one engine frame.
+  The engine mechanism was not identified.
+
+**It is not caused by the ring change.** The pair crashes the same way on `328563a` without it
+(`uv-pair-without-ring.log`, 19.9 GB).
+
+**In the old order**, the Stadium-layout `Demo.FourHandlesSurviveAChangeOfLeader` ran between the
+two tests, and the group passed (run 1). Why that test released the memory was not established.
+
+**Tried and reverted:**
+- A 1 s or 8 s `FWaitLatentCommand` after each demo test. Memory stayed up, and the pair still
+  crashed.
+- `FlushRenderingCommands()` before the second test. The host module does not link `RenderCore`, so
+  it did not build, and that run used the old binary.
+
+### Not verified
+
+- **The rubber and skid display on screen.** No still was taken with marks laid in the second half
+  of the lap.
+- **`L_SpaHarness` was not re-saved.** It still serialises the 1406-ring road. `-game` from the
+  editor binary re-runs construction on uncooked data (`World.cpp:5985-5988`), and so does the
+  editor when it loads the level, so neither shows the saved mesh. A cooked build was not checked.
+- **The frame cost of 4098 road vertices** against 2814 was not measured.

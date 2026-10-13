@@ -2956,3 +2956,123 @@ Read from the component templates `<Name>_GEN_VARIABLE` in
   centre minus the wheel's Z extent.
 
 There is no editor-side change to rebuild.
+
+## 2026-10-13 — E4 corrected: the asphalt sampled in world XY
+
+**Why.** The user reported the tarmac looking stretched, with each section of road visible
+separately. The cause is in the C++ record on
+[#53](https://github.com/Balazs200001/RubberAccumDemo/issues/53#issuecomment-6141027625):
+- The asphalt tiled UV0 900 times along the lap.
+- `UProceduralMeshComponent` stores UVs as float16.
+- From halfway round the lap, each 128 cm segment showed between 0.73x and 1.46x of its texture.
+
+Editing this E4 asset was approved by the user.
+
+**Asset changed:** `/Game/Materials/M_SurfaceAsphalt`.
+- 10 nodes added, 4 inputs rewired, nothing deleted.
+- Saved and verified not dirty. `git status` showed only this `.uasset` among the content.
+- Host commit `06d0bfd`. The C++ that stopped setting the tile counts is `3f8e6e1`.
+
+Made via: `MaterialTools.get_expressions`, `get_expression_inputs`, `get_expression_input_names`
+and `get_expression_output_names` to confirm the graph matched the E4 record first; `add_expression`;
+`ObjectTools.set_properties` and `get_properties`; `connect_expressions`; `recompile`;
+`LogsToolset.GetLogEntries`; `AssetTools.save_assets` with the one path; `AssetTools.is_dirty`.
+
+### Nodes added
+
+| Node | Class | Settings |
+|---|---|---|
+| `MaterialExpressionWorldPosition_0` | `WorldPosition` | `WPT_ExcludeAllShaderOffsets`, as in `MF_MarbleLayer`, so the tarmac and the pellets share one space |
+| `MaterialExpressionComponentMask_0` | `ComponentMask` | R, G |
+| `MaterialExpressionScalarParameter_9` | `ScalarParameter` | `AsphaltScanCentimetres`, default **200**, group `Asphalt Tiling` |
+| `MaterialExpressionDivide_0` | `Divide` | |
+| `MaterialExpressionConstant3Vector_1` | `Constant3Vector` | (1, 1, 0) |
+| `MaterialExpressionMultiply_5` | `Multiply` | |
+| `MaterialExpressionTransform_0` | `Transform` | `TRANSFORMSOURCE_World` to `TRANSFORM_Tangent` |
+| `MaterialExpressionComponentMask_1` | `ComponentMask` | R, G |
+| `MaterialExpressionComponentMask_2` | `ComponentMask` | B |
+| `MaterialExpressionAppendVector_1` | `AppendVector` | |
+
+### Wiring
+
+```
+WorldPosition.XYZ --> Mask(R, G) --> Divide.A,  AsphaltScanCentimetres --> Divide.B
+Divide --> UVs of TextureSample_0 (base colour), _1 (normal), _2 (ORM)       (all three rewired; were Multiply_0)
+
+TextureSample_1.RGB x (1, 1, 0) --> Transform(World to Tangent) --> Mask(R, G) --> Append.A
+TextureSample_1.RGB --> Mask(B) ------------------------------------------------> Append.B
+Append --> Lerp_6.A                                         (rewired; was TextureSample_1.RGB)
+```
+
+Every input listed was read back with `get_expression_inputs`, and every property with
+`get_properties`.
+
+- **The normal map's rotation.** Sampled at world XY, the map's red and green lie along world X and
+  Y. The material's normal is in the road's tangent frame, whose X runs along the lap (`GenerateRoadMesh`).
+  So red and green, as a world vector `(R, G, 0)`, go through World to Tangent. Only the result's X
+  and Y are kept, and the map's own blue stays as Z.
+  - On flat road this is an exact rotation by the road's heading.
+  - On a slope it projects world X and Y onto the road, which is how a top-down projection lays the
+    texture on it. The road's own normal is kept, so the slope's shading is not lost.
+- **The sign convention is the engine's.** `/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedNormal`
+  was read over MCP. Its top-down path does three things:
+  1. samples at world position over a negated size (`Multiply_0`, `ConstB` −1);
+  2. multiplies the sample by (−1, −1, 1) (`Multiply_2`, `Constant3Vector_3`);
+  3. uses the result as a world normal.
+
+  So its red and green run along the UV's own axes. Sampled at +XY over the size, as here, they are
+  world +X and +Y.
+- **Why not that engine function.** It is a triplanar function. Its `Z Texture` output transforms a
+  world-space normal (`Transform_5`) built by `WorldAlignedNormals_HighQuality`. That is about 150
+  nodes across the two assets, not traced far enough to defend on a slope. The road needs one
+  top-down projection, which is the ten nodes above.
+- **Two masks the graph does not strictly need.** `WorldPosition` has its own `XY` pin, and the
+  normal sample has its own `B` pin. Each mask was already added before that was seen, and it is
+  wired in rather than deleted, because of the point below.
+
+### Left in the graph, disconnected
+
+`TextureCoordinate_0`, `ScalarParameter_0` (`AsphaltTilesAlongLap`), `ScalarParameter_1`
+(`AsphaltTilesAcross`), `AppendVector_0` and `Multiply_0` now reach no output.
+- They are not compiled into the shader.
+- The two parameters may still be listed on instances of the material. That was not checked.
+- **They were not deleted over MCP.** `UMaterialEditingLibrary::DeleteMaterialExpression` ends in
+  `Expression->MarkAsGarbage()` (`MaterialEditingLibrary.cpp:611`), the same call as the
+  `DeleteMaterialExpressionInFunction` path that asserted `!IsRooted()` and halted the editor on
+  2026-09-23 (line 1362).
+- Selecting them and pressing Delete in the material editor removes them safely.
+
+### What was verified, and what was not
+
+Verified:
+- The material recompiles with no material or shader error in the editor log.
+- Every rewired input and every new property reads back as set.
+- The asset is saved and not dirty.
+- In a `-game` run, under the camera poses that showed sharp-edged bands across the road at 55 % and
+  80 % of the lap before the change, the bands are gone. The stills are in `MEASUREMENTS.md`,
+  *E4 corrected: the asphalt's stripes, before and after*.
+
+Not verified:
+- whether the normal map's lighting reads right, which is the user's judgement;
+- whether the 2 m repeat of the scan, now regular in world space, shows from a distance;
+- the asphalt on the steepest slope;
+- the cooked shader.
+
+## 2026-10-13 — R5 corrected: what the power-of-two ring count means for `L_SpaHarness` (no asset change)
+
+**No asset was changed.** This records what a C++ change does to the editor-side setup. The change
+and its reasons are on [#42](https://github.com/Balazs200001/RubberAccumDemo/issues/42) and in
+`MEASUREMENTS.md`, *R5 corrected*.
+
+- **`RoadSegmentLength` means something new.** It is still 128 on `RacetrackCircuit_0` in
+  `L_SpaHarness`. It is now the *longest* a segment may be, not the length of each segment.
+  `GetRoadSegmentCount()` rounds `ceil(lap / RoadSegmentLength)` up to a power of two, at most
+  2048, so every ring's UV survives float16. On the 180000 cm lap that is 2048 rings of 87.9 cm, not
+  1406 of 128.02 cm.
+- **The map still holds the old road.** `UProceduralMeshComponent` serialises its sections into the
+  map, and `L_SpaHarness` was not re-saved, so the file still holds the 1406-ring road.
+  - The editor re-runs construction when it loads the level.
+  - `-game` from the editor binary re-runs it on uncooked data (`World.cpp:5985-5988`).
+  - So neither shows the saved mesh. A cooked build was not checked.
+- **When the level is next saved,** the file grows with the bigger road, as recorded under C9. That
+  is expected and not a leak. Check the actor list, not the file size.
