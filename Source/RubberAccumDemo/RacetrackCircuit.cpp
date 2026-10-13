@@ -465,6 +465,7 @@ namespace RacetrackLayouts
 	constexpr double CorneringSampleSpacing = 150.0;
 	constexpr int32 MaximumCorneringSamples = 4096;
 	constexpr double CorneringNormalisationPercentile = 0.75;
+	constexpr uint32 MaximumRoadSegmentsWithExactFloat16UVs = 2048;
 
 	const FVector SpaCentreline[] = {
 		{258, 622, 17}, {215, 660, 18}, {160, 715, 19}, {110, 765, 19},
@@ -493,6 +494,7 @@ namespace RacetrackLayouts
 using RacetrackLayouts::CorneringNormalisationPercentile;
 using RacetrackLayouts::CorneringSampleSpacing;
 using RacetrackLayouts::MaximumCorneringSamples;
+using RacetrackLayouts::MaximumRoadSegmentsWithExactFloat16UVs;
 
 ARacetrackCircuit::ARacetrackCircuit()
 {
@@ -2436,6 +2438,16 @@ void ARacetrackCircuit::OnConstruction(const FTransform& Transform)
 	PublishTrackRibbon();
 }
 
+int32 ARacetrackCircuit::GetRoadSegmentCount() const
+{
+	const int32 FewestSegmentsNoLongerThanAsked = FMath::Max(
+		FMath::CeilToInt32(GetTrackLength() / FMath::Max(RoadSegmentLength, 1.0)), 3);
+
+	return static_cast<int32>(FMath::Min(
+		FMath::RoundUpToPowerOfTwo(static_cast<uint32>(FewestSegmentsNoLongerThanAsked)),
+		MaximumRoadSegmentsWithExactFloat16UVs));
+}
+
 void ARacetrackCircuit::GenerateRoadMesh()
 {
 	if (Spline == nullptr || Road == nullptr)
@@ -2450,8 +2462,18 @@ void ARacetrackCircuit::GenerateRoadMesh()
 		return;
 	}
 
-	const int32 SegmentCount = FMath::Max(
-		FMath::RoundToInt32(Length / FMath::Max(RoadSegmentLength, 1.0)), 3);
+	const int32 SegmentCount = GetRoadSegmentCount();
+
+	if (Length / SegmentCount > FMath::Max(RoadSegmentLength, 1.0))
+	{
+		UE_LOG(LogRacetrackSurface, Warning,
+			TEXT("%s caps its road at %d segments of %.1f cm, longer than the %.1f cm asked for, because more "
+				"segments could not keep every ring's UV exact in float16"),
+			*GetName(),
+			SegmentCount,
+			Length / SegmentCount,
+			RoadSegmentLength);
+	}
 
 	const int32 RingCount = SegmentCount + 1;
 	const double HalfWidth = TrackWidth * 0.5;
@@ -2479,7 +2501,8 @@ void ARacetrackCircuit::GenerateRoadMesh()
 
 	for (int32 Ring = 0; Ring < RingCount; ++Ring)
 	{
-		const double Distance = Length * Ring / SegmentCount;
+		const double AlongTrack = static_cast<double>(Ring) / SegmentCount;
+		const double Distance = Length * AlongTrack;
 		const float DistanceFloat = static_cast<float>(FMath::Min(Distance, Length));
 
 		const FVector Centre = Spline->GetLocationAtDistanceAlongSpline(DistanceFloat, ESplineCoordinateSpace::World);
@@ -2490,7 +2513,6 @@ void ARacetrackCircuit::GenerateRoadMesh()
 		const FVector Raised = Centre + Up * RoadHeightAboveSpline;
 		const FVector LeftEdge = Raised - Right * HalfWidth;
 		const FVector RightEdge = Raised + Right * HalfWidth;
-		const double AlongTrack = Distance / Length;
 
 		Vertices.Add(WorldToLocal.TransformPosition(LeftEdge));
 		Vertices.Add(WorldToLocal.TransformPosition(RightEdge));

@@ -347,7 +347,7 @@ namespace RubberAccumDemoVehicleTest
 		const FCollisionShape WheelSphere = FCollisionShape::MakeSphere(WheelSizedSweepRadius);
 
 		TArray<double> Distances = RoadSampleDistances(Length);
-		Distances.Add(Length - Track.GetRoadSegmentLength() * 0.5);
+		Distances.Add(Length - 0.5 * Length / Track.GetRoadSegmentCount());
 
 		int32 Sweeps = 0;
 		int32 StoppedByTheWalls = 0;

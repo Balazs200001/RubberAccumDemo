@@ -156,6 +156,8 @@ public:
 		return RoadSegmentLength;
 	}
 
+	int32 GetRoadSegmentCount() const;
+
 	FVector GetWorldPositionAtDistance(double DistanceAlongTrack, double LateralOffsetAlpha) const;
 
 	FVector GetWorldDirectionAtDistance(double DistanceAlongTrack) const;

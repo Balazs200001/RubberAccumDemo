@@ -5,6 +5,8 @@
 #include "Components/SplineComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Math/Float16.h"
+#include "ProceduralMeshComponent.h"
 #include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationSubsystem.h"
 #include "SurfaceTrackRibbon.h"
@@ -460,7 +462,7 @@ bool FRacetrackCircuitRoadNeverPassesThroughItself::RunTest(const FString& Param
 
 	const double HalfWidth = Track->GetTrackWidth() * 0.5;
 	const double Length = Track->GetTrackLength();
-	const int32 Rings = FMath::Max(FMath::RoundToInt32(Length / Track->GetRoadSegmentLength()), 3);
+	const int32 Rings = Track->GetRoadSegmentCount();
 
 	double TightestAdvance = TNumericLimits<double>::Max();
 	double TightestAtDistance = 0.0;
@@ -519,6 +521,81 @@ bool FRacetrackCircuitRoadNeverPassesThroughItself::RunTest(const FString& Param
 			ImpliedRadius,
 			HalfWidth),
 		ImpliedRadius > HalfWidth);
+
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRacetrackCircuitRoadUVsSurviveFloat16Exactly,
+	"RubberAccumDemo.Track.RoadUVsSurviveFloat16Exactly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRacetrackCircuitRoadUVsSurviveFloat16Exactly::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+
+	if (Track == nullptr || Track->GetRoad() == nullptr)
+	{
+		AddError(TEXT("Failed to spawn ARacetrackCircuit with a road."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, Track->GetAuthoredLayoutLapLength());
+
+	const double Length = Track->GetTrackLength();
+	const int32 Segments = Track->GetRoadSegmentCount();
+	const FProcMeshSection* Section = Track->GetRoad()->GetProcMeshSection(0);
+	const int32 Vertices = Section != nullptr ? Section->ProcVertexBuffer.Num() : 0;
+
+	int32 ChangedByFloat16 = 0;
+	double WorstAlongLapError = 0.0;
+
+	if (Section != nullptr)
+	{
+		for (const FProcMeshVertex& Vertex : Section->ProcVertexBuffer)
+		{
+			const float SentToTheGpu = static_cast<float>(Vertex.UV0.X);
+			const float StoredOnTheGpu = FFloat16(SentToTheGpu).GetFloat();
+
+			if (StoredOnTheGpu != SentToTheGpu)
+			{
+				++ChangedByFloat16;
+			}
+
+			WorstAlongLapError = FMath::Max(
+				WorstAlongLapError,
+				FMath::Abs(static_cast<double>(StoredOnTheGpu) - Vertex.UV0.X) * Length);
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("%d segments of %.3f cm, %d vertices, %d UVs changed by float16, worst along-lap error %.6f cm"),
+		Segments,
+		Length / FMath::Max(Segments, 1),
+		Vertices,
+		ChangedByFloat16,
+		WorstAlongLapError));
+
+	TestEqual(TEXT("The road has two vertices on each of its rings"), Vertices, (Segments + 1) * 2);
+
+	TestEqual(
+		TEXT("No ring's along-lap UV changes when the procedural mesh stores it as float16"),
+		ChangedByFloat16,
+		0);
+
+	TestTrue(
+		FString::Printf(TEXT("No segment is longer than the %.1f cm asked for"), Track->GetRoadSegmentLength()),
+		Length / FMath::Max(Segments, 1) <= Track->GetRoadSegmentLength());
 
 	Track->Destroy();
 
