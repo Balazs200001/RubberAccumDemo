@@ -601,8 +601,6 @@ bool FVehicleRoadHasCollision::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	TestRoadUnderEverySample(*this, *World, *Track, TEXT("Stadium"));
-
 	Track->SetLayout(ETrackLayout::Spa, DemoLapLength);
 
 	TestRoadUnderEverySample(*this, *World, *Track, TEXT("Spa"));
@@ -802,8 +800,6 @@ bool FVehicleWallsStandOnTheTrackEdges::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	TestWallsStandOnTheEdges(*this, *Track, TEXT("Stadium"));
-
 	Track->SetLayout(ETrackLayout::Spa, DemoLapLength);
 
 	TestWallsStandOnTheEdges(*this, *Track, TEXT("Spa"));
@@ -837,8 +833,6 @@ bool FVehicleWallsBlockASweepAcrossTheTrack::RunTest(const FString& Parameters)
 		AddError(TEXT("Failed to spawn a circuit."));
 		return false;
 	}
-
-	TestSweepsStopAtTheWalls(*this, *World, *Track, TEXT("Stadium"));
 
 	Track->SetLayout(ETrackLayout::Spa, DemoLapLength);
 

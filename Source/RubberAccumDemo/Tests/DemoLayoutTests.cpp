@@ -277,7 +277,7 @@ bool FDemoLayoutMarblesReachTheBuffer::RunTest(const FString& Parameters)
 		Buildup.LongestAlongCentimetres, Buildup.WidestLateralTexels));
 
 	TestTrue(
-		TEXT("The demo layout folds, so this test exercises the case the Stadium tests cannot"),
+		TEXT("The demo layout folds into more than one atlas row, which is the case this test is for"),
 		Ribbon.RowCount() > 1);
 
 	UTextureRenderTarget2D* Painted = Subsystem->GetBuffer() != nullptr
