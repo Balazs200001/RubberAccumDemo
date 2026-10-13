@@ -5576,8 +5576,10 @@ group twice, and the pair on its own.
 - `EveryChannel` alone takes the process from 4.05 GB to 9.0 to 9.5 GB during its 2500-tick loop.
   About 4 GB stays allocated after it ends, through 8 s of frames.
 - `Marbles` alone peaks at 10.3 to 10.5 GB.
-- An earlier reading of "2 GB each" sampled the `UnrealEditor-Cmd` launcher's own process, not the
-  editor it runs, and is discarded.
+- An earlier reading of "2 GB each" is discarded. That sampler seeded `[Math]::Max` with an `Int32`
+  0, so PowerShell chose the `Int32` overload. Once the working set passed 2 GiB the conversion
+  threw inside the sampler's try/catch, and the reading froze just under 2048 MB. It had sampled the
+  right process.
 
 **What holds the memory.**
 - At the crash, the D3D12 stats show **10240 MB** of `UAVBuffer StandAlone Allocated`, against
