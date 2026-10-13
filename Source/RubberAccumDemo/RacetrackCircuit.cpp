@@ -44,6 +44,14 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GenericPlatform/ICursor.h"
+#include "Misc/Paths.h"
+
+#if WITH_UNREAL_DEVELOPER_TOOLS
+#include "DesktopPlatformModule.h"
+#include "IDesktopPlatform.h"
+#endif
 
 namespace RacetrackFieldSwitches
 {
@@ -211,6 +219,107 @@ namespace RacetrackSceneLighting
 	constexpr float OvercastSunIntensityFraction = 0.15f;
 
 	constexpr float OvercastSkyLightIntensityScale = 2.0f;
+}
+
+namespace RacetrackSurfaceStateDialogs
+{
+	constexpr const TCHAR* FileTypes = TEXT("Surface state (*.surfacestate)|*.surfacestate");
+
+	constexpr const TCHAR* SuggestedFileName = TEXT("SurfaceState.surfacestate");
+
+	constexpr const TCHAR* MessageName = TEXT("RubberAccumDemo.SurfaceState");
+
+	FString DefaultFolder()
+	{
+		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("SurfaceStates"));
+	}
+
+#if WITH_UNREAL_DEVELOPER_TOOLS
+	const void* ReleasePointerAndFindDialogParent()
+	{
+		if (!FSlateApplication::IsInitialized())
+		{
+			return nullptr;
+		}
+
+		FSlateApplication& Slate = FSlateApplication::Get();
+
+		if (const TSharedPtr<ICursor> Cursor = Slate.GetPlatformCursor())
+		{
+			Cursor->Show(true);
+			Cursor->Lock(nullptr);
+		}
+
+		return Slate.FindBestParentWindowHandleForDialogs(nullptr);
+	}
+
+	bool AskForPathToSave(const UObject* WorldContext, FString& OutFilePath)
+	{
+		IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+		TArray<FString> ChosenPaths;
+
+		if (DesktopPlatform == nullptr
+			|| !DesktopPlatform->SaveFileDialog(
+				ReleasePointerAndFindDialogParent(),
+				TEXT("Save the surface state"),
+				DefaultFolder(),
+				SuggestedFileName,
+				FileTypes,
+				EFileDialogFlags::None,
+				ChosenPaths)
+			|| ChosenPaths.Num() == 0)
+		{
+			return false;
+		}
+
+		OutFilePath = ChosenPaths[0];
+		return true;
+	}
+
+	bool AskForPathToLoad(const UObject* WorldContext, FString& OutFilePath)
+	{
+		IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+		TArray<FString> ChosenPaths;
+
+		if (DesktopPlatform == nullptr
+			|| !DesktopPlatform->OpenFileDialog(
+				ReleasePointerAndFindDialogParent(),
+				TEXT("Load a surface state"),
+				DefaultFolder(),
+				FString(),
+				FileTypes,
+				EFileDialogFlags::None,
+				ChosenPaths)
+			|| ChosenPaths.Num() == 0)
+		{
+			return false;
+		}
+
+		OutFilePath = ChosenPaths[0];
+		return true;
+	}
+#else
+	void AnnounceThatDialogsNeedDeveloperTools(const UObject* WorldContext)
+	{
+		RacetrackCircuitDisplay::AnnounceOnScreen(
+			WorldContext,
+			MessageName,
+			TEXT("File dialogs need a build with developer tools. RacetrackDemo.SaveSurface and "
+				"RacetrackDemo.LoadSurface take a path instead"));
+	}
+
+	bool AskForPathToSave(const UObject* WorldContext, FString& OutFilePath)
+	{
+		AnnounceThatDialogsNeedDeveloperTools(WorldContext);
+		return false;
+	}
+
+	bool AskForPathToLoad(const UObject* WorldContext, FString& OutFilePath)
+	{
+		AnnounceThatDialogsNeedDeveloperTools(WorldContext);
+		return false;
+	}
+#endif
 }
 
 namespace RacetrackDemoCommands
@@ -387,6 +496,57 @@ namespace RacetrackDemoCommands
 			"still holds. The readbacks stall the game thread, so this is a capture tool rather than "
 			"something to leave running."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ArmSkidMarkPair));
+
+	void SaveSurface(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit == nullptr)
+		{
+			return;
+		}
+
+		if (Arguments.Num() > 0)
+		{
+			Circuit->SaveSurfaceStateTo(FString::Join(Arguments, TEXT(" ")));
+		}
+		else
+		{
+			Circuit->SaveSurfaceStateWithDialog();
+		}
+	}
+
+	void LoadSurface(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit == nullptr)
+		{
+			return;
+		}
+
+		if (Arguments.Num() > 0)
+		{
+			Circuit->LoadSurfaceStateFrom(FString::Join(Arguments, TEXT(" ")));
+		}
+		else
+		{
+			Circuit->LoadSurfaceStateWithDialog();
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs SaveSurfaceCommand(
+		TEXT("RacetrackDemo.SaveSurface"),
+		TEXT("Saves the whole surface, every channel and the banked decay progress, to the path given. With no "
+			"path it opens the save dialog the K key opens. Stalls the game thread on the readback."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SaveSurface));
+
+	FAutoConsoleCommandWithWorldAndArgs LoadSurfaceCommand(
+		TEXT("RacetrackDemo.LoadSurface"),
+		TEXT("Loads a surface saved by RacetrackDemo.SaveSurface from the path given. With no path it opens the "
+			"file dialog the O key opens. A file saved for another ribbon is refused and the surface is left as "
+			"it was."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&LoadSurface));
 }
 
 namespace RacetrackSkidMarkPair
@@ -1582,6 +1742,66 @@ void ARacetrackCircuit::PlaceObserverAboveTrack()
 		Aspect);
 }
 
+bool ARacetrackCircuit::SaveSurfaceStateTo(const FString& FilePath)
+{
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	const bool bSaved = Subsystem != nullptr && Subsystem->SaveSurfaceState(FilePath);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		RacetrackSurfaceStateDialogs::MessageName,
+		bSaved
+			? FString::Printf(TEXT("Surface saved to %s"), *FilePath)
+			: FString::Printf(TEXT("Could not save the surface to %s, see the log"), *FilePath));
+
+	return bSaved;
+}
+
+bool ARacetrackCircuit::LoadSurfaceStateFrom(const FString& FilePath)
+{
+	UWorld* World = GetWorld();
+
+	USurfaceAccumulationSubsystem* Subsystem = World != nullptr
+		? World->GetSubsystem<USurfaceAccumulationSubsystem>()
+		: nullptr;
+
+	const bool bLoaded = Subsystem != nullptr && Subsystem->LoadSurfaceState(FilePath);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(
+		this,
+		RacetrackSurfaceStateDialogs::MessageName,
+		bLoaded
+			? FString::Printf(TEXT("Surface loaded from %s"), *FilePath)
+			: FString::Printf(TEXT("Could not load the surface from %s, see the log"), *FilePath));
+
+	return bLoaded;
+}
+
+void ARacetrackCircuit::SaveSurfaceStateWithDialog()
+{
+	FString FilePath;
+
+	if (RacetrackSurfaceStateDialogs::AskForPathToSave(this, FilePath))
+	{
+		SaveSurfaceStateTo(FilePath);
+	}
+}
+
+void ARacetrackCircuit::LoadSurfaceStateWithDialog()
+{
+	FString FilePath;
+
+	if (RacetrackSurfaceStateDialogs::AskForPathToLoad(this, FilePath))
+	{
+		LoadSurfaceStateFrom(FilePath);
+	}
+}
+
 void ARacetrackCircuit::BindTimeControls()
 {
 	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
@@ -1609,6 +1829,8 @@ void ARacetrackCircuit::BindTimeControls()
 	InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ARacetrackCircuit::ToggleSurfaceLook);
 	InputComponent->BindKey(EKeys::L, IE_Pressed, this, &ARacetrackCircuit::CycleSceneLighting);
 	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ARacetrackCircuit::ToggleDriving);
+	InputComponent->BindKey(EKeys::K, IE_Pressed, this, &ARacetrackCircuit::SaveSurfaceStateWithDialog);
+	InputComponent->BindKey(EKeys::O, IE_Pressed, this, &ARacetrackCircuit::LoadSurfaceStateWithDialog);
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
@@ -1617,7 +1839,8 @@ void ARacetrackCircuit::BindTimeControls()
 			"%.0f lap half-life, which is %.0f s on this layout. Press C to look at one accumulation "
 			"channel at a time. Press V to switch between the debug view and the lit asphalt. Press L for "
 			"the map's sun, a low sun ahead of the camera and an overcast sky. Press F to drive the car and "
-			"F again for the fly camera. W A S D, Q E and the mouse fly the camera"),
+			"F again for the fly camera. Press K to save the surface to a file and O to load one. W A S D, "
+			"Q E and the mouse fly the camera"),
 		bFieldPaused ? TEXT("frozen") : TEXT("running"),
 		SlowestTimeDilation,
 		FastestTimeDilation,
@@ -1630,7 +1853,8 @@ void ARacetrackCircuit::BindTimeControls()
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		this,
 		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   L light   F drive"));
+		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   L light   F drive   "
+			"K save   O load"));
 }
 
 void ARacetrackCircuit::DepositFaster()

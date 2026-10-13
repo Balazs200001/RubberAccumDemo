@@ -248,6 +248,14 @@ public:
 
 	void ReportSurfaceCoverage();
 
+	bool SaveSurfaceStateTo(const FString& FilePath);
+
+	bool LoadSurfaceStateFrom(const FString& FilePath);
+
+	void SaveSurfaceStateWithDialog();
+
+	void LoadSurfaceStateWithDialog();
+
 	void ApplyTimeDilation(float Dilation);
 
 	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);

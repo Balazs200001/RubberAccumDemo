@@ -12,6 +12,11 @@ public class RubberAccumDemo : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "ChaosVehicles", "Slate", "SlateCore" });
 
+		if (Target.bBuildDeveloperTools)
+		{
+			PrivateDependencyModuleNames.Add("DesktopPlatform");
+		}
+
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 		
