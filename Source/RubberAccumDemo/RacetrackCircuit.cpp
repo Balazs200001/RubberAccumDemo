@@ -2416,26 +2416,11 @@ void ARacetrackCircuit::BindAccumulationTargetToRoad()
 
 	if (AsphaltMaterial != nullptr)
 	{
-		const float TilesAlongLap = static_cast<float>(
-			FMath::Max(FMath::RoundToDouble(GetTrackLength() / AsphaltScanCentimetres), 1.0));
-		const float TilesAcross = static_cast<float>(TrackWidth / AsphaltScanCentimetres);
-
 		AsphaltSurfaceMaterial = UMaterialInstanceDynamic::Create(AsphaltMaterial, this);
 
 		AsphaltSurfaceMaterial->SetTextureParameterValue(
 			RacetrackSurfaceMapping::AccumulationTargetParameterName,
 			Target);
-		AsphaltSurfaceMaterial->SetScalarParameterValue(AsphaltTilesAlongLapParameterName, TilesAlongLap);
-		AsphaltSurfaceMaterial->SetScalarParameterValue(AsphaltTilesAcrossParameterName, TilesAcross);
-
-		UE_LOG(LogRacetrackSurface, Log,
-			TEXT("%s bound the same target into the asphalt, tiled %.0f times along the %.1f cm lap and "
-				"%.2f times across the %.1f cm width"),
-			*GetName(),
-			TilesAlongLap,
-			GetTrackLength(),
-			TilesAcross,
-			TrackWidth);
 	}
 
 	ApplySurfaceLookToRoad();

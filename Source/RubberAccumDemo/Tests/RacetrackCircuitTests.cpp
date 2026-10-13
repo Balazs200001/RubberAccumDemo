@@ -3284,38 +3284,9 @@ bool FRacetrackCircuitSurfaceLookSwitchesRoadMaterial::RunTest(const FString& Pa
 
 	if (bAsphaltShown)
 	{
-		const double Scan = ARacetrackCircuit::AsphaltScanCentimetres;
-		const double TilesAlongLap = AsphaltShown->K2_GetScalarParameterValue(
-			ARacetrackCircuit::AsphaltTilesAlongLapParameterName);
-		const double TilesAcross = AsphaltShown->K2_GetScalarParameterValue(
-			ARacetrackCircuit::AsphaltTilesAcrossParameterName);
-
-		AddInfo(FString::Printf(
-			TEXT("%.0f tiles along a %.1f cm lap, %.1f cm each, and %.2f across %.1f cm, against a %.0f cm scan"),
-			TilesAlongLap,
-			Track->GetTrackLength(),
-			Track->GetTrackLength() / FMath::Max(TilesAlongLap, 1.0),
-			TilesAcross,
-			Track->GetTrackWidth(),
-			Scan));
-
 		TestTrue(
 			TEXT("The asphalt reads the same accumulation target as the debug view"),
 			AsphaltShown->K2_GetTextureParameterValue(RacetrackSurfaceMapping::AccumulationTargetParameterName) == Target);
-
-		TestTrue(
-			TEXT("The lap holds a whole number of tiles, at least one, so the start and finish line has no seam"),
-			TilesAlongLap >= 1.0 && TilesAlongLap == FMath::RoundToDouble(TilesAlongLap));
-
-		TestTrue(
-			TEXT("A tile along the lap is the scan's own size, give or take the rounding to a whole number "
-				"spread over the lap"),
-			TilesAlongLap >= 1.0
-				&& FMath::Abs(Track->GetTrackLength() / TilesAlongLap - Scan) <= 0.5 * Scan / TilesAlongLap + 1.0e-3);
-
-		TestTrue(
-			TEXT("Across the track a tile is the scan's own size, so the asphalt is not stretched sideways"),
-			FMath::IsNearlyEqual(TilesAcross * Scan, Track->GetTrackWidth(), 1.0e-2));
 	}
 
 	Track->SetSurfaceLook(ESurfaceLook::Debug);

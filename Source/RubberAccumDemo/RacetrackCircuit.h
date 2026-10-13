@@ -270,12 +270,6 @@ public:
 
 	static const TCHAR* SceneLightingName(ESceneLighting Lighting);
 
-	static constexpr double AsphaltScanCentimetres = 200.0;
-
-	static constexpr const TCHAR* AsphaltTilesAlongLapParameterName = TEXT("AsphaltTilesAlongLap");
-
-	static constexpr const TCHAR* AsphaltTilesAcrossParameterName = TEXT("AsphaltTilesAcross");
-
 	float NextDecayRate(float CurrentRate, bool bFaster) const;
 
 	double GetLapSeconds() const;
