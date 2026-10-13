@@ -436,6 +436,245 @@ bool FSplineFollowingCarLaysFourTracksInACornerAndTwoOnAStraight::RunTest(const 
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSplineFollowingCarWheelTrackCoordinatesMatchWorldToTrack,
+	"RubberAccumDemo.Car.WheelTrackCoordinatesMatchWorldToTrack",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSplineFollowingCarWheelTrackCoordinatesMatchWorldToTrack::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindRenderableWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No renderable world available."));
+		return false;
+	}
+
+	USurfaceAccumulationSubsystem* Subsystem = World->GetSubsystem<USurfaceAccumulationSubsystem>();
+	ARacetrackCircuit* Track = World->SpawnActor<ARacetrackCircuit>();
+	ASplineFollowingCar* Car = World->SpawnActor<ASplineFollowingCar>();
+
+	if (Subsystem == nullptr || Track == nullptr || Car == nullptr)
+	{
+		AddError(TEXT("Failed to find the subsystem or to spawn the circuit or the car."));
+		return false;
+	}
+
+	Track->SetLayout(ETrackLayout::Spa, Track->GetAuthoredLayoutLapLength());
+
+	const USplineComponent* Centreline = Track->GetCentreline();
+
+	if (Centreline == nullptr)
+	{
+		AddError(TEXT("The circuit has no centreline."));
+		Car->Destroy();
+		Track->Destroy();
+		return false;
+	}
+
+	const double Length = Track->GetTrackLength();
+	const double HalfWidth = Track->GetTrackWidth() * 0.5;
+	const double OneTexel = Track->GetSurfaceCentimetresPerTexel();
+	const int32 TickLimit = FMath::CeilToInt32(4.0 * Track->GetLapSeconds() / TickSeconds) + 1;
+
+	struct FDriverLine
+	{
+		double BaselineLateralOffsetAlpha;
+		double CorneringLineCommitment;
+	};
+
+	const FDriverLine Lines[] = { { 0.0, 1.0 }, { 0.6, 0.5 }, { -0.6, 0.5 } };
+
+	auto WrappedDifference = [Length](double Difference)
+	{
+		if (Difference > Length * 0.5)
+		{
+			return Difference - Length;
+		}
+
+		return Difference < -Length * 0.5 ? Difference + Length : Difference;
+	};
+
+	auto MissAlongTheTrack = [Centreline, Track](const FSurfaceTrackCoordinate& Coordinate, const FVector& WheelPosition)
+	{
+		FSurfaceTrackCoordinate OnThisLap = Coordinate;
+		OnThisLap.DistanceAlongCentreline = Track->WrapDistance(Coordinate.DistanceAlongCentreline);
+
+		const FVector Mapped = RacetrackSurfaceTrackSpace::TrackToWorld(*Centreline, Track->GetTrackWidth(), OnThisLap);
+
+		return FMath::Abs(FVector::DotProduct(
+			WheelPosition - Mapped,
+			Centreline->GetDirectionAtDistanceAlongSpline(
+				static_cast<float>(OnThisLap.DistanceAlongCentreline), ESplineCoordinateSpace::World)));
+	};
+
+	auto WorldToTrackRoundTripError = [Centreline, Track, &WrappedDifference](double Distance)
+	{
+		FSurfaceTrackCoordinate RoundTrip;
+
+		RacetrackSurfaceTrackSpace::WorldToTrack(
+			*Centreline, Track->GetTrackWidth(), Track->GetWorldPositionAtDistance(Distance, 0.0), RoundTrip);
+
+		return WrappedDifference(RoundTrip.DistanceAlongCentreline - Track->WrapDistance(Distance));
+	};
+
+	double WorstWorldToTrackRoundTrip = 0.0;
+	double WorstWorldToTrackRoundTripAt = 0.0;
+
+	for (double Distance = 0.0; Distance < Length; Distance += 10.0)
+	{
+		const double Error = FMath::Abs(WorldToTrackRoundTripError(Distance));
+
+		if (Error > WorstWorldToTrackRoundTrip)
+		{
+			WorstWorldToTrackRoundTrip = Error;
+			WorstWorldToTrackRoundTripAt = Distance;
+		}
+	}
+
+	int32 Compared = 0;
+	int32 KeptByOnlyOnePath = 0;
+	int32 LapsCompleted = 0;
+	double WorstAlong = 0.0;
+	double WorstAlongAt = 0.0;
+	double WorstAcross = 0.0;
+	double WorstAcrossAt = 0.0;
+	double WorstAcrossAlpha = 0.0;
+	double WorstTrackPathMiss = 0.0;
+	double WorstWorldPathMiss = 0.0;
+	double WorstAlongBeyondTheRoundTrip = 0.0;
+	double WorstAlongBeyondTheRoundTripAt = 0.0;
+	double WorstAlongBeyondTheRoundTripAlpha = 0.0;
+
+	for (const FDriverLine& Line : Lines)
+	{
+		Car->ConfigureDriver(
+			Track, 0.0, Line.BaselineLateralOffsetAlpha, Line.CorneringLineCommitment, UnusedDriverSeed);
+
+		int32 Ticks = 0;
+
+		while (Car->GetDistanceAlongTrack() < Length && Ticks < TickLimit)
+		{
+			Car->Tick(TickSeconds);
+			++Ticks;
+
+			const TArray<FVector>& Positions = Car->GetWheelPositions();
+			const TArray<FSurfaceTrackCoordinate>& Coordinates = Car->GetWheelTrackCoordinates();
+
+			for (int32 Wheel = 0; Wheel < ASplineFollowingCar::WheelCount; ++Wheel)
+			{
+				FSurfaceTrackCoordinate Reference;
+
+				const ETrackSpaceStatus Status = RacetrackSurfaceTrackSpace::WorldToTrack(
+					*Centreline, Track->GetTrackWidth(), Positions[Wheel], Reference);
+
+				if (Status == ETrackSpaceStatus::NoCentreline)
+				{
+					continue;
+				}
+
+				const double AlongDifference = WrappedDifference(
+					Track->WrapDistance(Coordinates[Wheel].DistanceAlongCentreline) - Reference.DistanceAlongCentreline);
+
+				WorstTrackPathMiss = FMath::Max(WorstTrackPathMiss, MissAlongTheTrack(Coordinates[Wheel], Positions[Wheel]));
+				WorstWorldPathMiss = FMath::Max(WorstWorldPathMiss, MissAlongTheTrack(Reference, Positions[Wheel]));
+
+				const double AlongBeyondTheRoundTrip =
+					FMath::Abs(AlongDifference + WorldToTrackRoundTripError(Coordinates[Wheel].DistanceAlongCentreline));
+
+				if (AlongBeyondTheRoundTrip > WorstAlongBeyondTheRoundTrip)
+				{
+					WorstAlongBeyondTheRoundTrip = AlongBeyondTheRoundTrip;
+					WorstAlongBeyondTheRoundTripAt = Reference.DistanceAlongCentreline;
+					WorstAlongBeyondTheRoundTripAlpha = Reference.LateralOffsetAlpha;
+				}
+
+				const double AcrossDifference =
+					(Coordinates[Wheel].LateralOffsetAlpha - Reference.LateralOffsetAlpha) * HalfWidth;
+
+				if (FMath::Abs(AlongDifference) > WorstAlong)
+				{
+					WorstAlong = FMath::Abs(AlongDifference);
+					WorstAlongAt = Reference.DistanceAlongCentreline;
+				}
+
+				if (FMath::Abs(AcrossDifference) > WorstAcross)
+				{
+					WorstAcross = FMath::Abs(AcrossDifference);
+					WorstAcrossAt = Reference.DistanceAlongCentreline;
+					WorstAcrossAlpha = Reference.LateralOffsetAlpha;
+				}
+
+				const bool bWorldPathKeeps = Status == ETrackSpaceStatus::Valid;
+				const bool bTrackPathKeeps = FMath::Abs(Coordinates[Wheel].LateralOffsetAlpha) <= 1.0;
+
+				KeptByOnlyOnePath += bWorldPathKeeps != bTrackPathKeeps ? 1 : 0;
+				++Compared;
+			}
+		}
+
+		LapsCompleted += Ticks < TickLimit ? 1 : 0;
+	}
+
+	Subsystem->ResetSurface();
+
+	AddInfo(FString::Printf(
+		TEXT("%d wheel positions over %d laps: the worst along-track difference is %.4f cm at %.0f cm, "
+			"%.1f %% of the lap; the worst across is %.4f cm at %.0f cm, alpha %.3f. %d were kept by one path "
+			"and discarded by the other"),
+		Compared,
+		LapsCompleted,
+		WorstAlong,
+		WorstAlongAt,
+		100.0 * WorstAlongAt / FMath::Max(Length, UE_DOUBLE_SMALL_NUMBER),
+		WorstAcross,
+		WorstAcrossAt,
+		WorstAcrossAlpha,
+		KeptByOnlyOnePath));
+
+	AddInfo(FString::Printf(
+		TEXT("Mapped back through TrackToWorld, the worst along-track miss from the wheel is %.4f cm for the "
+			"track-space coordinate and %.4f cm for WorldToTrack's. WorldToTrack's own round trip from the "
+			"centreline, every 10 cm, is off by up to %.4f cm, at %.0f cm. With that round trip taken out at "
+			"each wheel's distance, the two paths differ by at most %.4f cm along the track, at %.0f cm, "
+			"%.1f %% of the lap, alpha %.3f"),
+		WorstTrackPathMiss,
+		WorstWorldPathMiss,
+		WorstWorldToTrackRoundTrip,
+		WorstWorldToTrackRoundTripAt,
+		WorstAlongBeyondTheRoundTrip,
+		WorstAlongBeyondTheRoundTripAt,
+		100.0 * WorstAlongBeyondTheRoundTripAt / FMath::Max(Length, UE_DOUBLE_SMALL_NUMBER),
+		WorstAlongBeyondTheRoundTripAlpha));
+
+	TestEqual(TEXT("Every driver line completed a lap"), LapsCompleted, static_cast<int32>(UE_ARRAY_COUNT(Lines)));
+
+	TestTrue(
+		FString::Printf(
+			TEXT("Every wheel's track-space coordinate maps back to within one %.3f cm texel of the wheel along "
+				"the track, through the distance-to-position mapping the road mesh and the paint use"),
+			OneTexel),
+		WorstTrackPathMiss <= OneTexel);
+
+	TestTrue(
+		FString::Printf(
+			TEXT("Every wheel's track-space distance is within one %.3f cm texel of WorldToTrack's, once "
+				"WorldToTrack's own round-trip error at that distance is taken out"),
+			OneTexel),
+		WorstAlongBeyondTheRoundTrip <= OneTexel);
+
+	TestTrue(
+		FString::Printf(
+			TEXT("Every wheel's lateral offset is within one %.3f cm texel of WorldToTrack's"), OneTexel),
+		WorstAcross <= OneTexel);
+
+	Car->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRacetrackCircuitRoadNeverPassesThroughItself,
 	"RubberAccumDemo.Track.RoadNeverPassesThroughItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

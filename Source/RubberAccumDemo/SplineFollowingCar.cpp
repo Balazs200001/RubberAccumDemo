@@ -2,6 +2,7 @@
 
 #include "AnimationRuntime.h"
 #include "Components/SceneComponent.h"
+#include "Components/SplineComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
@@ -39,6 +40,10 @@ namespace
 	constexpr int32 BrakingSeedOffset = 1000003;
 
 	constexpr float LongestDrivingStepSeconds = 1.0f / 60.0f;
+
+	constexpr double NearestPointToleranceCentimetres = 0.05;
+
+	constexpr int32 MostNearestPointSteps = 64;
 }
 
 ASplineFollowingCar::ASplineFollowingCar()
@@ -46,7 +51,7 @@ ASplineFollowingCar::ASplineFollowingCar()
 	PrimaryActorTick.bCanEverTick = true;
 
 	WheelPositions.SetNumZeroed(WheelCount);
-	PreviousWheelPositions.SetNumZeroed(WheelCount);
+	WheelTrackCoordinates.SetNum(WheelCount);
 
 	CarRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CarRoot"));
 	SetRootComponent(CarRoot);
@@ -305,6 +310,49 @@ void ASplineFollowingCar::PlaceWheelsFromPose(
 	WheelPositions[static_cast<int32>(ECarWheel::RearRight)] = RearAxle + HalfTrack;
 }
 
+FSurfaceTrackCoordinate ASplineFollowingCar::TrackCoordinateOfWheel(
+	const FVector& WheelPosition,
+	const FVector& RearAxle,
+	const FVector& TrackForwardAtRearAxle) const
+{
+	FSurfaceTrackCoordinate Coordinate;
+	Coordinate.DistanceAlongCentreline =
+		DistanceAlongTrack + FVector::DotProduct(WheelPosition - RearAxle, TrackForwardAtRearAxle);
+	Coordinate.LateralOffsetAlpha = LateralOffsetAlpha;
+
+	const USplineComponent* Centreline = Track->GetCentreline();
+
+	if (Centreline == nullptr)
+	{
+		return Coordinate;
+	}
+
+	for (int32 Step = 0; Step < MostNearestPointSteps; ++Step)
+	{
+		const float Along = static_cast<float>(Track->WrapDistance(Coordinate.DistanceAlongCentreline));
+
+		const double Miss = FVector::DotProduct(
+			WheelPosition - Centreline->GetLocationAtDistanceAlongSpline(Along, ESplineCoordinateSpace::World),
+			Centreline->GetDirectionAtDistanceAlongSpline(Along, ESplineCoordinateSpace::World));
+
+		Coordinate.DistanceAlongCentreline += Miss;
+
+		if (FMath::Abs(Miss) < NearestPointToleranceCentimetres)
+		{
+			break;
+		}
+	}
+
+	const float Along = static_cast<float>(Track->WrapDistance(Coordinate.DistanceAlongCentreline));
+
+	Coordinate.LateralOffsetAlpha = FVector::DotProduct(
+		WheelPosition - Centreline->GetLocationAtDistanceAlongSpline(Along, ESplineCoordinateSpace::World),
+		Centreline->GetRightVectorAtDistanceAlongSpline(Along, ESplineCoordinateSpace::World))
+		/ FMath::Max(Track->GetTrackWidth() * 0.5, UE_DOUBLE_SMALL_NUMBER);
+
+	return Coordinate;
+}
+
 float ASplineFollowingCar::SlipAtWheel(int32 WheelIndex, float RollingSlipAmount) const
 {
 	const bool bLocked = LockedWheel.IsSet() && static_cast<int32>(LockedWheel.GetValue()) == WheelIndex;
@@ -426,19 +474,28 @@ void ASplineFollowingCar::Tick(float DeltaSeconds)
 		CorneringSlipAmount,
 		static_cast<float>(FMath::Abs(SignedCornering)));
 
+	const double HalfWidth = FMath::Max(Track->GetTrackWidth() * 0.5, UE_DOUBLE_SMALL_NUMBER);
+
 	for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
 	{
-		const FVector WheelVelocity = bWheelHistoryValid
-			? (WheelPositions[Wheel] - PreviousWheelPositions[Wheel]) / DeltaSeconds
-			: Velocity;
+		const FSurfaceTrackCoordinate Coordinate = TrackCoordinateOfWheel(WheelPositions[Wheel], RearAxle, Forward);
+		const FSurfaceTrackCoordinate& Previous = WheelTrackCoordinates[Wheel];
 
-		Subsystem->RegisterSurfaceContact(
-			WheelPositions[Wheel],
-			WheelVelocity,
-			SlipAtWheel(Wheel, RollingSlipAmount),
-			ContactWidth);
+		FSurfaceTrackContact Contact;
+		Contact.Coordinate.DistanceAlongCentreline = Track->WrapDistance(Coordinate.DistanceAlongCentreline);
+		Contact.Coordinate.LateralOffsetAlpha = Coordinate.LateralOffsetAlpha;
+		Contact.CentimetresPerSecondAlongCentreline = bWheelHistoryValid
+			? (Coordinate.DistanceAlongCentreline - Previous.DistanceAlongCentreline) / DeltaSeconds
+			: SpeedCentimetresPerSecond;
+		Contact.LateralOffsetAlphaPerSecond = bWheelHistoryValid
+			? (Coordinate.LateralOffsetAlpha - Previous.LateralOffsetAlpha) / DeltaSeconds
+			: LateralCentimetresPerSecond / HalfWidth;
+		Contact.SlipAmount = SlipAtWheel(Wheel, RollingSlipAmount);
+		Contact.ContactWidth = ContactWidth;
 
-		PreviousWheelPositions[Wheel] = WheelPositions[Wheel];
+		Subsystem->RegisterSurfaceContactInTrackSpace(Contact);
+
+		WheelTrackCoordinates[Wheel] = Coordinate;
 	}
 
 	bWheelHistoryValid = true;

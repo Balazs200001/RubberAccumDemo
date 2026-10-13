@@ -136,6 +136,8 @@ public:
 
 	double GetTrackLength() const;
 
+	double WrapDistance(double DistanceAlongTrack) const;
+
 	double GetTrackWidth() const
 	{
 		return TrackWidth;
@@ -421,8 +423,6 @@ protected:
 	float DriveSlowestSkiddingGroundSpeed = 200.0f;
 
 private:
-	double WrapDistance(double DistanceAlongTrack) const;
-
 	void SpawnField();
 
 	void ToggleFieldPaused();

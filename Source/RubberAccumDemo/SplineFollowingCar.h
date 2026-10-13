@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Math/RandomStream.h"
+#include "SurfaceTrackRibbon.h"
 #include "SplineFollowingCar.generated.h"
 
 class ARacetrackCircuit;
@@ -114,6 +115,11 @@ public:
 	const TArray<FVector>& GetWheelPositions() const
 	{
 		return WheelPositions;
+	}
+
+	const TArray<FSurfaceTrackCoordinate>& GetWheelTrackCoordinates() const
+	{
+		return WheelTrackCoordinates;
 	}
 
 	bool HasPlacedItsWheels() const
@@ -233,6 +239,11 @@ private:
 
 	void PlaceWheelsFromPose(const FVector& RearAxle, const FVector& Heading, const FVector& BodyRight);
 
+	FSurfaceTrackCoordinate TrackCoordinateOfWheel(
+		const FVector& WheelPosition,
+		const FVector& RearAxle,
+		const FVector& TrackForwardAtRearAxle) const;
+
 	float SlipAtWheel(int32 WheelIndex, float RollingSlipAmount) const;
 
 	double DrawTriangularCornerDeviationAlpha();
@@ -272,7 +283,7 @@ private:
 
 	TArray<FVector> WheelPositions;
 
-	TArray<FVector> PreviousWheelPositions;
+	TArray<FSurfaceTrackCoordinate> WheelTrackCoordinates;
 
 	bool bWheelHistoryValid = false;
 
