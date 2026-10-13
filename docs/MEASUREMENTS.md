@@ -5718,3 +5718,63 @@ are fixed, so it is deterministic, but a change to them could tip it.
 - The painted field texel by texel against the world-space path.
 - The refinement's cost on its own.
 - PIE and the cooked build.
+
+## 2026-10-13 — D4: the surface state saved, loaded into a fresh target, and compared
+
+**Question.** Does the surface come back exactly after `SaveSurfaceState` and `LoadSurfaceState`?
+Does a file saved for another ribbon leave the live surface alone? The plan and the design are on
+[#47](https://github.com/Balazs200001/RubberAccumDemo/issues/47).
+
+```
+Build:    plugin 298f497 (feature 388456f, Blueprint e4d455e, tests 298f497) on host 725b7a9
+Power:    MAINS, BatteryStatus 2, PowerLineStatus Online
+Editor:   closed
+Run:      UnrealEditor-Cmd -ExecCmds="Automation RunTests RacetrackSurface.State", headless,
+          without -nullrhi. Log C:/RSBuild/tests_d4.log
+Builds:   Build.bat RubberAccumDemoEditor succeeded; BuildPlugin to C:/RSBuild/PluginPkg succeeded,
+          with no compiler warnings
+```
+
+These are test outputs from the editor binary, not timings. Nothing here was timed.
+
+### `RacetrackSurface.State.SurvivesASaveAndALoadIntoAFreshTarget`: passed
+
+The test circuit is a 47.75 m circle with a 1200 cm wide ribbon at 3.125 cm per texel. It laid 24
+frames of a slip 0.5 contact beside a lockup at 3000 cm/s, then banked one frame of decay progress
+without a pass.
+
+| Measure | Value |
+|---|---|
+| Atlas | 9598 x 384 texels in 1 row |
+| Texels holding rubber, skid and marbles before saving | 2730, 2730 and 95940 |
+| Decay progress saved | 0.000018519 half-lives |
+| File | 37246 bytes, against 58970112 bytes of raw texels |
+| Texels differing after loading into a fresh target | **0** |
+| Decay progress after loading | 0.000018519 |
+
+The comparison is a byte compare of all four floats of every texel. "Fresh" means the buffer was
+allocated at another width and then back at this one, inside `LoadSurfaceState`, on the same frame
+as the upload. So the one-time clear `CreateRenderTarget2D` enqueues ran just before the upload,
+and did not wipe it.
+
+### `RacetrackSurface.State.RejectsAFileSavedForAnotherRibbon`: passed
+
+| Measure | Value |
+|---|---|
+| File saved for | a 9598 x 384 atlas, 1200 cm wide |
+| Loaded into | a 9598 x 192 atlas, 600 cm wide, with its own marks |
+| Result | refused, with "so it is not loaded" logged once |
+| A missing file | refused, with both warnings logged once |
+| Texels differing afterwards | **0** |
+| Decay progress | 0.000018519 before and after |
+
+### Not verified
+
+- **The Spa atlas, 14401 x 1024, 225.02 MiB.** Its file size, and the time a save and a load take,
+  were not measured. A save reads the whole target back synchronously, and holds the readback and
+  the compression buffer at once. The peak memory of that was not measured either.
+- **A save and load across a real level reload, PIE or a cooked build.** The test reallocates the
+  target inside the same world.
+- **RHIs other than D3D12.** The upload follows the engine's own pattern of releasing the texels on
+  the RHI thread, but only D3D12 was run.
+- **A corrupted file.** Only a missing file and a mismatched one were tried.
