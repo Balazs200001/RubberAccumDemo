@@ -5778,3 +5778,84 @@ and did not wipe it.
 - **RHIs other than D3D12.** The upload follows the engine's own pattern of releasing the texels on
   the RHI thread, but only D3D12 was run.
 - **A corrupted file.** Only a missing file and a mismatched one were tried.
+
+## 2026-10-13 — D4.1: the surface saved, the level reloaded, and the surface loaded into the new world
+
+**Question.** Does a surface saved in `-game` come back exactly in the new world after
+`open L_SpaHarness`, with its new subsystem and new target? The task is
+[#128](https://github.com/Balazs200001/RubberAccumDemo/issues/128).
+
+```
+Build:    host d103556, plugin 298f497. Development editor target run as UnrealEditor.exe -game,
+          windowed 1600 x 900
+Power:    MAINS, BatteryStatus 2, PowerLineStatus Online, after the run
+Editor:   closed
+Startup:  -ReleaseField, RacetrackDemo.SurfaceLook 0, t.MaxFPS 60, RacetrackDemo.FollowTheLeader 0,
+          DisableAllScreenMessages, r.RacetrackSurface.DecayRate 1,
+          r.RacetrackSurface.DepositionScale 8, RacetrackDemo.TimeDilation 20
+Schedule: -csvExecCmds, by CSV capture frame:
+          3600  RacetrackDemo.Field 0, then BugItGo -11610.7 7355.8 3383.5 -60.00 -20.34 0
+          3660  RacetrackDemo.SaveSurface C:/RSBuild/d41/before-reload.surfacestate
+          3720  open L_SpaHarness
+          4320  RacetrackDemo.Field 0, RacetrackDemo.SurfaceLook 0,
+                RacetrackDemo.LoadSurface C:/RSBuild/d41/before-reload.surfacestate,
+                RacetrackDemo.SaveSurface C:/RSBuild/d41/after-reload.surfacestate
+          4380  the same BugItGo
+Logs:     C:/RSBuild/d41/d41.log, the two files and the two stills, all in C:/RSBuild/d41
+Script:   run_d41.ps1 in the session scratchpad, on the earlier sessions' game_console.ps1
+```
+
+**Why the second save proves the reload.**
+- The four commands at frame 4320 run one after another on `GWorld`'s local player, with no world
+  tick between them (`LaunchEngineLoop.cpp:1474-1495`).
+- `SaveSurfaceState` reads the target back from the GPU, so the second file is what the new world's
+  target held after the load.
+
+### Result: the two files are byte-identical
+
+| Measure | Value |
+|---|---|
+| The level reload | `LoadMap: /Game/Maps/L_SpaHarness` at frame 3720, 0.200 s |
+| In the new world | the ribbon configured again, and a new 14401 x 1024 buffer allocated, 235945984 bytes, with a UAV |
+| File saved before the reload | 24881292 bytes |
+| File saved after the load, in the same frame | 24881292 bytes |
+| `cmp` | identical |
+| SHA-256 of both | `9408cde2c40f94ded4d1c038e57952adf86a885424b957e9e493905df2caa7e5` |
+
+The file covers every texel of all four channels, plus the banked decay progress. Decay was on at
+1x of its rate, and the surface was laid at 20x for 3600 frames at deposition 8.
+
+**Log-stamp intervals.** These are the gap between the command's CSV event and its "Saved" or
+"Loaded" log line, on a single run. They are not a profiled timing.
+
+| Step | Interval |
+|---|---|
+| Save, before the reload | 1.25 s |
+| Load, on the game thread: read, decompress, enqueue | 0.04 s. The GPU upload itself is not timed |
+| Save, after the load | 1.32 s |
+
+The Spa file is 10.5 % of the 225.02 MiB of raw texels. D4's test atlas compressed to 0.06 %,
+because it was nearly empty.
+
+### Stills
+
+Both stills come from the same `BugItGo` pose in the debug view. They are copied to
+`2627-Y3A-PR-243663/assets/media/`:
+- `d41-debug-view-before-level-reload-frozen-field.png`, with the field frozen just before the
+  save;
+- `d41-debug-view-after-level-reload-and-load.png`, 60 frames after the load in the reloaded level.
+  The same marks are back, and no car is in frame, because the reloaded field is elsewhere on the
+  lap.
+
+They show that it renders. Whether it reads right is the user's call.
+
+### Not verified
+
+- **The K and O keys and their file dialogs.** No dialog was opened. The run drives the console
+  commands with a path, which call the same `SaveSurfaceStateTo` and `LoadSurfaceStateFrom` the
+  dialogs lead to.
+- **The cursor over a dialog.** The cursor is shown and unlocked before a dialog opens, but that was
+  not seen.
+- **The long frame after a modal dialog closes.**
+- **Whether the Vehicle pack's input mapping also uses K or O.**
+- **PIE, a cooked build, and a Shipping build.** In a Shipping build, the dialogs are compiled out.
