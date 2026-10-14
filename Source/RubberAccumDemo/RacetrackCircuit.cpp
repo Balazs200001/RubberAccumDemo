@@ -717,6 +717,7 @@ void ARacetrackCircuit::BeginPlay()
 	SetFieldPaused(StartsPausedAfterCommandLine());
 	CaptureMapLighting();
 	BindTimeControls();
+	BindCameraGrab();
 	AddTimeReadout();
 	PlaceObserverAboveTrack();
 }
@@ -1421,6 +1422,9 @@ void ARacetrackCircuit::StartDriving()
 	DrivenWheelPreviousContacts.Reset();
 	DrivenWheelHadContact.Reset();
 	bDriving = true;
+	bCameraGrabbed = false;
+
+	ApplyCameraGate(*Controller);
 
 	UE_LOG(LogRacetrackSurface, Log, TEXT("%s handed %s to the player"), *GetName(), *Vehicle->GetName());
 
@@ -1456,6 +1460,8 @@ void ARacetrackCircuit::StopDriving()
 			Observer->SetActorEnableCollision(true);
 			Controller->Possess(Observer);
 		}
+
+		ApplyCameraGate(*Controller);
 	}
 
 	UE_LOG(LogRacetrackSurface, Log, TEXT("%s gave the fly camera back and parked the car"), *GetName());
@@ -1889,6 +1895,82 @@ void ARacetrackCircuit::BindTimeControls()
 		TEXT("RubberAccumDemo.Controls"),
 		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   L light   F drive   "
 			"K save   O load"));
+}
+
+void ARacetrackCircuit::BindCameraGrab()
+{
+	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+
+	if (Controller == nullptr)
+	{
+		return;
+	}
+
+	EnableInput(Controller);
+
+	if (InputComponent == nullptr)
+	{
+		return;
+	}
+
+	Controller->SetInputMode(FInputModeGameAndUI().SetHideCursorDuringCapture(true));
+	Controller->SetShowMouseCursor(true);
+
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARacetrackCircuit::GrabTheCamera);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ARacetrackCircuit::ReleaseTheCamera);
+
+	ApplyCameraGate(*Controller);
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s shows the cursor and gives the fly camera the mouse only while the left mouse button is held on "
+			"the scene. Held, the mouse turns the camera and W A S D, Q E fly it. Released, the cursor is free"),
+		*GetName());
+}
+
+void ARacetrackCircuit::GrabTheCamera()
+{
+	if (bDriving || bCameraGrabbed)
+	{
+		return;
+	}
+
+	bCameraGrabbed = true;
+
+	if (IsFollowingTheLeader())
+	{
+		SetFollowTheLeader(false);
+	}
+
+	if (APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		ApplyCameraGate(*Controller);
+	}
+}
+
+void ARacetrackCircuit::ReleaseTheCamera()
+{
+	if (!bCameraGrabbed)
+	{
+		return;
+	}
+
+	bCameraGrabbed = false;
+
+	if (APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		ApplyCameraGate(*Controller);
+	}
+}
+
+void ARacetrackCircuit::ApplyCameraGate(APlayerController& Controller) const
+{
+	Controller.ResetIgnoreInputFlags();
+
+	if (!bDriving && !bCameraGrabbed)
+	{
+		Controller.SetIgnoreMoveInput(true);
+		Controller.SetIgnoreLookInput(true);
+	}
 }
 
 void ARacetrackCircuit::DepositFaster()

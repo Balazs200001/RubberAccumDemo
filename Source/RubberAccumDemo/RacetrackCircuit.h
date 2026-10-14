@@ -504,6 +504,14 @@ private:
 
 	void BindTimeControls();
 
+	void BindCameraGrab();
+
+	void GrabTheCamera();
+
+	void ReleaseTheCamera();
+
+	void ApplyCameraGate(APlayerController& Controller) const;
+
 	void PlaceObserverAboveTrack();
 
 	void PlaceObserverBehindTheLeader(const ASplineFollowingCar& Leading);
@@ -609,6 +617,8 @@ private:
 	TWeakObjectPtr<APawn> FlyPawn;
 
 	bool bDriving = false;
+
+	bool bCameraGrabbed = false;
 
 	TArray<FVector> DrivenWheelPreviousContacts;
 
