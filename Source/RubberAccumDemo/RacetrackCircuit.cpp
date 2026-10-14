@@ -93,8 +93,6 @@ namespace RacetrackCircuitDisplay
 
 	constexpr double FollowPitchDegrees = 40.0;
 
-	constexpr double FramingLateralFraction = -0.22;
-
 	constexpr double FramingVerticalFraction = 0.08;
 
 	constexpr double OverlayAheadOfTheCar = 60.0;
@@ -1311,7 +1309,6 @@ void ARacetrackCircuit::PlaceObserverBehindTheLeader(const ASplineFollowingCar& 
 
 	const double DistanceAlongTrack = Leading.GetDistanceAlongTrack();
 	const FVector Forward = GetWorldDirectionAtDistance(DistanceAlongTrack);
-	const FVector Right = GetWorldRightVectorAtDistance(DistanceAlongTrack);
 	const FVector Up = GetWorldUpVectorAtDistance(DistanceAlongTrack);
 	const FVector Focus = Leading.GetActorLocation();
 
@@ -1320,9 +1317,7 @@ void ARacetrackCircuit::PlaceObserverBehindTheLeader(const ASplineFollowingCar& 
 
 	const FVector Eye = Focus - Forward * (Distance * FMath::Cos(Pitch)) + Up * (Distance * FMath::Sin(Pitch));
 
-	const FVector AimedAt = Focus
-		- Right * (Distance * RacetrackCircuitDisplay::FramingLateralFraction)
-		- Up * (Distance * RacetrackCircuitDisplay::FramingVerticalFraction);
+	const FVector AimedAt = Focus - Up * (Distance * RacetrackCircuitDisplay::FramingVerticalFraction);
 
 	const FRotator Look = (AimedAt - Eye).Rotation();
 
