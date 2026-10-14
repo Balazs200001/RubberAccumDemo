@@ -3076,3 +3076,28 @@ and its reasons are on [#42](https://github.com/Balazs200001/RubberAccumDemo/iss
   - So neither shows the saved mesh. A cooked build was not checked.
 - **When the level is next saved,** the file grows with the bigger road, as recorded under C9. That
   is expected and not a leak. Check the actor list, not the file size.
+
+## 2026-10-14 — Phase U: the demo's keys removed, the settings window drawn from code (no asset change)
+
+**No asset was changed.** This records what Phase U does to the setup described above. The work and
+its reasons are on [#129](https://github.com/Balazs200001/RubberAccumDemo/issues/129).
+
+- **The keys recorded in earlier entries no longer exist.** That covers the circuit's
+  `. , ] [ P M N C V L F K O`, including the drive key F chosen under C11. Host commit `61987fd`
+  removed them.
+  - Every setting is now in the "Demo settings" window. Every console command is unchanged.
+  - `IMC_Vehicle_Default` is unchanged, and it is still the only mapping context added while driving.
+- **The window is Slate in the host module**: `SDemoWindow` and `SRacetrackDemoPanel`, added over the game
+  viewport by `RacetrackCircuit_0` at `BeginPlay`. No Widget Blueprint, material or level property is
+  involved.
+- **The input mode is set in code, not in `Config/DefaultInput.ini`.**
+  - At `BeginPlay` the circuit sets `FInputModeGameAndUI` and shows the cursor. It ignores move and
+    look input until the left mouse button is held on the scene.
+  - The ini still has `bCaptureMouseOnLaunch=True` and
+    `DefaultViewportMouseCaptureMode=CapturePermanently_IncludingInitialMouseDown`. The input mode
+    releases the launch-time capture and switches the viewport to `CaptureDuringMouseDown`. The
+    `-game` log shows both changes.
+  - `L_SpaHarness`'s World Settings were not read. They are not needed, because the fly pawn is the
+    default `ADefaultPawn`.
+- **Captures with on-screen announcements now show the window.** Add `RacetrackDemo.Panel 0` to
+  `-ExecCmds` to hide it. `DisableAllScreenMessages` hides it along with the announcements.
