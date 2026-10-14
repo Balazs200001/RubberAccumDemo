@@ -7,6 +7,7 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -28,6 +29,9 @@ FDemoWindowStyle::FDemoWindowStyle()
 	, WindowPadding(8.0f, 6.0f)
 	, TitleBarPadding(4.0f, 2.0f)
 	, ButtonPadding(6.0f, 2.0f)
+	, SectionPadding(4.0f, 2.0f, 0.0f, 4.0f)
+	, RowPadding(0.0f, 2.0f)
+	, LabelWidth(90.0f)
 	, CornerButtonOffset(16.0f, 16.0f)
 {
 	using DemoWindowPalette::FromImGui;
@@ -48,6 +52,44 @@ FDemoWindowStyle::FDemoWindowStyle()
 		.SetPressedPadding(FMargin(0.0f));
 
 	TitleBarButton = FButtonStyle(Button).SetNormal(FSlateNoResource());
+
+	SectionHeader = FButtonStyle(Button)
+		.SetNormal(FSlateColorBrush(FromImGui(66, 150, 250, 79)))
+		.SetHovered(FSlateColorBrush(FromImGui(66, 150, 250, 204)))
+		.SetPressed(FSlateColorBrush(FromImGui(66, 150, 250)));
+
+	const FVector2f CheckBoxSize(16.0f, 16.0f);
+	const FCheckBoxStyle& CoreCheckBox = FCoreStyle::Get().GetWidgetStyle<FCheckBoxStyle>("Checkbox");
+
+	FSlateBrush CheckMark = CoreCheckBox.CheckedImage;
+	CheckMark.TintColor = FSlateColor(FromImGui(66, 150, 250));
+
+	CheckBox = FCheckBoxStyle(CoreCheckBox)
+		.SetBackgroundImage(FSlateRoundedBoxBrush(FromImGui(41, 74, 122, 138), 0.0f, CheckBoxSize))
+		.SetBackgroundHoveredImage(FSlateRoundedBoxBrush(FromImGui(66, 150, 250, 102), 0.0f, CheckBoxSize))
+		.SetBackgroundPressedImage(FSlateRoundedBoxBrush(FromImGui(66, 150, 250, 171), 0.0f, CheckBoxSize))
+		.SetCheckedImage(CheckMark)
+		.SetCheckedHoveredImage(CheckMark)
+		.SetCheckedPressedImage(CheckMark)
+		.SetForegroundColor(TextColour)
+		.SetHoveredForegroundColor(TextColour)
+		.SetPressedForegroundColor(TextColour)
+		.SetCheckedForegroundColor(TextColour)
+		.SetCheckedHoveredForegroundColor(TextColour)
+		.SetCheckedPressedForegroundColor(TextColour)
+		.SetPadding(FMargin(4.0f, 0.0f, 0.0f, 0.0f));
+
+	ValueBox = FSpinBoxStyle()
+		.SetBackgroundBrush(FSlateColorBrush(FromImGui(41, 74, 122, 138)))
+		.SetHoveredBackgroundBrush(FSlateColorBrush(FromImGui(66, 150, 250, 102)))
+		.SetActiveBackgroundBrush(FSlateColorBrush(FromImGui(66, 150, 250, 171)))
+		.SetActiveFillBrush(FSlateNoResource())
+		.SetHoveredFillBrush(FSlateNoResource())
+		.SetInactiveFillBrush(FSlateNoResource())
+		.SetArrowsImage(FSlateNoResource())
+		.SetForegroundColor(TextColour)
+		.SetTextPadding(FMargin(4.0f, 2.0f))
+		.SetInsetPadding(FMargin(0.0f));
 
 	CollapsedArrow = FCoreStyle::Get().GetBrush("TreeArrow_Collapsed");
 	ExpandedArrow = FCoreStyle::Get().GetBrush("TreeArrow_Expanded");
@@ -264,4 +306,146 @@ FReply SDemoWindow::HandleCloseClicked()
 {
 	SetOpen(false);
 	return FReply::Handled();
+}
+
+void SDemoWindowSection::Construct(const FArguments& InArgs)
+{
+	Style = InArgs._Style;
+	check(Style.IsValid());
+
+	ChildSlot
+	[
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(Style->RowPadding)
+		[
+			SNew(SButton)
+			.ButtonStyle(&Style->SectionHeader)
+			.IsFocusable(false)
+			.ContentPadding(Style->ButtonPadding)
+			.OnClicked_Lambda([this]()
+			{
+				bExpanded = !bExpanded;
+				return FReply::Handled();
+			})
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image_Lambda([this]()
+					{
+						return bExpanded ? Style->ExpandedArrow : Style->CollapsedArrow;
+					})
+					.ColorAndOpacity(FSlateColor::UseForeground())
+				]
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				.VAlign(VAlign_Center)
+				.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+				[
+					SNew(STextBlock)
+					.Font(Style->Font)
+					.Text(InArgs._Title)
+				]
+			]
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			SNew(SBox)
+			.Padding(Style->SectionPadding)
+			.Visibility_Lambda([this]()
+			{
+				return bExpanded ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+			})
+			[
+				InArgs._Content.Widget
+			]
+		]
+	];
+}
+
+void SDemoWindowValueBox::Construct(const FArguments& InArgs)
+{
+	Style = InArgs._Style;
+	Value = InArgs._Value;
+	ValueText = InArgs._ValueText;
+	OnValueCommitted = InArgs._OnValueCommitted;
+	check(Style.IsValid());
+
+	const TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+
+	if (InArgs._OnStepDown.IsBound())
+	{
+		Row->AddSlot()
+		.AutoWidth()
+		.Padding(FMargin(0.0f, 0.0f, 4.0f, 0.0f))
+		[
+			MakeStepButton(FText::FromString(TEXT("-")), InArgs._OnStepDown)
+		];
+	}
+
+	Row->AddSlot()
+	.FillWidth(1.0f)
+	[
+		SNew(SSpinBox<float>)
+		.Style(&Style->ValueBox)
+		.Font(Style->Font)
+		.Value(Value)
+		.OnGetDisplayValue_Lambda([this](float) -> TOptional<FText>
+		{
+			return ValueText.Get();
+		})
+		.EnableSlider(false)
+		.EnableWheel(false)
+		.Justification(ETextJustify::Center)
+		.OnValueCommitted(this, &SDemoWindowValueBox::HandleValueCommitted)
+	];
+
+	if (InArgs._OnStepUp.IsBound())
+	{
+		Row->AddSlot()
+		.AutoWidth()
+		.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+		[
+			MakeStepButton(FText::FromString(TEXT("+")), InArgs._OnStepUp)
+		];
+	}
+
+	ChildSlot
+	[
+		Row
+	];
+}
+
+TSharedRef<SWidget> SDemoWindowValueBox::MakeStepButton(const FText& Label, const FSimpleDelegate& OnStep) const
+{
+	return SNew(SButton)
+		.ButtonStyle(&Style->Button)
+		.IsFocusable(false)
+		.ContentPadding(Style->ButtonPadding)
+		.OnClicked_Lambda([OnStep]()
+		{
+			OnStep.ExecuteIfBound();
+			return FReply::Handled();
+		})
+		[
+			SNew(STextBlock)
+			.Font(Style->Font)
+			.Text(Label)
+		];
+}
+
+void SDemoWindowValueBox::HandleValueCommitted(float NewValue, ETextCommit::Type CommitType)
+{
+	if (CommitType == ETextCommit::OnCleared || FMath::IsNearlyEqual(NewValue, Value.Get(), UE_KINDA_SMALL_NUMBER))
+	{
+		return;
+	}
+
+	OnValueCommitted.ExecuteIfBound(NewValue);
 }

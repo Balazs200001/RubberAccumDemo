@@ -34,6 +34,7 @@
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "SDemoWindow.h"
+#include "SRacetrackDemoPanel.h"
 #include "SplineFollowingCar.h"
 #include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
@@ -2153,7 +2154,12 @@ void ARacetrackCircuit::AddDemoWindow()
 		.Visibility_Lambda([]()
 		{
 			return GAreScreenMessagesEnabled ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
-		});
+		})
+		[
+			SNew(SRacetrackDemoPanel)
+			.Style(Style)
+			.Circuit(this)
+		];
 
 	Viewport->AddViewportWidgetContent(DemoWindow.ToSharedRef(), RacetrackDemoWindow::ViewportZOrder);
 }
