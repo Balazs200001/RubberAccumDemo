@@ -918,34 +918,12 @@ bool FRacetrackCircuitSpaFitsTheCapAndTheMemoryBudget::RunTest(const FString& Pa
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRacetrackCircuitDebugViewCyclesEveryChannel,
-	"RubberAccumDemo.Track.DebugViewCyclesEveryChannel",
+	FRacetrackCircuitDebugViewMasksMatchThePaintPath,
+	"RubberAccumDemo.Track.DebugViewMasksMatchThePaintPath",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FRacetrackCircuitDebugViewCyclesEveryChannel::RunTest(const FString& Parameters)
+bool FRacetrackCircuitDebugViewMasksMatchThePaintPath::RunTest(const FString& Parameters)
 {
-	const ESurfaceDebugView Expected[] = {
-		ESurfaceDebugView::RubberBuildup,
-		ESurfaceDebugView::SkidMarks,
-		ESurfaceDebugView::Marbles,
-		ESurfaceDebugView::AllChannels
-	};
-
-	ESurfaceDebugView View = ESurfaceDebugView::AllChannels;
-
-	for (const ESurfaceDebugView Next : Expected)
-	{
-		View = ARacetrackCircuit::NextDebugView(View);
-
-		TestTrue(
-			*FString::Printf(TEXT("The cycle reaches %s"), ARacetrackCircuit::DebugViewName(Next)),
-			View == Next);
-	}
-
-	TestTrue(
-		TEXT("The cycle returns to all three channels, so it is a loop rather than a dead end"),
-		View == ESurfaceDebugView::AllChannels);
-
 	TestEqual(
 		TEXT("Showing every channel is an exact multiply by one, so that view is the image every capture "
 			"before C10 was taken through"),

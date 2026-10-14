@@ -324,8 +324,6 @@ public:
 
 	void SetFollowDistance(float Centimetres);
 
-	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);
-
 	static FLinearColor DebugViewChannelMask(ESurfaceDebugView View);
 
 	static const TCHAR* DebugViewName(ESurfaceDebugView View);
@@ -501,11 +499,7 @@ protected:
 private:
 	void SpawnField();
 
-	void ToggleFieldPaused();
-
 	void ReportLapsToSaturation();
-
-	void BindTimeControls();
 
 	void BindCameraGrab();
 
@@ -525,17 +519,11 @@ private:
 
 	void ReadAndDrawTheLeadersWheels();
 
-	void CycleDebugView();
-
 	void ApplyDebugViewToRoad();
-
-	void ToggleSurfaceLook();
 
 	void ApplySurfaceLookToRoad();
 
 	void CaptureMapLighting();
-
-	void CycleSceneLighting();
 
 	FRotator LowSunAheadOfTheCamera(const FRotator& MapSunRotation) const;
 
@@ -549,7 +537,7 @@ private:
 
 	FText TimeReadoutText() const;
 
-	FText TimeReadoutKeysText() const;
+	FText TimeReadoutDrivingText() const;
 
 	void PublishTrackRibbon();
 

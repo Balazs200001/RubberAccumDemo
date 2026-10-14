@@ -205,7 +205,7 @@ namespace RacetrackTimeReadout
 {
 	constexpr float DilationFontSize = 30.0f;
 
-	constexpr float KeysFontSize = 14.0f;
+	constexpr float DrivingFontSize = 14.0f;
 
 	constexpr float MarginFromTheTop = 24.0f;
 
@@ -407,20 +407,20 @@ namespace RacetrackDemoCommands
 
 	FAutoConsoleCommandWithWorldAndArgs FieldCommand(
 		TEXT("RacetrackDemo.Field"),
-		TEXT("1 releases the field, 0 freezes it. The same handler the P key calls, so it announces "
-			"itself on screen either way."),
+		TEXT("1 releases the field, 0 freezes it. The same handler the demo settings window's Field running "
+			"checkbox calls, so it announces itself on screen either way."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetField));
 
 	FAutoConsoleCommandWithWorldAndArgs TimeDilationCommand(
 		TEXT("RacetrackDemo.TimeDilation"),
-		TEXT("Sets global time dilation, clamped to the circuit's own range. The same handler the . and "
-			", keys call."),
+		TEXT("Sets global time dilation, clamped to the circuit's own range. The same handler the demo "
+			"settings window's Time row calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetTimeDilation));
 
 	FAutoConsoleCommandWithWorldAndArgs ChannelViewCommand(
 		TEXT("RacetrackDemo.Channel"),
 		TEXT("0 shows all three channels, 1 rubber buildup, 2 skid marks, 3 marbles. The same handler "
-			"the C key calls."),
+			"the demo settings window's Channel row calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetChannelView));
 
 	void SetSurfaceLook(const TArray<FString>& Arguments, UWorld* World)
@@ -442,7 +442,8 @@ namespace RacetrackDemoCommands
 
 	FAutoConsoleCommandWithWorldAndArgs SurfaceLookCommand(
 		TEXT("RacetrackDemo.SurfaceLook"),
-		TEXT("0 shows the debug view, 1 the lit asphalt. The same handler the V key calls."),
+		TEXT("0 shows the debug view, 1 the lit asphalt. The same handler the demo settings window's Look "
+			"row calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetSurfaceLook));
 
 	void SetSceneLighting(const TArray<FString>& Arguments, UWorld* World)
@@ -465,7 +466,8 @@ namespace RacetrackDemoCommands
 	FAutoConsoleCommandWithWorldAndArgs SceneLightingCommand(
 		TEXT("RacetrackDemo.Lighting"),
 		TEXT("0 is the map's own sun, 1 a low sun placed ahead of the camera as it points now, 2 an overcast "
-			"sky with the sun dimmed and the sky light raised. The same handler the L key calls."),
+			"sky with the sun dimmed and the sky light raised. The same handler the demo settings window's "
+			"Lighting row calls."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetSceneLighting));
 
 	void ArmSkidMarkPair(const TArray<FString>& Arguments, UWorld* World)
@@ -547,14 +549,15 @@ namespace RacetrackDemoCommands
 	FAutoConsoleCommandWithWorldAndArgs SaveSurfaceCommand(
 		TEXT("RacetrackDemo.SaveSurface"),
 		TEXT("Saves the whole surface, every channel and the banked decay progress, to the path given. With no "
-			"path it opens the save dialog the K key opens. Stalls the game thread on the readback."),
+			"path it opens the save dialog the demo settings window's Save... button opens. Stalls the game "
+			"thread on the readback."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SaveSurface));
 
 	FAutoConsoleCommandWithWorldAndArgs LoadSurfaceCommand(
 		TEXT("RacetrackDemo.LoadSurface"),
 		TEXT("Loads a surface saved by RacetrackDemo.SaveSurface from the path given. With no path it opens the "
-			"file dialog the O key opens. A file saved for another ribbon is refused and the surface is left as "
-			"it was."),
+			"file dialog the demo settings window's Load... button opens. A file saved for another ribbon is "
+			"refused and the surface is left as it was."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&LoadSurface));
 
 	void SetDemoWindow(const TArray<FString>& Arguments, UWorld* World)
@@ -742,7 +745,6 @@ void ARacetrackCircuit::BeginPlay()
 	AcquireLeaderWheelQueries();
 	SetFieldPaused(StartsPausedAfterCommandLine());
 	CaptureMapLighting();
-	BindTimeControls();
 	BindCameraGrab();
 	AddTimeReadout();
 	AddDemoWindow();
@@ -1725,11 +1727,10 @@ void ARacetrackCircuit::SetFieldPaused(bool bPaused)
 	}
 
 	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("%s %s %d cars. The camera is unaffected either way. Press P to %s"),
+		TEXT("%s %s %d cars. The camera is unaffected either way"),
 		*GetName(),
 		bPaused ? TEXT("froze") : TEXT("released"),
-		SpawnedField.Num(),
-		bPaused ? TEXT("release them") : TEXT("freeze them"));
+		SpawnedField.Num());
 
 	RacetrackCircuitDisplay::AnnounceOnScreen(
 		this,
@@ -1738,11 +1739,6 @@ void ARacetrackCircuit::SetFieldPaused(bool bPaused)
 			TEXT("Field %s, %d cars"),
 			bPaused ? TEXT("frozen") : TEXT("running"),
 			SpawnedField.Num()));
-}
-
-void ARacetrackCircuit::ToggleFieldPaused()
-{
-	SetFieldPaused(!bFieldPaused);
 }
 
 void ARacetrackCircuit::PlaceObserverAboveTrack()
@@ -1868,61 +1864,6 @@ void ARacetrackCircuit::LoadSurfaceStateWithDialog()
 	{
 		LoadSurfaceStateFrom(FilePath);
 	}
-}
-
-void ARacetrackCircuit::BindTimeControls()
-{
-	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
-
-	if (Controller == nullptr)
-	{
-		return;
-	}
-
-	EnableInput(Controller);
-
-	if (InputComponent == nullptr)
-	{
-		return;
-	}
-
-	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARacetrackCircuit::SpeedUpTime);
-	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARacetrackCircuit::SlowDownTime);
-	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &ARacetrackCircuit::DepositFaster);
-	InputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &ARacetrackCircuit::DepositSlower);
-	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARacetrackCircuit::ToggleFieldPaused);
-	InputComponent->BindKey(EKeys::M, IE_Pressed, this, &ARacetrackCircuit::DecayFaster);
-	InputComponent->BindKey(EKeys::N, IE_Pressed, this, &ARacetrackCircuit::DecaySlower);
-	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARacetrackCircuit::CycleDebugView);
-	InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ARacetrackCircuit::ToggleSurfaceLook);
-	InputComponent->BindKey(EKeys::L, IE_Pressed, this, &ARacetrackCircuit::CycleSceneLighting);
-	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ARacetrackCircuit::ToggleDriving);
-	InputComponent->BindKey(EKeys::K, IE_Pressed, this, &ARacetrackCircuit::SaveSurfaceStateWithDialog);
-	InputComponent->BindKey(EKeys::O, IE_Pressed, this, &ARacetrackCircuit::LoadSurfaceStateWithDialog);
-
-	UE_LOG(LogRacetrackSurface, Log,
-		TEXT("Press P to freeze and release the field, starting %s. Press . and , for time, between "
-			"%.2fx and %.0fx. Press ] and [ for how much rubber a contact leaves, between %.2fx and "
-			"%.0fx of the derived rate. Press M and N for how fast it fades, between off and %.0fx of a "
-			"%.0f lap half-life, which is %.0f s on this layout. Press C to look at one accumulation "
-			"channel at a time. Press V to switch between the debug view and the lit asphalt. Press L for "
-			"the map's sun, a low sun ahead of the camera and an overcast sky. Press F to drive the car and "
-			"F again for the fly camera. Press K to save the surface to a file and O to load one. W A S D, "
-			"Q E and the mouse fly the camera"),
-		bFieldPaused ? TEXT("frozen") : TEXT("running"),
-		SlowestTimeDilation,
-		FastestTimeDilation,
-		SlowestDepositionScale,
-		FastestDepositionScale,
-		FastestDecayRate,
-		DecayHalfLifeInLaps,
-		DecayHalfLifeInLaps * GetLapSeconds());
-
-	RacetrackCircuitDisplay::AnnounceOnScreen(
-		this,
-		TEXT("RubberAccumDemo.Controls"),
-		TEXT("P field   . , time   ] [ deposition   M N decay   C channel   V asphalt   L light   F drive   "
-			"K save   O load"));
 }
 
 void ARacetrackCircuit::BindCameraGrab()
@@ -2103,12 +2044,12 @@ void ARacetrackCircuit::AddTimeReadout()
 			.HAlign(HAlign_Right)
 			[
 				SNew(STextBlock)
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", RacetrackTimeReadout::KeysFontSize))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", RacetrackTimeReadout::DrivingFontSize))
 				.ColorAndOpacity(FLinearColor::White)
 				.ShadowOffset(FVector2D(1.0, 1.0))
 				.Text_Lambda([Circuit]()
 				{
-					return Circuit.IsValid() ? Circuit->TimeReadoutKeysText() : FText::GetEmpty();
+					return Circuit.IsValid() ? Circuit->TimeReadoutDrivingText() : FText::GetEmpty();
 				})
 			]
 		];
@@ -2202,17 +2143,9 @@ FText ARacetrackCircuit::TimeReadoutText() const
 	return FText::FromString(FString::Printf(TEXT("TIME  %.2fx"), UGameplayStatics::GetGlobalTimeDilation(this)));
 }
 
-FText ARacetrackCircuit::TimeReadoutKeysText() const
+FText ARacetrackCircuit::TimeReadoutDrivingText() const
 {
-	if (bDriving)
-	{
-		return FText::FromString(TEXT("held at 1x while driving"));
-	}
-
-	return FText::FromString(FString::Printf(
-		TEXT("[ . ] faster     [ , ] slower     %.1fx to %.0fx"),
-		SlowestTimeDilation,
-		FastestTimeDilation));
+	return bDriving ? FText::FromString(TEXT("held at 1x while driving")) : FText::GetEmpty();
 }
 
 void ARacetrackCircuit::DecayFaster()
@@ -2276,32 +2209,6 @@ void ARacetrackCircuit::ApplyDecayRate(float Rate)
 		USurfaceAccumulationSubsystem::GetDecayStepsPerHalfLife(),
 		RacetrackSurfaceMapping::DecayRetentionForProgress(
 			1.0f / USurfaceAccumulationSubsystem::GetDecayStepsPerHalfLife()));
-}
-
-void ARacetrackCircuit::CycleDebugView()
-{
-	if (SurfaceLook == ESurfaceLook::Asphalt)
-	{
-		SetSurfaceLook(ESurfaceLook::Debug);
-		return;
-	}
-
-	SetDebugView(NextDebugView(DebugView));
-}
-
-ESurfaceDebugView ARacetrackCircuit::NextDebugView(ESurfaceDebugView View)
-{
-	switch (View)
-	{
-	case ESurfaceDebugView::AllChannels:
-		return ESurfaceDebugView::RubberBuildup;
-	case ESurfaceDebugView::RubberBuildup:
-		return ESurfaceDebugView::SkidMarks;
-	case ESurfaceDebugView::SkidMarks:
-		return ESurfaceDebugView::Marbles;
-	default:
-		return ESurfaceDebugView::AllChannels;
-	}
 }
 
 FLinearColor ARacetrackCircuit::DebugViewChannelMask(ESurfaceDebugView View)
@@ -2432,11 +2339,6 @@ void ARacetrackCircuit::ApplyDebugViewToRoad()
 		DebugViewChannelMask(DebugView));
 }
 
-void ARacetrackCircuit::ToggleSurfaceLook()
-{
-	SetSurfaceLook(SurfaceLook == ESurfaceLook::Debug ? ESurfaceLook::Asphalt : ESurfaceLook::Debug);
-}
-
 const TCHAR* ARacetrackCircuit::SurfaceLookName(ESurfaceLook Look)
 {
 	return Look == ESurfaceLook::Asphalt ? TEXT("lit asphalt") : TEXT("debug view");
@@ -2513,7 +2415,7 @@ void ARacetrackCircuit::CaptureMapLighting()
 	if (FoundSun == nullptr || FoundSun->GetComponent() == nullptr)
 	{
 		UE_LOG(LogRacetrackSurface, Warning,
-			TEXT("%s found no directional light, so L has no sun to move"),
+			TEXT("%s found no directional light, so the Lighting setting has no sun to move"),
 			*GetName());
 		return;
 	}
@@ -2539,22 +2441,6 @@ void ARacetrackCircuit::CaptureMapLighting()
 		Captured.SunRotation.Yaw,
 		FoundSkyLight != nullptr ? *FoundSkyLight->GetName() : TEXT("no sky light"),
 		Captured.SkyLightIntensity);
-}
-
-void ARacetrackCircuit::CycleSceneLighting()
-{
-	switch (SceneLighting)
-	{
-	case ESceneLighting::MapSun:
-		SetSceneLighting(ESceneLighting::LowSun);
-		break;
-	case ESceneLighting::LowSun:
-		SetSceneLighting(ESceneLighting::Overcast);
-		break;
-	default:
-		SetSceneLighting(ESceneLighting::MapSun);
-		break;
-	}
 }
 
 const TCHAR* ARacetrackCircuit::SceneLightingName(ESceneLighting Lighting)
