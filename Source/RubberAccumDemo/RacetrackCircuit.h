@@ -74,6 +74,45 @@ struct FSkidMarkPairPlacement
 	float ContactWidth = 0.0f;
 };
 
+struct FLapsToSaturation
+{
+	float ApexExposurePerContact = 0.0f;
+
+	float StraightExposurePerContact = 0.0f;
+
+	double AdjacentBaselineSpacing = 0.0;
+
+	double MarkWidth = 0.0;
+
+	double WheelsOverATexel = 0.0;
+
+	double CarsOverAStraightTexel = 0.0;
+
+	double ApexExposurePerLap = 0.0;
+
+	double StraightExposurePerLap = 0.0;
+
+	double ApexLapsToSixtyThreePercent() const
+	{
+		return 1.0 / (3.0 * ApexExposurePerLap);
+	}
+
+	double ApexLapsToNinetyFivePercent() const
+	{
+		return 1.0 / ApexExposurePerLap;
+	}
+
+	double StraightLapsToSixtyThreePercent() const
+	{
+		return 1.0 / (3.0 * StraightExposurePerLap);
+	}
+
+	double StraightLapsToNinetyFivePercent() const
+	{
+		return 1.0 / StraightExposurePerLap;
+	}
+};
+
 UCLASS()
 class ARacetrackCircuit : public AActor
 {
@@ -257,6 +296,32 @@ public:
 	void LoadSurfaceStateWithDialog();
 
 	void ApplyTimeDilation(float Dilation);
+
+	void SpeedUpTime();
+
+	void SlowDownTime();
+
+	void DepositFaster();
+
+	void DepositSlower();
+
+	void ApplyDepositionScale(float Scale);
+
+	void DecayFaster();
+
+	void DecaySlower();
+
+	void ApplyDecayRate(float Rate);
+
+	TOptional<FLapsToSaturation> EstimateLapsToSaturation() const;
+
+	bool IsFollowingTheLeader() const;
+
+	void SetFollowTheLeader(bool bFollow);
+
+	float GetFollowDistance() const;
+
+	void SetFollowDistance(float Centimetres);
 
 	static ESurfaceDebugView NextDebugView(ESurfaceDebugView View);
 
@@ -448,22 +513,6 @@ private:
 	void ReleaseLeaderWheelQueries();
 
 	void ReadAndDrawTheLeadersWheels();
-
-	void SpeedUpTime();
-
-	void SlowDownTime();
-
-	void DepositFaster();
-
-	void DepositSlower();
-
-	void ApplyDepositionScale(float Scale);
-
-	void DecayFaster();
-
-	void DecaySlower();
-
-	void ApplyDecayRate(float Rate);
 
 	void CycleDebugView();
 

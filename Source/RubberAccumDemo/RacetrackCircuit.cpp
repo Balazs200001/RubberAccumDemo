@@ -1282,7 +1282,7 @@ void ARacetrackCircuit::ReadAndDrawTheLeadersWheels()
 			LeaderWheelSamples[Wheel]);
 	}
 
-	if (RacetrackCircuitDisplay::CVarFollowTheLeader.GetValueOnGameThread() != 0)
+	if (IsFollowingTheLeader())
 	{
 		PlaceObserverBehindTheLeader(*Leading);
 	}
@@ -1304,7 +1304,7 @@ void ARacetrackCircuit::PlaceObserverBehindTheLeader(const ASplineFollowingCar& 
 	const FVector Focus = Leading.GetActorLocation();
 
 	const double Pitch = FMath::DegreesToRadians(RacetrackCircuitDisplay::FollowPitchDegrees);
-	const double Distance = FMath::Max(RacetrackCircuitDisplay::CVarFollowDistance.GetValueOnGameThread(), 1.0f);
+	const double Distance = FMath::Max(GetFollowDistance(), 1.0f);
 
 	const FVector Eye = Focus - Forward * (Distance * FMath::Cos(Pitch)) + Up * (Distance * FMath::Sin(Pitch));
 
@@ -1316,6 +1316,40 @@ void ARacetrackCircuit::PlaceObserverBehindTheLeader(const ASplineFollowingCar& 
 
 	Controller->GetPawn()->SetActorLocationAndRotation(Eye, Look);
 	Controller->SetControlRotation(Look);
+}
+
+bool ARacetrackCircuit::IsFollowingTheLeader() const
+{
+	return RacetrackCircuitDisplay::CVarFollowTheLeader.GetValueOnGameThread() != 0;
+}
+
+void ARacetrackCircuit::SetFollowTheLeader(bool bFollow)
+{
+	RacetrackCircuitDisplay::CVarFollowTheLeader->Set(bFollow ? 1 : 0, ECVF_SetByCode);
+
+	const FString Report = IsFollowingTheLeader()
+		? FString::Printf(TEXT("Following the leader, %.0f cm behind"), GetFollowDistance())
+		: FString(TEXT("Not following the leader"));
+
+	UE_LOG(LogRacetrackSurface, Log, TEXT("%s: %s"), *GetName(), *Report);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(this, TEXT("RubberAccumDemo.FollowTheLeader"), Report);
+}
+
+float ARacetrackCircuit::GetFollowDistance() const
+{
+	return RacetrackCircuitDisplay::CVarFollowDistance.GetValueOnGameThread();
+}
+
+void ARacetrackCircuit::SetFollowDistance(float Centimetres)
+{
+	RacetrackCircuitDisplay::CVarFollowDistance->Set(FMath::Max(Centimetres, 1.0f), ECVF_SetByCode);
+
+	const FString Report = FString::Printf(TEXT("Follow distance %.0f cm"), GetFollowDistance());
+
+	UE_LOG(LogRacetrackSurface, Log, TEXT("%s: %s"), *GetName(), *Report);
+
+	RacetrackCircuitDisplay::AnnounceOnScreen(this, TEXT("RubberAccumDemo.FollowDistance"), Report);
 }
 
 void ARacetrackCircuit::ToggleDriving()
@@ -1395,7 +1429,7 @@ void ARacetrackCircuit::StartDriving()
 		TEXT("RubberAccumDemo.Drive"),
 		TEXT("Driving. RacetrackDemo.Drive gives the fly camera back. Time is held at 1x"));
 
-	if (RacetrackCircuitDisplay::CVarFollowTheLeader.GetValueOnGameThread() != 0)
+	if (IsFollowingTheLeader())
 	{
 		RacetrackCircuitDisplay::AnnounceOnScreen(
 			this,
@@ -2535,64 +2569,79 @@ double ARacetrackCircuit::GetAdjacentDriverSpacingCentimetres() const
 	return (2.0 * DriverLateralSpread / (CarCount - 1)) * TrackWidth * 0.5;
 }
 
-void ARacetrackCircuit::ReportLapsToSaturation()
+TOptional<FLapsToSaturation> ARacetrackCircuit::EstimateLapsToSaturation() const
 {
 	const ASplineFollowingCar* Reference = CarClass.GetDefaultObject();
 
 	if (Reference == nullptr || CarCount <= 0)
 	{
-		return;
+		return {};
 	}
 
 	const float DepositionScale = USurfaceAccumulationSubsystem::GetDepositionScale();
 
-	const float ApexPerContact = RacetrackSurfaceMapping::SlipToExposure(
+	FLapsToSaturation Estimate;
+
+	Estimate.ApexExposurePerContact = RacetrackSurfaceMapping::SlipToExposure(
 		Reference->GetCorneringSlipAmount(), DepositionScale);
 
-	const float StraightPerContact = RacetrackSurfaceMapping::SlipToExposure(
+	Estimate.StraightExposurePerContact = RacetrackSurfaceMapping::SlipToExposure(
 		Reference->GetStraightSlipAmount(), DepositionScale);
 
-	if (ApexPerContact <= UE_SMALL_NUMBER || StraightPerContact <= UE_SMALL_NUMBER)
+	if (Estimate.ApexExposurePerContact <= UE_SMALL_NUMBER || Estimate.StraightExposurePerContact <= UE_SMALL_NUMBER)
+	{
+		return {};
+	}
+
+	Estimate.AdjacentBaselineSpacing = GetAdjacentDriverSpacingCentimetres();
+	Estimate.MarkWidth = Reference->GetContactWidth();
+	Estimate.WheelsOverATexel = ASplineFollowingCar::WheelsSharingATrack;
+
+	Estimate.CarsOverAStraightTexel = Estimate.AdjacentBaselineSpacing > UE_DOUBLE_SMALL_NUMBER
+		? FMath::Clamp(Estimate.MarkWidth / Estimate.AdjacentBaselineSpacing, 1.0, static_cast<double>(CarCount))
+		: CarCount;
+
+	Estimate.ApexExposurePerLap = CarCount * Estimate.WheelsOverATexel * Estimate.ApexExposurePerContact;
+	Estimate.StraightExposurePerLap =
+		Estimate.CarsOverAStraightTexel * Estimate.WheelsOverATexel * Estimate.StraightExposurePerContact;
+
+	return Estimate;
+}
+
+void ARacetrackCircuit::ReportLapsToSaturation()
+{
+	const TOptional<FLapsToSaturation> Estimate = EstimateLapsToSaturation();
+
+	if (!Estimate.IsSet())
 	{
 		return;
 	}
-
-	const double Spacing = GetAdjacentDriverSpacingCentimetres();
-	const double MarkWidth = Reference->GetContactWidth();
-	const double WheelsOverATexel = ASplineFollowingCar::WheelsSharingATrack;
-
-	const double CarsOverAStraightTexel = Spacing > UE_DOUBLE_SMALL_NUMBER
-		? FMath::Clamp(MarkWidth / Spacing, 1.0, static_cast<double>(CarCount))
-		: CarCount;
-
-	const double ApexPerLap = CarCount * WheelsOverATexel * ApexPerContact;
-	const double StraightPerLap = CarsOverAStraightTexel * WheelsOverATexel * StraightPerContact;
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("One cornering contact deposits %.6f exposure. With %d cars putting %.0f wheels each over one "
 			"apex texel that is %.4f per lap, so the apex reaches 63 %% coverage in about %.0f laps and 95 %% "
 			"in about %.0f. That assumes the whole field crosses one texel, so read it as an upper bound"),
-		ApexPerContact,
+		Estimate->ApexExposurePerContact,
 		CarCount,
-		WheelsOverATexel,
-		ApexPerLap,
-		1.0 / (3.0 * ApexPerLap),
-		1.0 / ApexPerLap);
+		Estimate->WheelsOverATexel,
+		Estimate->ApexExposurePerLap,
+		Estimate->ApexLapsToSixtyThreePercent(),
+		Estimate->ApexLapsToNinetyFivePercent());
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("One straight-line contact deposits %.6f. Baselines %.2f cm apart against a %.1f cm mark put "
 			"%.2f cars over one straight texel, each laying %.0f coincident wheels, that is %.6f per lap, so "
 			"a straight reaches 63 %% in about %.0f laps and 95 %% in about %.0f, a contrast of %.1f to 1 "
 			"against the apex"),
-		StraightPerContact,
-		Spacing,
-		MarkWidth,
-		CarsOverAStraightTexel,
-		WheelsOverATexel,
-		StraightPerLap,
-		1.0 / (3.0 * StraightPerLap),
-		1.0 / StraightPerLap,
-		ApexPerLap / StraightPerLap);
+		Estimate->StraightExposurePerContact,
+		Estimate->AdjacentBaselineSpacing,
+		Estimate->MarkWidth,
+		Estimate->CarsOverAStraightTexel,
+		Estimate->WheelsOverATexel,
+		Estimate->StraightExposurePerLap,
+		Estimate->StraightLapsToSixtyThreePercent(),
+		Estimate->StraightLapsToNinetyFivePercent(),
+		Estimate->ApexExposurePerLap / Estimate->StraightExposurePerLap);
 }
 
 void ARacetrackCircuit::BindAccumulationTargetToRoad()
