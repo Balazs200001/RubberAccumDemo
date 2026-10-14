@@ -79,18 +79,16 @@ namespace RacetrackCircuitDisplay
 		TEXT("RacetrackDemo.FollowTheLeader"),
 		0,
 		TEXT("Parks the observer behind and above the leading car instead of framing the whole circuit. ")
-		TEXT("The wide framing is what the demo wants to show a racing line emerging over a lap; it puts ")
-		TEXT("a metre-long debug bar at about a pixel, so the query overlay cannot be read in it. Every ")
-		TEXT("capture this project takes is a standalone run driven from -ExecCmds at frame one, with no ")
-		TEXT("way to move the camera afterwards, so the camera has to be able to find the car itself."),
+		TEXT("The wide framing is what the demo wants to show a racing line emerging over a lap, and it ")
+		TEXT("shrinks a car to a few pixels. Every capture this project takes is a standalone run driven ")
+		TEXT("from -ExecCmds at frame one, with no way to move the camera afterwards, so the camera has to ")
+		TEXT("be able to find the car itself."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> CVarFollowDistance(
 		TEXT("RacetrackDemo.FollowDistance"),
 		450.0f,
-		TEXT("How far behind the leading car the observer sits, in centimetres, when it is following. ")
-		TEXT("Close enough that the query bars drawn beside the car are legible, far enough that all ")
-		TEXT("four wheels' bars are in frame together."),
+		TEXT("How far behind the leading car the observer sits, in centimetres, when it is following."),
 		ECVF_Default);
 
 	constexpr double FollowPitchDegrees = 40.0;
@@ -770,7 +768,7 @@ void ARacetrackCircuit::Tick(float DeltaSeconds)
 	}
 	else
 	{
-		ReadAndDrawTheLeadersWheels();
+		ReadTheLeadersWheels();
 	}
 
 	AdvanceSkidMarkPair(DeltaSeconds);
@@ -1260,7 +1258,7 @@ void ARacetrackCircuit::ReleaseLeaderWheelQueries()
 	Leader.Reset();
 }
 
-void ARacetrackCircuit::ReadAndDrawTheLeadersWheels()
+void ARacetrackCircuit::ReadTheLeadersWheels()
 {
 	if (LeaderWheelQueries.Num() != ASplineFollowingCar::WheelCount)
 	{
@@ -1289,28 +1287,11 @@ void ARacetrackCircuit::ReadAndDrawTheLeadersWheels()
 		return;
 	}
 
-	const double DistanceAlongTrack = Leading->GetDistanceAlongTrack();
-
-	RacetrackSurfaceQueryOverlay::FOverlayBasis Basis;
-	Basis.Along = GetWorldDirectionAtDistance(DistanceAlongTrack);
-	Basis.Across = GetWorldRightVectorAtDistance(DistanceAlongTrack);
-	Basis.Up = GetWorldUpVectorAtDistance(DistanceAlongTrack);
-
-	const FVector BesideTheCar =
-		Basis.Along * RacetrackCircuitDisplay::OverlayAheadOfTheCar
-		+ Basis.Across * RacetrackCircuitDisplay::OverlayBesideTheCar;
-
 	LeaderWheelSamples.SetNum(ASplineFollowingCar::WheelCount);
 
 	for (int32 Wheel = 0; Wheel < ASplineFollowingCar::WheelCount; ++Wheel)
 	{
 		LeaderWheelSamples[Wheel] = Subsystem->QuerySurfaceState(LeaderWheelQueries[Wheel], WheelPositions[Wheel]);
-
-		RacetrackSurfaceQueryOverlay::DrawSurfaceStateSample(
-			World,
-			WheelPositions[Wheel] + BesideTheCar,
-			Basis,
-			LeaderWheelSamples[Wheel]);
 	}
 
 	if (IsFollowingTheLeader())

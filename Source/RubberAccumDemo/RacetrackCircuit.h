@@ -517,7 +517,7 @@ private:
 
 	void ReleaseLeaderWheelQueries();
 
-	void ReadAndDrawTheLeadersWheels();
+	void ReadTheLeadersWheels();
 
 	void ApplyDebugViewToRoad();
 
