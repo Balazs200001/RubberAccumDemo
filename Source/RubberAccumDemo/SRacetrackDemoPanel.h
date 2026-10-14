@@ -33,6 +33,10 @@ private:
 
 	TSharedRef<SWidget> MakeCarSection();
 
+	TSharedRef<SWidget> MakeSurfaceStateSection();
+
+	TSharedRef<SWidget> MakeButton(const TAttribute<FText>& Label, TFunction<void()> OnClicked) const;
+
 	TSharedRef<SWidget> MakeRow(
 		const FText& Label,
 		const TSharedRef<SWidget>& Control,

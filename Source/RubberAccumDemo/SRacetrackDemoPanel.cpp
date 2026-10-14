@@ -45,6 +45,11 @@ void SRacetrackDemoPanel::Construct(const FArguments& InArgs)
 		[
 			MakeCarSection()
 		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			MakeSurfaceStateSection()
+		]
 	];
 }
 
@@ -435,32 +440,92 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeCarSection()
 		.Style(Style)
 		.Title(FText::FromString(TEXT("Car")))
 		[
-			SNew(SButton)
-			.ButtonStyle(&Style->Button)
-			.IsFocusable(false)
-			.HAlign(HAlign_Center)
-			.ContentPadding(Style->ButtonPadding)
-			.OnClicked_Lambda([this]()
-			{
-				if (ARacetrackCircuit* Track = Circuit.Get())
-				{
-					Track->ToggleDriving();
-				}
-
-				return FReply::Handled();
-			})
-			[
-				SNew(STextBlock)
-				.Font(Style->Font)
-				.Text_Lambda([this]()
+			MakeButton(
+				TAttribute<FText>::CreateLambda([this]()
 				{
 					const ARacetrackCircuit* Track = Circuit.Get();
 
 					return FText::FromString(Track != nullptr && Track->IsDriving()
 						? TEXT("Back to the fly camera")
 						: TEXT("Drive the car"));
+				}),
+				[this]()
+				{
+					if (ARacetrackCircuit* Track = Circuit.Get())
+					{
+						Track->ToggleDriving();
+					}
 				})
+		];
+}
+
+TSharedRef<SWidget> SRacetrackDemoPanel::MakeSurfaceStateSection()
+{
+	return SNew(SDemoWindowSection)
+		.Style(Style)
+		.Title(FText::FromString(TEXT("Surface state")))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			[
+				MakeButton(
+					FText::FromString(TEXT("Save...")),
+					[this]()
+					{
+						if (ARacetrackCircuit* Track = Circuit.Get())
+						{
+							Track->SaveSurfaceStateWithDialog();
+						}
+					})
 			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.Padding(FMargin(2.0f, 0.0f, 0.0f, 0.0f))
+			[
+				MakeButton(
+					FText::FromString(TEXT("Load...")),
+					[this]()
+					{
+						if (ARacetrackCircuit* Track = Circuit.Get())
+						{
+							Track->LoadSurfaceStateWithDialog();
+						}
+					})
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.Padding(FMargin(2.0f, 0.0f, 0.0f, 0.0f))
+			[
+				MakeButton(
+					FText::FromString(TEXT("Surface report")),
+					[this]()
+					{
+						if (ARacetrackCircuit* Track = Circuit.Get())
+						{
+							Track->ReportSurfaceCoverage();
+						}
+					})
+			]
+		];
+}
+
+TSharedRef<SWidget> SRacetrackDemoPanel::MakeButton(const TAttribute<FText>& Label, TFunction<void()> OnClicked) const
+{
+	return SNew(SButton)
+		.ButtonStyle(&Style->Button)
+		.IsFocusable(false)
+		.HAlign(HAlign_Center)
+		.ContentPadding(Style->ButtonPadding)
+		.OnClicked_Lambda([OnClicked]()
+		{
+			OnClicked();
+			return FReply::Handled();
+		})
+		[
+			SNew(STextBlock)
+			.Font(Style->Font)
+			.Text(Label)
 		];
 }
 
