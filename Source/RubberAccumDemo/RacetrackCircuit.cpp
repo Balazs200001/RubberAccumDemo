@@ -33,6 +33,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
+#include "SDemoWindow.h"
 #include "SplineFollowingCar.h"
 #include "SurfaceAccumulationBuffer.h"
 #include "SurfaceAccumulationMapping.h"
@@ -210,6 +211,13 @@ namespace RacetrackTimeReadout
 	constexpr float MarginFromTheRight = 32.0f;
 
 	constexpr int32 ViewportZOrder = 10;
+}
+
+namespace RacetrackDemoWindow
+{
+	constexpr float MarginFromTheTop = 120.0f;
+
+	constexpr int32 ViewportZOrder = 20;
 }
 
 namespace RacetrackSceneLighting
@@ -547,6 +555,23 @@ namespace RacetrackDemoCommands
 			"file dialog the O key opens. A file saved for another ribbon is refused and the surface is left as "
 			"it was."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&LoadSurface));
+
+	void SetDemoWindow(const TArray<FString>& Arguments, UWorld* World)
+	{
+		ARacetrackCircuit* Circuit = FindCircuit(World);
+
+		if (Circuit != nullptr)
+		{
+			Circuit->SetDemoWindowOpen(Arguments.Num() == 0 || FCString::Atoi(*Arguments[0]) != 0);
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs DemoWindowCommand(
+		TEXT("RacetrackDemo.Panel"),
+		TEXT("1 opens the demo settings window, 0 closes it to its button in the top-left corner, and no argument "
+			"opens it. A capture that keeps the on-screen announcements but not the window runs "
+			"RacetrackDemo.Panel 0."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetDemoWindow));
 }
 
 namespace RacetrackSkidMarkPair
@@ -719,11 +744,13 @@ void ARacetrackCircuit::BeginPlay()
 	BindTimeControls();
 	BindCameraGrab();
 	AddTimeReadout();
+	AddDemoWindow();
 	PlaceObserverAboveTrack();
 }
 
 void ARacetrackCircuit::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RemoveDemoWindow();
 	RemoveTimeReadout();
 	ReleaseLeaderWheelQueries();
 
@@ -2104,6 +2131,64 @@ void ARacetrackCircuit::RemoveTimeReadout()
 	}
 
 	TimeReadout.Reset();
+}
+
+void ARacetrackCircuit::AddDemoWindow()
+{
+	UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+
+	if (Viewport == nullptr || DemoWindow.IsValid())
+	{
+		return;
+	}
+
+	const TSharedRef<const FDemoWindowStyle> Style = MakeShared<FDemoWindowStyle>();
+
+	DemoWindow = SNew(SDemoWindow)
+		.Style(Style)
+		.Title(FText::FromString(TEXT("Demo settings")))
+		.ClosedButtonText(FText::FromString(TEXT("Demo settings")))
+		.OffsetFromTopRight(FVector2f(RacetrackTimeReadout::MarginFromTheRight, RacetrackDemoWindow::MarginFromTheTop))
+		.Visibility_Lambda([]()
+		{
+			return GAreScreenMessagesEnabled ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+		});
+
+	Viewport->AddViewportWidgetContent(DemoWindow.ToSharedRef(), RacetrackDemoWindow::ViewportZOrder);
+}
+
+void ARacetrackCircuit::RemoveDemoWindow()
+{
+	if (!DemoWindow.IsValid())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+
+	if (Viewport != nullptr)
+	{
+		Viewport->RemoveViewportWidgetContent(DemoWindow.ToSharedRef());
+	}
+
+	DemoWindow.Reset();
+}
+
+void ARacetrackCircuit::SetDemoWindowOpen(bool bOpen)
+{
+	if (!DemoWindow.IsValid())
+	{
+		return;
+	}
+
+	DemoWindow->SetOpen(bOpen);
+
+	UE_LOG(LogRacetrackSurface, Log,
+		TEXT("%s %s the demo settings window"),
+		*GetName(),
+		bOpen ? TEXT("opened") : TEXT("closed"));
 }
 
 FText ARacetrackCircuit::TimeReadoutText() const

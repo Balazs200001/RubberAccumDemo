@@ -10,6 +10,7 @@ class APlayerController;
 class ASkyLight;
 class ASplineFollowingCar;
 class AWheeledVehiclePawn;
+class SDemoWindow;
 class SWidget;
 class UInputMappingContext;
 class UMaterialInstanceDynamic;
@@ -374,6 +375,8 @@ public:
 		return bDriving;
 	}
 
+	void SetDemoWindowOpen(bool bOpen);
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	ETrackLayout Layout = ETrackLayout::Stadium;
@@ -540,6 +543,10 @@ private:
 
 	void RemoveTimeReadout();
 
+	void AddDemoWindow();
+
+	void RemoveDemoWindow();
+
 	FText TimeReadoutText() const;
 
 	FText TimeReadoutKeysText() const;
@@ -639,6 +646,8 @@ private:
 	TOptional<FMapLighting> MapLighting;
 
 	TSharedPtr<SWidget> TimeReadout;
+
+	TSharedPtr<SDemoWindow> DemoWindow;
 
 	TArray<double> CorneringProfile;
 
