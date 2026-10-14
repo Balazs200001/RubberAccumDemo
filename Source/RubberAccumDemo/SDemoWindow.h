@@ -31,6 +31,8 @@ struct FDemoWindowStyle
 
 	FCheckBoxStyle CheckBox;
 
+	FCheckBoxStyle ChoiceButton;
+
 	FSpinBoxStyle ValueBox;
 
 	const FSlateBrush* CollapsedArrow = nullptr;

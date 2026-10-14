@@ -79,6 +79,22 @@ FDemoWindowStyle::FDemoWindowStyle()
 		.SetCheckedPressedForegroundColor(TextColour)
 		.SetPadding(FMargin(4.0f, 0.0f, 0.0f, 0.0f));
 
+	ChoiceButton = FCheckBoxStyle()
+		.SetCheckBoxType(ESlateCheckBoxType::ToggleButton)
+		.SetUncheckedImage(FSlateColorBrush(FromImGui(66, 150, 250, 102)))
+		.SetUncheckedHoveredImage(FSlateColorBrush(FromImGui(66, 150, 250)))
+		.SetUncheckedPressedImage(FSlateColorBrush(FromImGui(15, 135, 250)))
+		.SetCheckedImage(FSlateColorBrush(FromImGui(15, 135, 250)))
+		.SetCheckedHoveredImage(FSlateColorBrush(FromImGui(66, 150, 250)))
+		.SetCheckedPressedImage(FSlateColorBrush(FromImGui(15, 135, 250)))
+		.SetForegroundColor(TextColour)
+		.SetHoveredForegroundColor(TextColour)
+		.SetPressedForegroundColor(TextColour)
+		.SetCheckedForegroundColor(TextColour)
+		.SetCheckedHoveredForegroundColor(TextColour)
+		.SetCheckedPressedForegroundColor(TextColour)
+		.SetPadding(ButtonPadding);
+
 	ValueBox = FSpinBoxStyle()
 		.SetBackgroundBrush(FSlateColorBrush(FromImGui(41, 74, 122, 138)))
 		.SetHoveredBackgroundBrush(FSlateColorBrush(FromImGui(66, 150, 250, 102)))

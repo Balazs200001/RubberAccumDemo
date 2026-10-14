@@ -27,6 +27,12 @@ private:
 
 	TSharedRef<SWidget> MakeSurfaceSection();
 
+	TSharedRef<SWidget> MakeViewSection();
+
+	TSharedRef<SWidget> MakeCameraSection();
+
+	TSharedRef<SWidget> MakeCarSection();
+
 	TSharedRef<SWidget> MakeRow(
 		const FText& Label,
 		const TSharedRef<SWidget>& Control,
@@ -35,7 +41,15 @@ private:
 	TSharedRef<SWidget> MakeCheckBox(
 		const FText& Label,
 		TFunction<bool()> IsChecked,
-		TFunction<void(bool)> OnChanged) const;
+		TFunction<void(bool)> OnChanged,
+		const TAttribute<bool>& IsCheckBoxEnabled = true) const;
+
+	TSharedRef<SWidget> MakeChoiceRow(
+		const TArray<FText>& Labels,
+		TFunction<int32()> SelectedIndex,
+		TFunction<void(int32)> Choose) const;
+
+	bool IsFlyCameraInUse() const;
 
 	TSharedRef<SWidget> MakeReadout(TFunction<FText()> Text) const;
 

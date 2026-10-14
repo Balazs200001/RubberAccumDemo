@@ -5,6 +5,7 @@
 #include "RacetrackCircuit.h"
 #include "SDemoWindow.h"
 #include "SurfaceAccumulationSubsystem.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -28,6 +29,21 @@ void SRacetrackDemoPanel::Construct(const FArguments& InArgs)
 		.AutoHeight()
 		[
 			MakeSurfaceSection()
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			MakeViewSection()
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			MakeCameraSection()
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			MakeCarSection()
 		]
 	];
 }
@@ -97,11 +113,7 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeSimulationSection()
 							Track->ApplyTimeDilation(Dilation);
 						}
 					}),
-					TAttribute<bool>::CreateLambda([this]()
-					{
-						const ARacetrackCircuit* Track = Circuit.Get();
-						return Track != nullptr && !Track->IsDriving();
-					}))
+					TAttribute<bool>::CreateSP(this, &SRacetrackDemoPanel::IsFlyCameraInUse))
 			]
 		];
 }
@@ -249,6 +261,209 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeSurfaceSection()
 		];
 }
 
+TSharedRef<SWidget> SRacetrackDemoPanel::MakeViewSection()
+{
+	return SNew(SDemoWindowSection)
+		.Style(Style)
+		.Title(FText::FromString(TEXT("View")))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(Style->RowPadding)
+			[
+				MakeRow(
+					FText::FromString(TEXT("Channel")),
+					MakeChoiceRow(
+						{
+							FText::FromString(TEXT("All")),
+							FText::FromString(TEXT("Rubber")),
+							FText::FromString(TEXT("Skid")),
+							FText::FromString(TEXT("Marbles"))
+						},
+						[this]()
+						{
+							const ARacetrackCircuit* Track = Circuit.Get();
+
+							return Track != nullptr && Track->GetSurfaceLook() == ESurfaceLook::Debug
+								? static_cast<int32>(Track->GetDebugView())
+								: INDEX_NONE;
+						},
+						[this](int32 Index)
+						{
+							ARacetrackCircuit* Track = Circuit.Get();
+
+							if (Track == nullptr)
+							{
+								return;
+							}
+
+							if (Track->GetSurfaceLook() == ESurfaceLook::Asphalt)
+							{
+								Track->SetSurfaceLook(ESurfaceLook::Debug);
+							}
+
+							Track->SetDebugView(static_cast<ESurfaceDebugView>(Index));
+						}))
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(Style->RowPadding)
+			[
+				MakeRow(
+					FText::FromString(TEXT("Look")),
+					MakeChoiceRow(
+						{
+							FText::FromString(TEXT("Debug")),
+							FText::FromString(TEXT("Asphalt"))
+						},
+						[this]()
+						{
+							const ARacetrackCircuit* Track = Circuit.Get();
+							return Track != nullptr ? static_cast<int32>(Track->GetSurfaceLook()) : INDEX_NONE;
+						},
+						[this](int32 Index)
+						{
+							if (ARacetrackCircuit* Track = Circuit.Get())
+							{
+								Track->SetSurfaceLook(static_cast<ESurfaceLook>(Index));
+							}
+						}))
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(Style->RowPadding)
+			[
+				MakeRow(
+					FText::FromString(TEXT("Lighting")),
+					MakeChoiceRow(
+						{
+							FText::FromString(TEXT("Map sun")),
+							FText::FromString(TEXT("Low sun")),
+							FText::FromString(TEXT("Overcast"))
+						},
+						[this]()
+						{
+							const ARacetrackCircuit* Track = Circuit.Get();
+							return Track != nullptr ? static_cast<int32>(Track->GetSceneLighting()) : INDEX_NONE;
+						},
+						[this](int32 Index)
+						{
+							if (ARacetrackCircuit* Track = Circuit.Get())
+							{
+								Track->SetSceneLighting(static_cast<ESceneLighting>(Index));
+							}
+						}))
+			]
+		];
+}
+
+TSharedRef<SWidget> SRacetrackDemoPanel::MakeCameraSection()
+{
+	const TAttribute<bool> IsFollowRowEnabled = TAttribute<bool>::CreateSP(this, &SRacetrackDemoPanel::IsFlyCameraInUse);
+
+	return SNew(SDemoWindowSection)
+		.Style(Style)
+		.Title(FText::FromString(TEXT("Camera")))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(Style->RowPadding)
+			[
+				MakeCheckBox(
+					FText::FromString(TEXT("Follow the leader")),
+					[this]()
+					{
+						const ARacetrackCircuit* Track = Circuit.Get();
+						return Track != nullptr && Track->IsFollowingTheLeader();
+					},
+					[this](bool bFollow)
+					{
+						if (ARacetrackCircuit* Track = Circuit.Get())
+						{
+							Track->SetFollowTheLeader(bFollow);
+						}
+					},
+					IsFollowRowEnabled)
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(Style->RowPadding)
+			[
+				MakeRow(
+					FText::FromString(TEXT("Distance")),
+					SNew(SDemoWindowValueBox)
+					.Style(Style)
+					.Value_Lambda([this]()
+					{
+						const ARacetrackCircuit* Track = Circuit.Get();
+						return Track != nullptr ? Track->GetFollowDistance() : 0.0f;
+					})
+					.ValueText_Lambda([this]()
+					{
+						const ARacetrackCircuit* Track = Circuit.Get();
+
+						return FText::FromString(FString::Printf(
+							TEXT("%.0f cm"),
+							Track != nullptr ? Track->GetFollowDistance() : 0.0f));
+					})
+					.OnValueCommitted_Lambda([this](float Centimetres)
+					{
+						if (ARacetrackCircuit* Track = Circuit.Get())
+						{
+							Track->SetFollowDistance(Centimetres);
+						}
+					}),
+					IsFollowRowEnabled)
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(Style->RowPadding)
+			[
+				MakeReadout([]()
+				{
+					return FText::FromString(TEXT("Hold the left mouse button to look. W A S D, Q E move"));
+				})
+			]
+		];
+}
+
+TSharedRef<SWidget> SRacetrackDemoPanel::MakeCarSection()
+{
+	return SNew(SDemoWindowSection)
+		.Style(Style)
+		.Title(FText::FromString(TEXT("Car")))
+		[
+			SNew(SButton)
+			.ButtonStyle(&Style->Button)
+			.IsFocusable(false)
+			.HAlign(HAlign_Center)
+			.ContentPadding(Style->ButtonPadding)
+			.OnClicked_Lambda([this]()
+			{
+				if (ARacetrackCircuit* Track = Circuit.Get())
+				{
+					Track->ToggleDriving();
+				}
+
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock)
+				.Font(Style->Font)
+				.Text_Lambda([this]()
+				{
+					const ARacetrackCircuit* Track = Circuit.Get();
+
+					return FText::FromString(Track != nullptr && Track->IsDriving()
+						? TEXT("Back to the fly camera")
+						: TEXT("Drive the car"));
+				})
+			]
+		];
+}
+
 TSharedRef<SWidget> SRacetrackDemoPanel::MakeRow(
 	const FText& Label,
 	const TSharedRef<SWidget>& Control,
@@ -280,11 +495,13 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeRow(
 TSharedRef<SWidget> SRacetrackDemoPanel::MakeCheckBox(
 	const FText& Label,
 	TFunction<bool()> IsChecked,
-	TFunction<void(bool)> OnChanged) const
+	TFunction<void(bool)> OnChanged,
+	const TAttribute<bool>& IsCheckBoxEnabled) const
 {
 	return SNew(SCheckBox)
 		.Style(&Style->CheckBox)
 		.IsFocusable(false)
+		.IsEnabled(IsCheckBoxEnabled)
 		.IsChecked_Lambda([IsChecked]()
 		{
 			return IsChecked() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
@@ -298,6 +515,51 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeCheckBox(
 			.Font(Style->Font)
 			.Text(Label)
 		];
+}
+
+TSharedRef<SWidget> SRacetrackDemoPanel::MakeChoiceRow(
+	const TArray<FText>& Labels,
+	TFunction<int32()> SelectedIndex,
+	TFunction<void(int32)> Choose) const
+{
+	const TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+
+	for (int32 Index = 0; Index < Labels.Num(); ++Index)
+	{
+		Row->AddSlot()
+		.FillWidth(1.0f)
+		.Padding(FMargin(Index == 0 ? 0.0f : 2.0f, 0.0f, 0.0f, 0.0f))
+		[
+			SNew(SCheckBox)
+			.Style(&Style->ChoiceButton)
+			.IsFocusable(false)
+			.HAlign(HAlign_Center)
+			.IsChecked_Lambda([SelectedIndex, Index]()
+			{
+				return SelectedIndex() == Index ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			})
+			.OnCheckStateChanged_Lambda([Choose, Index](ECheckBoxState NewState)
+			{
+				if (NewState == ECheckBoxState::Checked)
+				{
+					Choose(Index);
+				}
+			})
+			[
+				SNew(STextBlock)
+				.Font(Style->Font)
+				.Text(Labels[Index])
+			]
+		];
+	}
+
+	return Row;
+}
+
+bool SRacetrackDemoPanel::IsFlyCameraInUse() const
+{
+	const ARacetrackCircuit* Track = Circuit.Get();
+	return Track != nullptr && !Track->IsDriving();
 }
 
 TSharedRef<SWidget> SRacetrackDemoPanel::MakeReadout(TFunction<FText()> Text) const
