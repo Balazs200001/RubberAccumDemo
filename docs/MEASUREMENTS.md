@@ -5863,3 +5863,51 @@ They show that it renders. Whether it reads right is the user's call.
 **Checked afterwards, 2026-10-13.** The user tried K and O by hand in the demo and reports that both
 work. That covers the first two items above. The rest are unchanged. This was recorded on
 [#128](https://github.com/Balazs200001/RubberAccumDemo/issues/128).
+
+## 2026-10-17 — E3: the decay rate set from code, the console and Blueprint
+
+**Question.** Does a rate set through `USurfaceAccumulationSubsystem::SetDecayRate` drive the decay
+pass? Do a code set and a console set each take effect after the other? The task is
+[#52](https://github.com/Balazs200001/RubberAccumDemo/issues/52).
+
+```
+Build:    plugin 422ac61 and 35d7aa9, host 5a20452. Development editor target, built by Build.bat
+          and by BuildPlugin to C:/RSBuild/PluginPkgE3, both clean
+Run:      UnrealEditor-Cmd.exe headless, editor closed, without -nullrhi
+Filter:   RacetrackSurface.Decay+RacetrackSurface.Blueprint+RacetrackSurface.State
+Log:      C:/RSBuild/e3-tests.log
+```
+
+**Result: 13 of 13 pass**, four of them new.
+
+| Test | What it read |
+|---|---|
+| `Decay.ConsoleThenCodeSetsBothTakeEffect` | Console 3.0 gave the subsystem 3.0. A code write of 7.0 to the variable left it at 3.0, and the engine logged the lower-priority warning once. The setter at 7.0 gave 7.0. Console 3.0 again, the variable's value unchanged, gave 3.0 |
+| `Decay.RateSetFromCodeDrivesThePass` | At 4x from code, 101 quarter-step ticks ran 25 passes against 25 expected, with 0.000977 half-lives banked. Set to 0: 0 banked, and 0 passes over 600 s. Set to -2: reads 0 |
+| `Decay.RateIsHeldPerSubsystem` | Code set the world's subsystem to 2 and a second subsystem to 5, and each kept its own. The console variable at 9 gave 9 on both |
+| `Blueprint.DecayRateReachesTheSubsystem` | The library set 3: the subsystem reads 3, and so does the library. The library set -1: reads 0 |
+
+**The lockout the plan predicted is real, and `-ExecCmds` hits it.** This was read from the 5.8
+source and was not run as a capture:
+- `UEngine::TickDeferredCommands` runs each `-ExecCmds` command through `Exec`
+  (`UnrealEngine.cpp:2772-2794`);
+- `Exec` hands it to `ProcessUserConsoleInput` (`UnrealEngine.cpp:5722`), which sets the variable
+  at `ECVF_SetByConsole` (`ConsoleManager.cpp:3228`).
+
+So before this change, after `-ExecCmds="r.RacetrackSurface.DecayRate 1"`, the demo's decay
+controls wrote at `ECVF_SetByCode` and were ignored. The first test reproduces that on the variable
+itself. The host now sets the rate through the subsystem.
+
+**The callback fires on an unchanged value.** `FConsoleVariableBase::OnChanged` broadcasts on every
+accepted `Set` (`ConsoleManager.cpp:314-337`), so console 3 after code 7 reaches the subsystem even
+though the variable already read 3. The test's restore uses `Unset(ECVF_SetByConsole)`
+(`ConsoleManager.cpp:1191-1241`), so later tests can still write the variable.
+
+### Not verified
+
+- **A second world.** `RateIsHeldPerSubsystem` uses a subsystem made with `NewObject` and no world,
+  not a second world. It shows the rate is per instance, and each world has one instance.
+- **The settings window and `-ExecCmds` in a running demo.** The lockout is gone by construction
+  and from the source, not from a `-game` run.
+- **A Blueprint graph calling the new nodes.** The test calls the library from C++.
+- **The rest of the suite.** Only the three groups above were run.
