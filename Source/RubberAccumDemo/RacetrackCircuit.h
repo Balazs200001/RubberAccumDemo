@@ -312,6 +312,8 @@ public:
 
 	void DecaySlower();
 
+	float GetDecayRate() const;
+
 	void ApplyDecayRate(float Rate);
 
 	TOptional<FLapsToSaturation> EstimateLapsToSaturation() const;

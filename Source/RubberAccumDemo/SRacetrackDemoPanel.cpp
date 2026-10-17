@@ -184,9 +184,10 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeSurfaceSection()
 					[
 						MakeCheckBox(
 							FText::GetEmpty(),
-							[]()
+							[this]()
 							{
-								return USurfaceAccumulationSubsystem::GetDecayRate() > 0.0f;
+								const ARacetrackCircuit* Track = Circuit.Get();
+								return Track != nullptr && Track->GetDecayRate() > 0.0f;
 							},
 							[this](bool bDecaying)
 							{
@@ -201,13 +202,15 @@ TSharedRef<SWidget> SRacetrackDemoPanel::MakeSurfaceSection()
 					[
 						SNew(SDemoWindowValueBox)
 						.Style(Style)
-						.Value_Lambda([]()
+						.Value_Lambda([this]()
 						{
-							return USurfaceAccumulationSubsystem::GetDecayRate();
+							const ARacetrackCircuit* Track = Circuit.Get();
+							return Track != nullptr ? Track->GetDecayRate() : 0.0f;
 						})
-						.ValueText_Lambda([]()
+						.ValueText_Lambda([this]()
 						{
-							const float Rate = USurfaceAccumulationSubsystem::GetDecayRate();
+							const ARacetrackCircuit* Track = Circuit.Get();
+							const float Rate = Track != nullptr ? Track->GetDecayRate() : 0.0f;
 
 							return Rate > 0.0f
 								? FText::FromString(FString::Printf(TEXT("%.2fx"), Rate))
@@ -641,7 +644,7 @@ FText SRacetrackDemoPanel::HalfLifeText() const
 	UWorld* World = Track != nullptr ? Track->GetWorld() : nullptr;
 	const USurfaceAccumulationSubsystem* Subsystem =
 		World != nullptr ? World->GetSubsystem<USurfaceAccumulationSubsystem>() : nullptr;
-	const float Rate = USurfaceAccumulationSubsystem::GetDecayRate();
+	const float Rate = Subsystem != nullptr ? Subsystem->GetDecayRate() : 0.0f;
 
 	if (Track == nullptr || Subsystem == nullptr || Rate <= 0.0f)
 	{

@@ -2126,12 +2126,22 @@ FText ARacetrackCircuit::TimeReadoutDrivingText() const
 
 void ARacetrackCircuit::DecayFaster()
 {
-	ApplyDecayRate(NextDecayRate(USurfaceAccumulationSubsystem::GetDecayRate(), true));
+	ApplyDecayRate(NextDecayRate(GetDecayRate(), true));
 }
 
 void ARacetrackCircuit::DecaySlower()
 {
-	ApplyDecayRate(NextDecayRate(USurfaceAccumulationSubsystem::GetDecayRate(), false));
+	ApplyDecayRate(NextDecayRate(GetDecayRate(), false));
+}
+
+float ARacetrackCircuit::GetDecayRate() const
+{
+	const UWorld* World = GetWorld();
+
+	const USurfaceAccumulationSubsystem* Subsystem =
+		World != nullptr ? World->GetSubsystem<USurfaceAccumulationSubsystem>() : nullptr;
+
+	return Subsystem != nullptr ? Subsystem->GetDecayRate() : 0.0f;
 }
 
 float ARacetrackCircuit::NextDecayRate(float CurrentRate, bool bFaster) const
@@ -2148,17 +2158,19 @@ float ARacetrackCircuit::NextDecayRate(float CurrentRate, bool bFaster) const
 
 void ARacetrackCircuit::ApplyDecayRate(float Rate)
 {
-	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(
-		RacetrackSurfaceMapping::DecayRateVariableName);
+	UWorld* World = GetWorld();
 
-	if (Variable == nullptr)
+	USurfaceAccumulationSubsystem* Subsystem =
+		World != nullptr ? World->GetSubsystem<USurfaceAccumulationSubsystem>() : nullptr;
+
+	if (Subsystem == nullptr)
 	{
 		return;
 	}
 
 	const float Clamped = Rate <= 0.0f ? 0.0f : FMath::Clamp(Rate, SlowestDecayRate, FastestDecayRate);
 
-	Variable->Set(Clamped, ECVF_SetByCode);
+	Subsystem->SetDecayRate(Clamped);
 
 	if (Clamped <= 0.0f)
 	{
@@ -2167,14 +2179,7 @@ void ARacetrackCircuit::ApplyDecayRate(float Rate)
 		return;
 	}
 
-	UWorld* World = GetWorld();
-
-	const USurfaceAccumulationSubsystem* Subsystem =
-		World != nullptr ? World->GetSubsystem<USurfaceAccumulationSubsystem>() : nullptr;
-
-	const float HalfLifeSeconds = Subsystem != nullptr
-		? Subsystem->GetDecayHalfLifeSeconds() / Clamped
-		: 0.0f;
+	const float HalfLifeSeconds = Subsystem->GetDecayHalfLifeSeconds() / Clamped;
 
 	UE_LOG(LogRacetrackSurface, Log,
 		TEXT("Decay now %.2fx, a half-life of %.1f laps and %.0f s of track time, applied in %.0f steps "
