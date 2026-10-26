@@ -5952,3 +5952,112 @@ The axes resting at 0 are the triggers, and the ones resting near 128 are the st
 stick steered, so Ry is R2, Rx is L2 and X is left stick X. That is the user's observation of the
 car, not a number. The user reported no problem with the steering. The resting offset was not
 measured in the game.
+
+## 2026-10-26 — S9: what the Spa trackside scenery costs
+
+**Question.** What does Phase S's scenery cost in the running demo, per frame and at load? The scenery
+is the ground bands, the terrain, the barriers, the fences and the grandstands.
+
+```
+Build:    host 6e6ddb7. Build.bat with the editor closed. The plugin is unchanged
+Power:    MAINS, BatteryStatus 2, 100 %, read before the first run and after the last
+Editor:   closed. -game from the Development editor binary, L_SpaHarness, -ReleaseField
+Schedule: H4's run B, unchanged. The command line is h5-running-sportscar's, with only the output names
+          changed: 20x to frame 9000, 1x to 15000, then RacetrackDemo.Field 0 to 19060, uncapped,
+          following the leader, RacetrackDemo.SurfaceLook 1, DisableAllScreenMessages, ProfileGPU at
+          frames 14500 and 14700
+Maps:     with: L_SpaHarness at host 41c5a44, holding TracksideScenery_1
+          without: the same map as committed before it (41c5a44^). It was checked out for each run and
+          restored with git checkout HEAD straight after, and git status was clean both times
+Order:    with, without, with, without, from 18:44 to 18:57 local time. The logs stamp UTC, an hour
+          earlier
+Logs:     C:/RSBuild/s9-{with,without}-scenery-{a,b}.log and .csv
+Parser:   run_phase_s.py parse, in the session scratchpad. It drops the 300 frames after each command,
+          as H4 did. On h5-running-sportscar.csv it gives H5's published medians: 7.111, 3.738, 7.087 and
+          5.322 at 20x
+Also on:  Visual Studio (devenv), VS Code and Blender, idle
+```
+
+### Frame totals
+
+Medians in ms, with the p90 in brackets:
+
+| Run | Segment | `FrameTime` | `GameThreadTime` | `RenderThreadTime` | `GPUTime` |
+|---|---|---|---|---|---|
+| with, a | 20x | 7.305 (8.322) | 2.837 (3.563) | 7.264 (8.250) | **6.024** (6.482) |
+| with, a | 1x | 7.080 (7.815) | 2.789 (3.301) | 7.055 (7.759) | **5.496** (5.865) |
+| with, a | frozen | 6.857 (7.495) | 1.933 (2.312) | 6.832 (7.424) | 5.242 (5.596) |
+| without, a | 20x | 6.810 (7.559) | 2.770 (3.283) | 6.788 (7.505) | **5.075** (5.522) |
+| without, a | 1x | 6.783 (7.295) | 2.741 (3.212) | 6.753 (7.269) | **4.811** (5.130) |
+| without, a | frozen | 7.064 (8.006) | 1.887 (2.578) | 7.021 (7.917) | 5.756 (6.509) |
+| with, b | 20x | 8.961 (9.786) | 3.225 (3.828) | 8.941 (9.747) | **6.243** (6.737) |
+| with, b | 1x | 9.810 (10.709) | 3.498 (4.158) | 9.787 (10.643) | **5.561** (5.936) |
+| with, b | frozen | 9.662 (10.776) | 2.479 (3.030) | 9.655 (10.726) | 5.164 (5.554) |
+| without, b | 20x | 9.649 (10.717) | 3.638 (4.415) | 9.633 (10.656) | **5.000** (5.489) |
+| without, b | 1x | 8.653 (9.340) | 3.339 (3.965) | 8.633 (9.293) | **4.768** (5.127) |
+| without, b | frozen | 7.755 (8.749) | 2.149 (2.638) | 7.753 (8.694) | 4.428 (4.795) |
+
+- **GPU time is the one signal that holds across both pairs.** The scenery adds **+0.95 and
+  +1.24 ms at 20x**, and **+0.69 and +0.79 ms at 1x**. That is 14 to 25 % of the GPU frame.
+- **Frozen, the pairs disagree:** −0.51 ms and +0.74 ms. Run "without, a" is slower frozen than at
+  1x, which no other run is. Not explained.
+- **The frame time cannot be separated from the noise.** The frame is render-thread-bound in every
+  run, and the render thread drifts between runs of the same map:
+  - by 1.7 ms with the scenery, 7.264 against 8.941 at 20x;
+  - by 2.8 ms without it, 6.788 against 9.633.
+
+  The paired differences at 20x are +0.50 ms and −0.69 ms. The GPU has 1 to 4 ms of slack under the
+  render thread, so in this configuration its extra time need not lengthen the frame.
+- **The game thread shows no consistent change.** The scenery does not tick.
+
+### Where the GPU time goes
+
+`ProfileGPU`, frames 14501 and 14701, both at 1x. Each dump has a graphics pipe and an async compute
+pipe. The table gives each pass's time in ms, with draws and primitives where they help.
+
+| Pass | with, a | without, a | with, b | without, b |
+|---|---|---|---|---|
+| Graphics pipe total, frame 14501 | 6.604 | 5.211 | 5.806 | 5.086 |
+| Graphics pipe total, frame 14701 | 6.118 | 4.656 | 5.510 | 4.878 |
+| `BasePass`, frame 14501 | 0.342 (12 draws, 147,634 primitives) | 0.304 (1 draw, 4,096 primitives) | 0.341 | 0.316 |
+| `ShadowDepths`, frame 14501 | 1.289 (22 draws) | 1.093 (13 draws) | 1.341 | 1.105 |
+| `Lights`, frame 14501 | 0.490 | 0.214 | 0.497 | 0.296 |
+| Async `DiffuseIndirectAndAO`, frame 14501 | 2.491 | 1.603 | 2.377 | 1.682 |
+| Async `DiffuseIndirectAndAO`, frame 14701 | 2.423 | 1.916 | 2.294 | 1.976 |
+
+- **The triangles themselves are nearly free.** 147,634 primitives in the base pass, against the
+  road's 4,096, cost **+0.03 to +0.07 ms**.
+- **The cost is per pixel.**
+  - Lumen's diffuse indirect and AO, on the async pipe, adds +0.3 to +0.9 ms.
+  - The deferred lights add up to +0.3 ms. That figure is not consistent: in frame 14701 of pair b
+    the difference is −0.03 ms.
+  - Shadow depths add +0.2 to +0.3 ms, from the walls, fences and stands that cast shadows. The
+    ground does not cast.
+
+  The view used to be mostly sky. It is now mostly lit ground, and both of those passes work per lit
+  pixel. Any ground at all would pay most of this; low poly does not buy it back.
+- **The graphics pipe goes from 88 to 90 draws without the scenery to 166 to 191 with it.** That is
+  the extra sections, the instanced meshes and their shadow passes.
+
+### At load
+
+**The scenery is rebuilt when the level loads**, as `EDITOR_SETUP.md` explains under S8. The rebuild
+logged:
+
+| Where | Rebuild |
+|---|---|
+| The two cost runs with the scenery | 121.6 ms and 137.2 ms |
+| S8's stills run | 125.8 ms |
+| The editor | 187.3 ms |
+
+It happens once, before the first frame.
+
+### Not verified
+
+- Why the CPU side drifted by up to 2.8 ms between runs of the same map. The Visual Studio process
+  had the most CPU time of any.
+- The frozen segment's GPU difference, where the two pairs contradict each other.
+- The render thread's cost for the extra mesh batches. It is within the run-to-run drift.
+- Memory.
+- Any scalability tier other than the default.
+- PIE, and a cooked build.
