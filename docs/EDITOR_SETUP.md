@@ -3364,3 +3364,43 @@ and load times are in `MEASUREMENTS.md`, *S10*.
 
 **Not verified:** whether `L_SpaHarness` opens dirty in the editor, and the map in PIE or in a cooked
 build.
+
+## 2026-10-26 — S10: `L_SpaHarness` re-saved without the circuit's edge walls
+
+**Asset changed:** `/Game/Maps/L_SpaHarness`, saved, host `5e1629d`. `git status` showed only
+`Content/Maps/L_SpaHarness.umap`.
+
+**Change.** The map went from 8,064,137 to 2,866,810 bytes.
+- **Before the save,** `PkgInfo` on the file listed 45 exports. They included
+  `ProceduralMeshComponent EdgeWalls`, at 5,196,854 bytes, twice the road's, and a second
+  `BodySetup_0`.
+- **After it,** there are 43, without either.
+- `Road` is unchanged at 2,598,791 bytes. `RacetrackCircuit_0` went from 400 to 371 bytes, without
+  `EdgeWallHeight`.
+- **Not identified:** why `Spline` grew by 65 bytes, to 217,481, and what the one extra name is. The
+  table now has 456 entries, and none of them is `S10Resave`, `EdgeWall…` or `TRASH_…`.
+
+**Why.** S10 (#149) removed the walls from the class, but the map still held them.
+
+**This corrects the entry above.** It said the editor may open the map as modified. It did not.
+- The editor opened it clean: `AssetTools.is_dirty` read false, and the user's save wrote nothing.
+- `RacetrackCircuit_0` already had only `Spline`, `Road` and `PerTexelDebugView`, so the walls were
+  destroyed at load, as described above. The load just did not mark the map dirty.
+- That fits `UObjectBaseUtility::MarkPackageDirty`, which refuses while the editor loads a package
+  (`UObjectBaseUtility.cpp:253-258`). It was not confirmed that this is the path taken.
+
+**Made via:**
+- `AssetTools.save_assets` and `SceneTools.save_actor` wrote nothing on their own. The first skips a
+  clean package. The second refuses an actor that is not external.
+- So `ActorTools.add_tag` put `S10Resave` on `PlayerStart_0` to mark the map dirty, and
+  `ActorTools.remove_tag` took it off. `get_tags` read `[]` before and after. No source file reads
+  actor tags.
+- Then `AssetTools.save_assets`, after which `is_dirty` read false.
+
+**Read with:** `UnrealEditor-Cmd -run=PkgInfo /Game/Maps/L_SpaHarness`, with `-exports -simple` and
+with `-names`. Its output went to `-dumptofile=C:/RSBuild/s10-pkginfo*.txt`. The engine reads the
+package itself, and nothing is written to it.
+
+**Not verified:** the re-saved map in PIE, in `-game` or in a cooked build. The user's drive was
+before the save. The save did not change what loads in the editor, because the walls were already
+being destroyed at load.
