@@ -38,6 +38,10 @@
 		{
 			"Name": "ChaosVehiclesPlugin",
 			"Enabled": true
+		},
+		{
+			"Name": "GameInput",
+			"Enabled": true
 		}
 	]
 }
