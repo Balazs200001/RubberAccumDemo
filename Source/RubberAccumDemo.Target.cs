@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright 2026 Balázs Fábián. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.Collections.Generic;

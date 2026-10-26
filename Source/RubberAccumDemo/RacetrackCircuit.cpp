@@ -1,3 +1,5 @@
+// Copyright 2026 Balázs Fábián. All Rights Reserved.
+
 #include "RacetrackCircuit.h"
 
 #include "Camera/CameraComponent.h"

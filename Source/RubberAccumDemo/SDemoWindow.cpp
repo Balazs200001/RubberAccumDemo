@@ -1,3 +1,5 @@
+// Copyright 2026 Balázs Fábián. All Rights Reserved.
+
 #include "SDemoWindow.h"
 
 #include "Brushes/SlateColorBrush.h"
