@@ -3158,3 +3158,39 @@ its reasons are on [#129](https://github.com/Balazs200001/RubberAccumDemo/issues
   Windows kept the window out of the foreground in both: sampled once a second with
   `GetForegroundWindow`, it was in front for one sample, before the map loaded. No pad report
   reached RawInput, and the three axes read `--`.
+
+## 2026-10-26 — C11.9 corrected: `IA_Brake`'s Pressed and Released triggers removed
+
+**Asset changed:** `/Game/VehicleTemplate/Input/Actions/IA_Brake`, saved. No other asset changed.
+`git status` afterwards showed only `Content/VehicleTemplate/Input/Actions/IA_Brake.uasset` under
+`Content/`.
+
+**Why.** The user drove with the DualSense and reported that after the first L2 press the brake
+stayed slightly on. Pressing S on the keyboard cleared it, and the next L2 press brought it back.
+
+- **The pad was not the cause.** Read from Windows over 5 s with nothing pressed, L2 and R2 both
+  stayed at raw 0. RawInput re-sends every axis on every pad report (`RawInputWindows.cpp:710-740`).
+- **The cause is `IA_Brake` together with the car's Blueprint**, read over MCP:
+  - `IA_Brake` had two triggers on the action: `InputTriggerPressed_0` and `InputTriggerReleased_0`,
+    both with `ActuationThreshold` 0.5. `IA_Throttle` and `IA_Steering` have none.
+  - `BP_VehicleAdvPawnBase`'s EventGraph wires `IA_Brake` Triggered → `SetBrakeInput(ActionValue)`,
+    Started → `BrakeLights(true)`, and Completed → `SetBrakeInput(ActionValue)` →
+    `BrakeLights(false)`. The throttle and steering events are wired the same way, with their own
+    setters.
+  - Pressed fires on the frame the value reaches 0.5. Released fires on the first frame it drops
+    below 0.5 (`InputTriggers.cpp:160-180`). Each carries that frame's value. A key goes 1 → 0 in one
+    frame, so the release set the brake to 0. An analogue trigger passes through values under 0.5
+    on its way down, so the release left the brake just under 0.5. Nothing changed it until the
+    next brake event.
+  - `bReverseAsBrake` then turns any brake above 0 into full brake while the car moves forward
+    without throttle (`ChaosVehicleMovementComponent.cpp:1144-1152`).
+- **Change.** `Triggers` was set to an empty array. Read back: `ValueType` `Axis1D`, `Triggers` `[]`,
+  `Modifiers` `[]`, `bConsumeInput` true.
+  - With no triggers an action is Triggered while its value is non-zero and None at zero
+    (`EnhancedPlayerInput.cpp:241`, `689`). The brake now follows L2 every frame and Completed sets
+    it to 0, the way `IA_Throttle` already behaved.
+  - The S key's brake is unchanged: 1 while held, 0 on release.
+  - The brake lights still switch on at Started and off at Completed.
+- **Also uses `IA_Brake`:** `IMC_SteeringWheel`, which the host never adds, and `IMC_Vehicle_Default`.
+  Neither was changed.
+- **Not verified:** the drive with the pad after the change. Nobody had pressed L2 since.
