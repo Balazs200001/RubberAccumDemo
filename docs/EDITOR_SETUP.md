@@ -3280,3 +3280,48 @@ and the roof.
 
 **Not verified:** any of it in the level, which comes with S4 to S8. Also not verified is whether
 the colours look right, which is the user's call.
+
+## 2026-10-26 — S8: the trackside scenery placed in `L_SpaHarness`
+
+**Asset changed:** `/Game/Maps/L_SpaHarness`, saved, host `41c5a44`. `git status` showed only
+`Content/Maps/L_SpaHarness.umap` under `Content/`.
+
+**Change.** One actor was added: `TracksideScenery_1`, labelled `TracksideScenery`, of class
+`ATracksideScenery`, at the origin. Its `Circuit` is `RacetrackCircuit_0`. Every other property is at
+its class default, so the materials and meshes are the `/Game/Trackside/` assets found by
+`ConstructorHelpers`.
+
+**Why.** Phase S (#139) dresses the map as Spa.
+
+**Made via:** `SceneTools.add_to_scene_from_class`, then `ObjectTools.set_properties` for `Circuit`,
+then `AssetTools.save_assets`. `AssetTools.is_dirty` read false afterwards.
+
+**The scenery's geometry is not in the map.**
+- **The first save stored it**, and the map came out at **127,923,179 bytes**, against the committed
+  5,620,382. The procedural mesh keeps its vertices in `ProcMeshSections`, a tagged `UPROPERTY` array
+  (`ProceduralMeshComponent.h:333-334`). At about 190,000 vertices that came to roughly 640 bytes
+  each.
+- **Since host `8ae6190`, the six generated components are transient** default subobjects,
+  `CreateDefaultSubobject(..., true)`, behind `Transient` pointers. `SceneryRoot` is not transient, so
+  the actor's transform is still saved.
+- **The actor now adds 1,713 bytes.** The map saved without it is 8,062,424 bytes, and with it
+  8,064,137.
+- **The other 2.44 MB over the committed map is not the scenery**, and it was not identified. The map
+  had last been saved on 10-08 (`fa4ee03`). The growth fits the circuit's road and walls being saved
+  as the current code builds them, but that was not checked.
+
+**So the scenery is rebuilt at every load.**
+- **Construction scripts rerun when a level loads in an uncooked world:**
+  - in the editor (`World.cpp:2764`, then `Level.cpp:1909`);
+  - in `-game` from the editor binary (`World.cpp:5987`).
+- **PIE duplicates the editor world without rerunning them**, so `BeginPlay` rebuilds whenever the
+  ground has no sections.
+- **The cost.** A full rebuild logged `TracksideScenery_1 rebuilt the scenery in 187.3 ms` in the
+  editor.
+
+**To rebuild it by hand** after changing the circuit, select `TracksideScenery` and press `Rebuild`
+under *Trackside Scenery* in its details. Changing any of its properties also rebuilds it.
+
+**Not verified:**
+- the scenery in PIE or in a cooked build;
+- the scenery in `-game`, until S8's captures (#147).
