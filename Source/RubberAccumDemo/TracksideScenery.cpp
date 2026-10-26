@@ -481,12 +481,29 @@ ATracksideScenery::ATracksideScenery()
 		Component->SetCanEverAffectNavigation(false);
 	};
 
+	const auto AttachAsGround = [this](UProceduralMeshComponent* Component)
+	{
+		Component->SetupAttachment(SceneryRoot);
+		Component->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		Component->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		Component->SetCanEverAffectNavigation(false);
+		Component->SetCastShadow(false);
+		Component->bUseAsyncCooking = false;
+	};
+
 	Ground = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Ground"), true);
-	AttachWithoutCollision(Ground);
-	Ground->SetCastShadow(false);
+	AttachAsGround(Ground);
+
+	TerrainMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("TerrainMesh"), true);
+	AttachAsGround(TerrainMesh);
 
 	Barriers = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Barriers"), true);
-	AttachWithoutCollision(Barriers);
+	Barriers->SetupAttachment(SceneryRoot);
+	Barriers->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Barriers->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Barriers->SetCollisionResponseToChannel(ECC_Vehicle, ECR_Block);
+	Barriers->SetCanEverAffectNavigation(false);
+	Barriers->bUseAsyncCooking = false;
 
 	FencePosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("FencePosts"), true);
 	AttachWithoutCollision(FencePosts);
@@ -600,7 +617,7 @@ void ATracksideScenery::Rebuild()
 
 void ATracksideScenery::ClearScenery()
 {
-	for (UProceduralMeshComponent* Mesh : { Ground.Get(), Barriers.Get() })
+	for (UProceduralMeshComponent* Mesh : { Ground.Get(), TerrainMesh.Get(), Barriers.Get() })
 	{
 		if (Mesh != nullptr)
 		{
@@ -620,7 +637,8 @@ void ATracksideScenery::ClearScenery()
 
 bool ATracksideScenery::CanDressTheCircuit() const
 {
-	if (Circuit == nullptr || Ground == nullptr || Barriers == nullptr || FencePosts == nullptr || ArmcoPosts == nullptr
+	if (Circuit == nullptr || Ground == nullptr || TerrainMesh == nullptr || Barriers == nullptr || FencePosts == nullptr
+		|| ArmcoPosts == nullptr
 		|| OpenGrandstands == nullptr || CoveredGrandstands == nullptr || Circuit->GetLayout() != ETrackLayout::Spa)
 	{
 		return false;
@@ -956,7 +974,7 @@ void ATracksideScenery::BuildGround(
 		TArray<FVector2D>(),
 		Section.Colours,
 		TArray<FProcMeshTangent>(),
-		false);
+		true);
 
 	if (SceneryMaterial != nullptr)
 	{
@@ -1201,21 +1219,21 @@ void ATracksideScenery::BuildTerrain(const FTracksideTerrain& Terrain)
 	AddFarPlane(Near.X - Reach, Near.Y, Near.X, Far.Y);
 	AddFarPlane(Far.X, Near.Y, Far.X + Reach, Far.Y);
 
-	Section.MoveIntoLocalSpace(Ground->GetComponentTransform().Inverse());
+	Section.MoveIntoLocalSpace(TerrainMesh->GetComponentTransform().Inverse());
 
-	Ground->CreateMeshSection_LinearColor(
-		1,
+	TerrainMesh->CreateMeshSection_LinearColor(
+		0,
 		Section.Vertices,
 		Section.Triangles,
 		Section.Normals,
 		TArray<FVector2D>(),
 		Section.Colours,
 		TArray<FProcMeshTangent>(),
-		false);
+		true);
 
 	if (SceneryMaterial != nullptr)
 	{
-		Ground->SetMaterial(1, SceneryMaterial);
+		TerrainMesh->SetMaterial(0, SceneryMaterial);
 	}
 
 	UE_LOG(LogTracksideScenery, Log, TEXT("%s built its terrain: %d triangles"), *GetName(), Section.TriangleCount());
@@ -1383,16 +1401,6 @@ void ATracksideScenery::BuildBarriers(
 	FencePanels.MoveIntoLocalSpace(WorldToLocal);
 
 	Barriers->CreateMeshSection_LinearColor(
-		0,
-		Solid.Vertices,
-		Solid.Triangles,
-		Solid.Normals,
-		TArray<FVector2D>(),
-		Solid.Colours,
-		TArray<FProcMeshTangent>(),
-		false);
-
-	Barriers->CreateMeshSection_LinearColor(
 		1,
 		FencePanels.Vertices,
 		FencePanels.Triangles,
@@ -1401,6 +1409,16 @@ void ATracksideScenery::BuildBarriers(
 		FencePanels.Colours,
 		TArray<FProcMeshTangent>(),
 		false);
+
+	Barriers->CreateMeshSection_LinearColor(
+		0,
+		Solid.Vertices,
+		Solid.Triangles,
+		Solid.Normals,
+		TArray<FVector2D>(),
+		Solid.Colours,
+		TArray<FProcMeshTangent>(),
+		true);
 
 	if (SceneryMaterial != nullptr)
 	{

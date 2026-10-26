@@ -304,6 +304,9 @@ private:
 	TObjectPtr<UProceduralMeshComponent> Ground;
 
 	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
+	TObjectPtr<UProceduralMeshComponent> TerrainMesh;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UProceduralMeshComponent> Barriers;
 
 	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
