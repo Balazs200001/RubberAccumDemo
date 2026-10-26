@@ -3325,3 +3325,41 @@ under *Trackside Scenery* in its details. Changing any of its properties also re
 **Not verified:**
 - the scenery in PIE or in a cooked build;
 - the scenery in `-game`, until S8's captures (#147).
+
+## 2026-10-26 — S10: the circuit's edge walls removed, the scenery given collision (no asset change)
+
+**No asset was changed.** This records what S10's C++ change means for `L_SpaHarness`. The work and
+its reasons are on [#149](https://github.com/Balazs200001/RubberAccumDemo/issues/149), and the tests
+and load times are in `MEASUREMENTS.md`, *S10*.
+
+- **`RacetrackCircuit_0` no longer has `EdgeWalls`.** Host `8bc29c5` removed the component and its
+  `EdgeWallHeight` property from the class.
+  - **The map most likely still holds the walls.** They were a non-transient default subobject, and
+    the map was last saved under S8, while the circuit still had them. The `.umap` was not read.
+  - **They do not come back in the editor or in `-game`.**
+    - A component its class no longer creates loads with its class default object as archetype
+      (`UObjectArchetype.cpp:173-185`).
+    - When construction reruns at load, `AActor::DestroyConstructedComponents` destroys a native
+      default subobject with that archetype as orphaned (`ActorConstruction.cpp:189-212`).
+    - It is reached through `RerunConstructionScripts` (`Level.cpp:2090`, then
+      `ActorConstruction.cpp:581`).
+  - After the build, `obj list class=ProceduralMeshComponent` in the headless editor listed
+    `RacetrackCircuit_0.Road` and the scenery's three meshes. It listed no `EdgeWalls` and no
+    `TRASH_` component.
+  - **The editor may open the map as modified.** The same code marks the package dirty when it
+    destroys such a component. Saving the map drops the walls from the file.
+  - **A cooked build needs that save.** The load-time rerun is `WITH_EDITOR` only (`Level.cpp:1908`),
+    so nothing destroys the walls in a cooked game. The map was not re-saved: the editor was closed
+    and no MCP session ran.
+- **`TracksideScenery_1` has a new component, `TerrainMesh`.** Host `c10bea4` moved the terrain out of
+  `Ground`'s section 1 into a transient component of its own. That way the bands and the terrain each
+  cook their collision once. Nothing in the map changes, because the scenery's components are
+  transient and rebuilt at load, as S8 explains.
+- **The scenery now collides,** with nothing set in the map.
+  - The ground bands and the terrain have the road's settings: query and physics, `Pawn` ignored,
+    synchronous cooking.
+  - The walls and the Armco block only `Vehicle`.
+  - The fence panels, the posts and the stands still have no collision.
+
+**Not verified:** whether `L_SpaHarness` opens dirty in the editor, and the map in PIE or in a cooked
+build.
