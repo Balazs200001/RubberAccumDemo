@@ -216,6 +216,11 @@ public:
 
 	void SetLayout(ETrackLayout NewLayout, double NewLapLength);
 
+	ETrackLayout GetLayout() const
+	{
+		return Layout;
+	}
+
 	double GetTightestCurvature() const
 	{
 		return TightestCurvature;
