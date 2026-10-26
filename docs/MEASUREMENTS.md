@@ -6061,3 +6061,64 @@ It happens once, before the first frame.
 - Memory.
 - Any scalability tier other than the default.
 - PIE, and a cooked build.
+
+## 2026-10-26 — S10: the edge walls removed, and the scenery's collision tested and timed at load
+
+**Question.** C11.4's invisible edge walls are gone. Does a car that leaves the road still always have
+ground under it? Do the visible barriers stop it? And what does cooking the scenery's collision add
+at load?
+
+```
+Build:    host 3cd2b70. Build.bat with the editor closed. The plugin is unchanged
+Power:    MAINS, BatteryStatus 2, 100 %, read before the load runs and after them
+Tests:    UnrealEditor-Cmd, headless, in two processes as R5 corrected explains: every host test but
+          Demo.MarblesReachTheBufferOnTheFoldedLayout from 19:43:57 to 19:45:06 local, then that test
+          alone to 19:45:53. Logs C:/RSBuild/tests_s10_{main,marbles}.log
+Loads:    -game from the Development editor binary, L_SpaHarness, S9's window and flags without its
+          schedule: -ExecCmds=quit and -unattended, started from PowerShell, 19:59:17 to 20:00:09
+          local. Logs C:/RSBuild/s10-load-{a,b}.log. The logs stamp UTC, an hour earlier
+Also on:  Visual Studio (devenv), VS Code and Blender, idle
+```
+
+### The three new tests: passed
+
+| Test | What it found |
+|---|---|
+| `Vehicle.SceneryCatchesTheWheelsOffTheRoad` | **1,040 of 1,040** downward traces on the wheels' `WorldDynamic` channel landed on something. They were cast at 65 places round the lap, on both sides, from 10 cm to 32 m beyond the road edge. **639** landed on the ground bands, **396** on the terrain and **5** on another stretch of road |
+| `Vehicle.SceneryBarriersStopTheCar` | **130 of 130** sweeps of a 35 cm sphere on the `Vehicle` channel, outward from the centreline on both sides at the same 65 places, stopped on the barriers. The sphere's outer edge stopped **715 to 1,871 cm** from the centreline, against a 400 cm half width |
+| `Vehicle.SceneryCollidesWhereItShould` | The ground and the terrain respond like the road. The barriers block only `Vehicle`. The fence section, the posts and the stands have no collision. The circuit's only mesh is its road |
+
+- **Nothing stands at the edge of the asphalt any more.** The nearest stop is 3.15 m beyond it, on a
+  barrier the driver can see.
+- **The rest of the host suite still passes:** 27 of 27 in the first process and the marbles test
+  alone, so all 28 host tests.
+- **C11.4's four wall tests went with the walls:** `Performance.WallCollisionCook`,
+  `Vehicle.WallsStandOnTheTrackEdges`, `Vehicle.WallsBlockASweepAcrossTheTrack` and
+  `Vehicle.WallsStopOnlyVehicles`.
+- The plugin's `RacetrackSurface` tests were not rerun. The plugin is unchanged.
+
+### At load
+
+The scenery is rebuilt when the level loads, as S9 records. The rebuild now also cooks the collision
+of the ground bands, the terrain and the barriers, synchronously.
+
+| Where | Rebuild | `LoadMap` |
+|---|---|---|
+| `-game`, run a | 230.0 ms | 0.501 s |
+| `-game`, run b | 253.2 ms | 0.538 s |
+| The headless test editor, at startup | 234.2 ms | not logged |
+| S9's two cost runs, before the collision | 121.6 and 137.2 ms | 0.635 and 0.663 s |
+
+- **Cooking the collision roughly doubles the rebuild,** by about 110 ms, once before the first frame.
+- **The whole `LoadMap` does not show it.** It was shorter in these runs than in S9's, and S9's two runs
+  without any scenery took 0.484 and 0.856 s. The load varies between runs by more than the cook adds.
+  S9's runs also had `-ReleaseField` and a schedule queued, and these did not.
+
+### Not verified
+
+- **Driving.** No car was driven onto the kerbs, the run-off or the grass, or into a barrier. The tests
+  cast traces and sweeps. They do not simulate the car's suspension or body.
+- How the wheels take the step from the road onto a kerb's 3 cm crown.
+- The frame cost of the new collision. The bodies are static, and no frame was profiled.
+- The cook time of each component, and the memory the collision data takes.
+- PIE, and a cooked build.
