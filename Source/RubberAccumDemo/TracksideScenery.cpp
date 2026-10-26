@@ -265,6 +265,27 @@ namespace TracksideRings
 		return Eroded;
 	}
 
+	TArray<double> DilatedAround(const TArray<double>& Values, int32 Radius)
+	{
+		const int32 Count = Values.Num();
+		TArray<double> Dilated;
+		Dilated.SetNumZeroed(Count);
+
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			double Highest = Values[Index];
+
+			for (int32 Offset = -Radius; Offset <= Radius; ++Offset)
+			{
+				Highest = FMath::Max(Highest, Values[(Index + Offset + Count) % Count]);
+			}
+
+			Dilated[Index] = Highest;
+		}
+
+		return Dilated;
+	}
+
 	struct FRingGrid
 	{
 		FRingGrid(const TArray<FTracksideRing>& InRings, double InCellSize, int32 Stride = 1)
@@ -746,11 +767,21 @@ void ATracksideScenery::LayOutBands(
 		}
 
 		const TArray<double> Available = SmoothedAround(ErodedAround(Clear, SmoothingRadius), SmoothingRadius);
+
+		TArray<double> WantedTotals;
+		WantedTotals.Reserve(Count);
+
+		for (const FTracksideBands& Bands : Wanted)
+		{
+			WantedTotals.Add(Bands.Total());
+		}
+
+		const TArray<double> Totals = SmoothedAround(DilatedAround(WantedTotals, SmoothingRadius), SmoothingRadius);
 		OutBands.SetNum(Count);
 
 		for (int32 Index = 0; Index < Count; ++Index)
 		{
-			double Remaining = FMath::Min(Wanted[Index].Total(), FMath::Max(Available[Index], 0.0));
+			double Remaining = FMath::Min(Totals[Index], FMath::Max(Available[Index], 0.0));
 
 			if (Remaining < Wanted[Index].Total())
 			{
@@ -770,7 +801,7 @@ void ATracksideScenery::LayOutBands(
 			Bands.Kerb = Take(Wanted[Index].Kerb);
 			Bands.Green = Take(Wanted[Index].Green);
 			Bands.RunOff = Take(Wanted[Index].RunOff);
-			Bands.Verge = Take(Wanted[Index].Verge);
+			Bands.Verge = Remaining;
 		}
 	};
 
