@@ -82,6 +82,8 @@ public:
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 
+	virtual void BeginPlay() override;
+
 	UFUNCTION(CallInEditor, Category = "Trackside Scenery")
 	void Rebuild();
 
@@ -285,21 +287,21 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<USceneComponent> SceneryRoot;
 
-	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UProceduralMeshComponent> Ground;
 
-	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UProceduralMeshComponent> Barriers;
 
-	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UInstancedStaticMeshComponent> FencePosts;
 
-	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UInstancedStaticMeshComponent> ArmcoPosts;
 
-	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UInstancedStaticMeshComponent> OpenGrandstands;
 
-	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Trackside Scenery")
 	TObjectPtr<UInstancedStaticMeshComponent> CoveredGrandstands;
 };

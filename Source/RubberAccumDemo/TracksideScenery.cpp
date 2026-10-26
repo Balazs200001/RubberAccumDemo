@@ -460,23 +460,23 @@ ATracksideScenery::ATracksideScenery()
 		Component->SetCanEverAffectNavigation(false);
 	};
 
-	Ground = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Ground"));
+	Ground = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Ground"), true);
 	AttachWithoutCollision(Ground);
 	Ground->SetCastShadow(false);
 
-	Barriers = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Barriers"));
+	Barriers = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Barriers"), true);
 	AttachWithoutCollision(Barriers);
 
-	FencePosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("FencePosts"));
+	FencePosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("FencePosts"), true);
 	AttachWithoutCollision(FencePosts);
 
-	ArmcoPosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ArmcoPosts"));
+	ArmcoPosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ArmcoPosts"), true);
 	AttachWithoutCollision(ArmcoPosts);
 
-	OpenGrandstands = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("OpenGrandstands"));
+	OpenGrandstands = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("OpenGrandstands"), true);
 	AttachWithoutCollision(OpenGrandstands);
 
-	CoveredGrandstands = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("CoveredGrandstands"));
+	CoveredGrandstands = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("CoveredGrandstands"), true);
 	AttachWithoutCollision(CoveredGrandstands);
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TracksideMaterial(
@@ -533,8 +533,20 @@ void ATracksideScenery::OnConstruction(const FTransform& Transform)
 	Rebuild();
 }
 
+void ATracksideScenery::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (Ground != nullptr && Ground->GetNumSections() == 0)
+	{
+		Rebuild();
+	}
+}
+
 void ATracksideScenery::Rebuild()
 {
+	const double StartSeconds = FPlatformTime::Seconds();
+
 	ClearScenery();
 
 	if (!CanDressTheCircuit())
@@ -557,6 +569,11 @@ void ATracksideScenery::Rebuild()
 	BuildTerrain(Terrain);
 	BuildBarriers(Rings, Left, Right);
 	PlaceGrandstands(Rings, Left, Right);
+
+	UE_LOG(LogTracksideScenery, Log,
+		TEXT("%s rebuilt the scenery in %.1f ms"),
+		*GetName(),
+		(FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 }
 
 void ATracksideScenery::ClearScenery()
