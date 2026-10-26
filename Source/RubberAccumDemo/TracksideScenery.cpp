@@ -24,6 +24,7 @@ namespace TracksideColours
 	const FLinearColor VergeLight(0.09f, 0.25f, 0.04f);
 	const FLinearColor VergeDark(0.07f, 0.20f, 0.03f);
 	const FLinearColor Skirt(0.05f, 0.14f, 0.025f);
+	const FLinearColor TerrainGrass(0.065f, 0.18f, 0.03f);
 }
 
 namespace TracksideLayout
@@ -139,11 +140,11 @@ namespace TracksideRings
 
 	struct FRingGrid
 	{
-		FRingGrid(const TArray<FTracksideRing>& InRings, double InCellSize)
+		FRingGrid(const TArray<FTracksideRing>& InRings, double InCellSize, int32 Stride = 1)
 			: Rings(InRings)
 			, CellSize(InCellSize)
 		{
-			for (int32 Index = 0; Index < Rings.Num(); ++Index)
+			for (int32 Index = 0; Index < Rings.Num(); Index += FMath::Max(Stride, 1))
 			{
 				Cells.FindOrAdd(CellOf(Rings[Index].RoadCentre)).Add(Index);
 			}
@@ -154,35 +155,41 @@ namespace TracksideRings
 			return FIntPoint(FMath::FloorToInt32(Location.X / CellSize), FMath::FloorToInt32(Location.Y / CellSize));
 		}
 
-		int32 NearestRing(const FVector& Location, int32 Reach) const
+		template <typename FunctionType>
+		void ForEachNear(const FVector& Location, int32 Reach, FunctionType&& Function) const
 		{
 			const FIntPoint Centre = CellOf(Location);
-			int32 Nearest = INDEX_NONE;
-			double NearestDistanceSquared = TNumericLimits<double>::Max();
 
 			for (int32 X = -Reach; X <= Reach; ++X)
 			{
 				for (int32 Y = -Reach; Y <= Reach; ++Y)
 				{
-					const TArray<int32>* Members = Cells.Find(Centre + FIntPoint(X, Y));
-
-					if (Members == nullptr)
+					if (const TArray<int32>* Members = Cells.Find(Centre + FIntPoint(X, Y)))
 					{
-						continue;
-					}
-
-					for (const int32 Ring : *Members)
-					{
-						const double DistanceSquared = FVector::DistSquaredXY(Rings[Ring].RoadCentre, Location);
-
-						if (DistanceSquared < NearestDistanceSquared)
+						for (const int32 Ring : *Members)
 						{
-							NearestDistanceSquared = DistanceSquared;
-							Nearest = Ring;
+							Function(Ring);
 						}
 					}
 				}
 			}
+		}
+
+		int32 NearestRing(const FVector& Location, int32 Reach) const
+		{
+			int32 Nearest = INDEX_NONE;
+			double NearestDistanceSquared = TNumericLimits<double>::Max();
+
+			ForEachNear(Location, Reach, [&](int32 Ring)
+			{
+				const double DistanceSquared = FVector::DistSquaredXY(Rings[Ring].RoadCentre, Location);
+
+				if (DistanceSquared < NearestDistanceSquared)
+				{
+					NearestDistanceSquared = DistanceSquared;
+					Nearest = Ring;
+				}
+			});
 
 			return Nearest;
 		}
@@ -228,6 +235,27 @@ namespace TracksideMesh
 			}
 		}
 
+		int32 AddVertex(const FVector& Position, const FVector& Normal, const FLinearColor& Colour)
+		{
+			Normals.Add(Normal.GetSafeNormal());
+			Colours.Add(Colour);
+			return Vertices.Add(Position);
+		}
+
+		void AddTriangleFacing(int32 A, int32 B, int32 C, const FVector& Facing)
+		{
+			const FVector WoundNormal = FVector::CrossProduct(Vertices[C] - Vertices[A], Vertices[B] - Vertices[A]);
+
+			if (FVector::DotProduct(WoundNormal, Facing) >= 0.0)
+			{
+				Triangles.Append({ A, B, C });
+			}
+			else
+			{
+				Triangles.Append({ A, C, B });
+			}
+		}
+
 		void MoveIntoLocalSpace(const FTransform& WorldToLocal)
 		{
 			for (FVector& Vertex : Vertices)
@@ -258,6 +286,16 @@ namespace TracksideMesh
 
 using TracksideLayout::LeftSide;
 using TracksideLayout::RightSide;
+
+double FTracksideTerrain::LowestAround(const FVector& Location) const
+{
+	const int32 IndexX = FMath::Clamp(FMath::FloorToInt32((Location.X - Origin.X) / CellSize), 0, CountX - 2);
+	const int32 IndexY = FMath::Clamp(FMath::FloorToInt32((Location.Y - Origin.Y) / CellSize), 0, CountY - 2);
+
+	return FMath::Min(
+		FMath::Min(HeightAt(IndexX, IndexY), HeightAt(IndexX + 1, IndexY)),
+		FMath::Min(HeightAt(IndexX, IndexY + 1), HeightAt(IndexX + 1, IndexY + 1)));
+}
 
 ATracksideScenery::ATracksideScenery()
 {
@@ -311,7 +349,9 @@ void ATracksideScenery::Rebuild()
 	TArray<FTracksideBands> Right;
 	LayOutBands(Rings, Left, Right);
 
-	BuildGround(Rings, Left, Right);
+	const FTracksideTerrain Terrain = ShapeTerrain(Rings, Left, Right);
+	BuildGround(Rings, Left, Right, Terrain);
+	BuildTerrain(Terrain);
 }
 
 void ATracksideScenery::ClearScenery()
@@ -515,7 +555,8 @@ void ATracksideScenery::LayOutBands(
 void ATracksideScenery::BuildGround(
 	const TArray<FTracksideRing>& Rings,
 	const TArray<FTracksideBands>& Left,
-	const TArray<FTracksideBands>& Right)
+	const TArray<FTracksideBands>& Right,
+	const FTracksideTerrain& Terrain)
 {
 	const int32 Count = Rings.Num();
 	const double HalfWidth = Circuit->GetTrackWidth() * 0.5;
@@ -617,11 +658,19 @@ void ATracksideScenery::BuildGround(
 				RunOffHere, VergeHere, RunOffNext, VergeNext, 0.0, -VergeFall,
 				bLightStripe ? TracksideColours::VergeLight : TracksideColours::VergeDark);
 
+			const auto SkirtFoot = [&](const FTracksideRing& Ring, double Offset)
+			{
+				const FVector Top = Point(Ring, Offset, -VergeFall);
+				const double Foot = FMath::Min(Top.Z - MinimumSkirtDepth, Terrain.LowestAround(Top) - TerrainDrop);
+
+				return FVector(Top.X, Top.Y, Foot);
+			};
+
 			Section.AddQuadFacing(
 				Point(Here, VergeHere, -VergeFall),
-				Point(Here, VergeHere, -VergeFall - SkirtDepth),
+				SkirtFoot(Here, VergeHere),
 				Point(Next, VergeNext, -VergeFall),
-				Point(Next, VergeNext, -VergeFall - SkirtDepth),
+				SkirtFoot(Next, VergeNext),
 				Here.Right * Side,
 				TracksideColours::Skirt);
 		};
@@ -648,4 +697,209 @@ void ATracksideScenery::BuildGround(
 	}
 
 	UE_LOG(LogTracksideScenery, Log, TEXT("%s built its ground bands: %d triangles"), *GetName(), Section.TriangleCount());
+}
+
+FTracksideTerrain ATracksideScenery::ShapeTerrain(
+	const TArray<FTracksideRing>& Rings,
+	const TArray<FTracksideBands>& Left,
+	const TArray<FTracksideBands>& Right) const
+{
+	using namespace TracksideRings;
+
+	const int32 Count = Rings.Num();
+	const double Spacing = Circuit->GetTrackLength() / Count;
+	const double HalfWidth = Circuit->GetTrackWidth() * 0.5;
+
+	FBox2D Bounds(ForceInit);
+	double HeightSum = 0.0;
+	double WidestBands = 0.0;
+
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		Bounds += FVector2D(Rings[Index].RoadCentre.X, Rings[Index].RoadCentre.Y);
+		HeightSum += Rings[Index].RoadCentre.Z;
+		WidestBands = FMath::Max(WidestBands, FMath::Max(Left[Index].Total(), Right[Index].Total()));
+	}
+
+	FTracksideTerrain Terrain;
+	Terrain.CellSize = TerrainCellSize;
+	Terrain.Origin = Bounds.Min - FVector2D(TerrainMargin, TerrainMargin);
+	Terrain.CountX = FMath::CeilToInt32((Bounds.GetSize().X + 2.0 * TerrainMargin) / TerrainCellSize) + 1;
+	Terrain.CountY = FMath::CeilToInt32((Bounds.GetSize().Y + 2.0 * TerrainMargin) / TerrainCellSize) + 1;
+	Terrain.BorderHeight = HeightSum / Count;
+	Terrain.Heights.SetNumUninitialized(Terrain.CountX * Terrain.CountY);
+
+	const int32 NearStride = FMath::Max(1, FMath::RoundToInt32(TerrainSampleSpacing / Spacing));
+	const FRingGrid NearSamples(Rings, TerrainNearSmoothing, NearStride);
+	const FRingGrid Footprints(Rings, 1000.0);
+	const int32 FootprintReach = FMath::CeilToInt32(
+		(HalfWidth + WidestBands + TerrainFootprintMargin) / Footprints.CellSize);
+
+	TArray<int32> FarSamples;
+
+	for (int32 Index = 0; Index < Count; Index += NearStride * 4)
+	{
+		FarSamples.Add(Index);
+	}
+
+	const double NearFalloff = 1.0 / (2.0 * TerrainNearSmoothing * TerrainNearSmoothing);
+	const double FarFalloff = 1.0 / (2.0 * TerrainFarSmoothing * TerrainFarSmoothing);
+	double Lowest = TNumericLimits<double>::Max();
+	double Highest = TNumericLimits<double>::Lowest();
+	int32 PushedUnderTheBands = 0;
+
+	for (int32 IndexY = 0; IndexY < Terrain.CountY; ++IndexY)
+	{
+		for (int32 IndexX = 0; IndexX < Terrain.CountX; ++IndexX)
+		{
+			const FVector Location(
+				Terrain.Origin.X + IndexX * Terrain.CellSize, Terrain.Origin.Y + IndexY * Terrain.CellSize, 0.0);
+
+			double FarWeight = 0.0;
+			double FarSum = 0.0;
+
+			for (const int32 Sample : FarSamples)
+			{
+				const double Weight = FMath::Exp(-FVector::DistSquaredXY(Rings[Sample].RoadCentre, Location) * FarFalloff);
+				FarWeight += Weight;
+				FarSum += Weight * Rings[Sample].RoadCentre.Z;
+			}
+
+			double NearWeight = 1.0;
+			double NearSum = FarWeight > UE_DOUBLE_SMALL_NUMBER ? FarSum / FarWeight : Terrain.BorderHeight;
+
+			NearSamples.ForEachNear(Location, 3, [&](int32 Sample)
+			{
+				const double Weight = FMath::Exp(-FVector::DistSquaredXY(Rings[Sample].RoadCentre, Location) * NearFalloff);
+				NearWeight += Weight;
+				NearSum += Weight * Rings[Sample].RoadCentre.Z;
+			});
+
+			const double BorderDistance = Terrain.CellSize * FMath::Min(
+				FMath::Min(IndexX, Terrain.CountX - 1 - IndexX), FMath::Min(IndexY, Terrain.CountY - 1 - IndexY));
+
+			double Height = FMath::Lerp(
+				Terrain.BorderHeight, NearSum / NearWeight, FMath::SmoothStep(0.0, 1.0, BorderDistance / TerrainBorderBlend));
+
+			const int32 Nearest = Footprints.NearestRing(Location, FootprintReach);
+
+			if (Nearest != INDEX_NONE)
+			{
+				const FTracksideRing& Ring = Rings[Nearest];
+				const FVector Across = Location - Ring.RoadCentre;
+				const bool bRightOfTheTrack = Across.X * Ring.Right.X + Across.Y * Ring.Right.Y >= 0.0;
+				const double Footprint = HalfWidth + TerrainFootprintMargin
+					+ (bRightOfTheTrack ? Right[Nearest] : Left[Nearest]).Total();
+
+				if (FVector::DistXY(Location, Ring.RoadCentre) < Footprint && Height > Ring.RoadCentre.Z - TerrainDrop)
+				{
+					Height = Ring.RoadCentre.Z - TerrainDrop;
+					++PushedUnderTheBands;
+				}
+			}
+
+			Terrain.Heights[IndexY * Terrain.CountX + IndexX] = Height;
+			Lowest = FMath::Min(Lowest, Height);
+			Highest = FMath::Max(Highest, Height);
+		}
+	}
+
+	UE_LOG(LogTracksideScenery, Log,
+		TEXT("%s shaped its terrain: %d x %d points %.0f cm apart, heights %.0f to %.0f cm, border at %.0f cm, %d points "
+			"pushed under the bands"),
+		*GetName(),
+		Terrain.CountX,
+		Terrain.CountY,
+		Terrain.CellSize,
+		Lowest,
+		Highest,
+		Terrain.BorderHeight,
+		PushedUnderTheBands);
+
+	return Terrain;
+}
+
+void ATracksideScenery::BuildTerrain(const FTracksideTerrain& Terrain)
+{
+	TracksideMesh::FSection Section;
+
+	for (int32 IndexY = 0; IndexY < Terrain.CountY; ++IndexY)
+	{
+		for (int32 IndexX = 0; IndexX < Terrain.CountX; ++IndexX)
+		{
+			const int32 West = FMath::Max(IndexX - 1, 0);
+			const int32 East = FMath::Min(IndexX + 1, Terrain.CountX - 1);
+			const int32 South = FMath::Max(IndexY - 1, 0);
+			const int32 North = FMath::Min(IndexY + 1, Terrain.CountY - 1);
+
+			const double SlopeX = (Terrain.HeightAt(East, IndexY) - Terrain.HeightAt(West, IndexY))
+				/ ((East - West) * Terrain.CellSize);
+			const double SlopeY = (Terrain.HeightAt(IndexX, North) - Terrain.HeightAt(IndexX, South))
+				/ ((North - South) * Terrain.CellSize);
+
+			const double Shade = 0.82 + 0.3 * FMath::Frac(FMath::Sin(IndexX * 12.9898 + IndexY * 78.233) * 43758.5453);
+
+			Section.AddVertex(
+				FVector(
+					Terrain.Origin.X + IndexX * Terrain.CellSize,
+					Terrain.Origin.Y + IndexY * Terrain.CellSize,
+					Terrain.HeightAt(IndexX, IndexY)),
+				FVector(-SlopeX, -SlopeY, 1.0),
+				TracksideColours::TerrainGrass * static_cast<float>(Shade));
+		}
+	}
+
+	for (int32 IndexY = 0; IndexY + 1 < Terrain.CountY; ++IndexY)
+	{
+		for (int32 IndexX = 0; IndexX + 1 < Terrain.CountX; ++IndexX)
+		{
+			const int32 SouthWest = IndexY * Terrain.CountX + IndexX;
+			const int32 SouthEast = SouthWest + 1;
+			const int32 NorthWest = SouthWest + Terrain.CountX;
+			const int32 NorthEast = NorthWest + 1;
+
+			Section.AddTriangleFacing(SouthWest, SouthEast, NorthWest, FVector::UpVector);
+			Section.AddTriangleFacing(SouthEast, NorthEast, NorthWest, FVector::UpVector);
+		}
+	}
+
+	const FVector2D Near = Terrain.Origin;
+	const FVector2D Far = Terrain.Origin + Terrain.Size();
+	const double Reach = FarPlaneExtent;
+	const double Height = Terrain.BorderHeight;
+
+	const auto AddFarPlane = [&](double MinX, double MinY, double MaxX, double MaxY)
+	{
+		Section.AddQuadFacing(
+			FVector(MinX, MinY, Height),
+			FVector(MaxX, MinY, Height),
+			FVector(MinX, MaxY, Height),
+			FVector(MaxX, MaxY, Height),
+			FVector::UpVector,
+			TracksideColours::TerrainGrass);
+	};
+
+	AddFarPlane(Near.X - Reach, Near.Y - Reach, Far.X + Reach, Near.Y);
+	AddFarPlane(Near.X - Reach, Far.Y, Far.X + Reach, Far.Y + Reach);
+	AddFarPlane(Near.X - Reach, Near.Y, Near.X, Far.Y);
+	AddFarPlane(Far.X, Near.Y, Far.X + Reach, Far.Y);
+
+	Section.MoveIntoLocalSpace(Ground->GetComponentTransform().Inverse());
+
+	Ground->CreateMeshSection_LinearColor(
+		1,
+		Section.Vertices,
+		Section.Triangles,
+		Section.Normals,
+		TArray<FVector2D>(),
+		Section.Colours,
+		TArray<FProcMeshTangent>(),
+		false);
+
+	if (SceneryMaterial != nullptr)
+	{
+		Ground->SetMaterial(1, SceneryMaterial);
+	}
+
+	UE_LOG(LogTracksideScenery, Log, TEXT("%s built its terrain: %d triangles"), *GetName(), Section.TriangleCount());
 }

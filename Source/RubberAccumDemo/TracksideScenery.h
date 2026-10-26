@@ -43,6 +43,33 @@ struct FTracksideBands
 	}
 };
 
+struct FTracksideTerrain
+{
+	FVector2D Origin = FVector2D::ZeroVector;
+
+	double CellSize = 500.0;
+
+	int32 CountX = 0;
+
+	int32 CountY = 0;
+
+	double BorderHeight = 0.0;
+
+	TArray<double> Heights;
+
+	double HeightAt(int32 IndexX, int32 IndexY) const
+	{
+		return Heights[IndexY * CountX + IndexX];
+	}
+
+	double LowestAround(const FVector& Location) const;
+
+	FVector2D Size() const
+	{
+		return FVector2D((CountX - 1) * CellSize, (CountY - 1) * CellSize);
+	}
+};
+
 UCLASS()
 class ATracksideScenery : public AActor
 {
@@ -100,7 +127,7 @@ protected:
 	double MowingStripeLength = 400.0;
 
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Bands", meta = (ClampMin = "0.0"))
-	double SkirtDepth = 300.0;
+	double MinimumSkirtDepth = 50.0;
 
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Corners", meta = (ClampMin = "100.0"))
 	double InsideKerbRadius = 15000.0;
@@ -135,6 +162,33 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Clearance", meta = (ClampMin = "0.0"))
 	double WidthSmoothingDistance = 500.0;
 
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "100.0"))
+	double TerrainCellSize = 500.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "0.0"))
+	double TerrainMargin = 25000.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "100.0"))
+	double TerrainNearSmoothing = 2000.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "100.0"))
+	double TerrainFarSmoothing = 12000.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "100.0"))
+	double TerrainSampleSpacing = 350.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "1.0"))
+	double TerrainBorderBlend = 10000.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "0.0"))
+	double TerrainFootprintMargin = 750.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "0.0"))
+	double TerrainDrop = 30.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "0.0"))
+	double FarPlaneExtent = 2000000.0;
+
 private:
 	void ClearScenery();
 
@@ -147,10 +201,18 @@ private:
 		TArray<FTracksideBands>& OutLeft,
 		TArray<FTracksideBands>& OutRight) const;
 
+	FTracksideTerrain ShapeTerrain(
+		const TArray<FTracksideRing>& Rings,
+		const TArray<FTracksideBands>& Left,
+		const TArray<FTracksideBands>& Right) const;
+
 	void BuildGround(
 		const TArray<FTracksideRing>& Rings,
 		const TArray<FTracksideBands>& Left,
-		const TArray<FTracksideBands>& Right);
+		const TArray<FTracksideBands>& Right,
+		const FTracksideTerrain& Terrain);
+
+	void BuildTerrain(const FTracksideTerrain& Terrain);
 
 	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<USceneComponent> SceneryRoot;
