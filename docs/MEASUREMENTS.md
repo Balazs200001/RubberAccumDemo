@@ -5947,3 +5947,8 @@ The axes resting at 0 are the triggers, and the ones resting near 128 are the st
   (`(126 / 255 − 0.5) × 2`). Unless `IA_Steering` has a dead zone, the car steers very slightly
   left at rest. Whether it has one was not read.
 - **Bluetooth.** Over Bluetooth the pad's product ID and reports may differ. Only USB was read.
+
+**Confirmed later the same day, by the user driving in PIE.** R2 throttled, L2 braked and the left
+stick steered, so Ry is R2, Rx is L2 and X is left stick X. That is the user's observation of the
+car, not a number. The user reported no problem with the steering. The resting offset was not
+measured in the game.

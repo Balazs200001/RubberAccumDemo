@@ -3194,3 +3194,7 @@ stayed slightly on. Pressing S on the keyboard cleared it, and the next L2 press
 - **Also uses `IA_Brake`:** `IMC_SteeringWheel`, which the host never adds, and `IMC_Vehicle_Default`.
   Neither was changed.
 - **Not verified:** the drive with the pad after the change. Nobody had pressed L2 since.
+
+**Verified later the same day, by the user driving in PIE with the DualSense on USB.** Throttle,
+brake and steering all worked from the pad, and the brake let go fully after L2. Bluetooth was not
+tried.
