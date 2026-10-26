@@ -101,6 +101,12 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<UStaticMesh> ArmcoPostMesh;
 
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UStaticMesh> OpenGrandstandMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UStaticMesh> CoveredGrandstandMesh;
+
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Bands", meta = (ClampMin = "0.0"))
 	double WhiteLineWidth = 15.0;
 
@@ -233,6 +239,12 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "10.0"))
 	double FencePostSpacing = 350.0;
 
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Grandstands", meta = (ClampMin = "0.0"))
+	double GrandstandSetback = 300.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Grandstands", meta = (ClampMin = "100.0"))
+	double GrandstandModuleSpacing = 1250.0;
+
 private:
 	void ClearScenery();
 
@@ -263,6 +275,13 @@ private:
 		const TArray<FTracksideBands>& Left,
 		const TArray<FTracksideBands>& Right);
 
+	void PlaceGrandstands(
+		const TArray<FTracksideRing>& Rings,
+		const TArray<FTracksideBands>& Left,
+		const TArray<FTracksideBands>& Right);
+
+	double BarrierDepth(bool bWall, bool bCatchFence) const;
+
 	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<USceneComponent> SceneryRoot;
 
@@ -277,4 +296,10 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<UInstancedStaticMeshComponent> ArmcoPosts;
+
+	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UInstancedStaticMeshComponent> OpenGrandstands;
+
+	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UInstancedStaticMeshComponent> CoveredGrandstands;
 };

@@ -128,6 +128,30 @@ namespace TracksideLayout
 		{ TEXT("Bus Stop"), 68, FencedWall(TracksideColours::YellowBoards), FencedWall(TracksideColours::YellowBoards) },
 	};
 
+	struct FGrandstandLandmark
+	{
+		const TCHAR* Name;
+
+		int32 FirstPoint;
+
+		int32 LastPoint;
+
+		double Side;
+
+		bool bCovered;
+	};
+
+	const FGrandstandLandmark GrandstandLandmarks[] = {
+		{ TEXT("Main grandstand"), 76, 1, LeftSide, true },
+		{ TEXT("Opposite the main grandstand"), 77, 1, RightSide, true },
+		{ TEXT("La Source"), 4, 7, LeftSide, true },
+		{ TEXT("Bank down to Eau Rouge"), 9, 12, LeftSide, false },
+		{ TEXT("Raidillon"), 15, 17, LeftSide, true },
+		{ TEXT("Kemmel"), 18, 20, LeftSide, false },
+		{ TEXT("Pouhon"), 41, 44, RightSide, false },
+		{ TEXT("Bus Stop"), 72, 75, LeftSide, true },
+	};
+
 	TArray<const FBarrierStretch*> StretchesAlong(const USplineComponent& Spline, const TArray<FTracksideRing>& Rings)
 	{
 		TArray<TPair<double, const FBarrierStretch*>> Starts;
@@ -449,6 +473,12 @@ ATracksideScenery::ATracksideScenery()
 	ArmcoPosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ArmcoPosts"));
 	AttachWithoutCollision(ArmcoPosts);
 
+	OpenGrandstands = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("OpenGrandstands"));
+	AttachWithoutCollision(OpenGrandstands);
+
+	CoveredGrandstands = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("CoveredGrandstands"));
+	AttachWithoutCollision(CoveredGrandstands);
+
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TracksideMaterial(
 		TEXT("/Game/Trackside/M_Trackside.M_Trackside"));
 
@@ -477,6 +507,22 @@ ATracksideScenery::ATracksideScenery()
 	if (ArmcoPost.Succeeded())
 	{
 		ArmcoPostMesh = ArmcoPost.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> OpenGrandstand(
+		TEXT("/Game/Trackside/SM_GrandstandOpen.SM_GrandstandOpen"));
+
+	if (OpenGrandstand.Succeeded())
+	{
+		OpenGrandstandMesh = OpenGrandstand.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CoveredGrandstand(
+		TEXT("/Game/Trackside/SM_GrandstandCovered.SM_GrandstandCovered"));
+
+	if (CoveredGrandstand.Succeeded())
+	{
+		CoveredGrandstandMesh = CoveredGrandstand.Object;
 	}
 }
 
@@ -510,6 +556,7 @@ void ATracksideScenery::Rebuild()
 	BuildGround(Rings, Left, Right, Terrain);
 	BuildTerrain(Terrain);
 	BuildBarriers(Rings, Left, Right);
+	PlaceGrandstands(Rings, Left, Right);
 }
 
 void ATracksideScenery::ClearScenery()
@@ -522,7 +569,8 @@ void ATracksideScenery::ClearScenery()
 		}
 	}
 
-	for (UInstancedStaticMeshComponent* Instances : { FencePosts.Get(), ArmcoPosts.Get() })
+	for (UInstancedStaticMeshComponent* Instances :
+		{ FencePosts.Get(), ArmcoPosts.Get(), OpenGrandstands.Get(), CoveredGrandstands.Get() })
 	{
 		if (Instances != nullptr)
 		{
@@ -534,7 +582,7 @@ void ATracksideScenery::ClearScenery()
 bool ATracksideScenery::CanDressTheCircuit() const
 {
 	if (Circuit == nullptr || Ground == nullptr || Barriers == nullptr || FencePosts == nullptr || ArmcoPosts == nullptr
-		|| Circuit->GetLayout() != ETrackLayout::Spa)
+		|| OpenGrandstands == nullptr || CoveredGrandstands == nullptr || Circuit->GetLayout() != ETrackLayout::Spa)
 	{
 		return false;
 	}
@@ -1102,9 +1150,7 @@ void ATracksideScenery::BuildBarriers(
 
 		const auto DepthOf = [&](const FSideBarrier& Barrier)
 		{
-			return Barrier.Barrier == EBarrier::Wall
-				? WallThickness
-				: ArmcoSetback + 1.0 + 2.0 * TracksideLayout::PostHalfWidth;
+			return BarrierDepth(Barrier.Barrier == EBarrier::Wall, false);
 		};
 
 		const auto AtBarrier = [&](int32 Index, double Offset, double Lift)
@@ -1280,4 +1326,86 @@ void ATracksideScenery::BuildBarriers(
 		FencePanels.TriangleCount(),
 		FencePostTransforms.Num(),
 		ArmcoPostTransforms.Num());
+}
+
+double ATracksideScenery::BarrierDepth(bool bWall, bool bCatchFence) const
+{
+	const double Barrier = bWall ? WallThickness : ArmcoSetback + 1.0 + 2.0 * TracksideLayout::PostHalfWidth;
+
+	return bCatchFence ? Barrier + FenceSetback + 2.0 * TracksideLayout::PostHalfWidth : Barrier;
+}
+
+void ATracksideScenery::PlaceGrandstands(
+	const TArray<FTracksideRing>& Rings,
+	const TArray<FTracksideBands>& Left,
+	const TArray<FTracksideBands>& Right)
+{
+	using namespace TracksideLayout;
+
+	const int32 Count = Rings.Num();
+	const double HalfWidth = Circuit->GetTrackWidth() * 0.5;
+	const double Spacing = Circuit->GetTrackLength() / Count;
+	const USplineComponent& Spline = *Circuit->GetCentreline();
+	const TArray<const FBarrierStretch*> Stretches = StretchesAlong(Spline, Rings);
+
+	TArray<FTransform> OpenTransforms;
+	TArray<FTransform> CoveredTransforms;
+
+	for (const FGrandstandLandmark& Landmark : GrandstandLandmarks)
+	{
+		const double From = DistanceAtPoint(Spline, Landmark.FirstPoint);
+		const double To = DistanceAtPoint(Spline, Landmark.LastPoint);
+		const TArray<FTracksideBands>& Bands = Landmark.Side < 0.0 ? Left : Right;
+		TArray<FTransform>& Placed = Landmark.bCovered ? CoveredTransforms : OpenTransforms;
+
+		const auto StandFront = [&](int32 Index)
+		{
+			const FTracksideRing& Ring = Rings[Index];
+			const FSideBarrier& Barrier = Landmark.Side < 0.0 ? Stretches[Index]->Left : Stretches[Index]->Right;
+			const double Setback = BarrierDepth(Barrier.Barrier == EBarrier::Wall, Barrier.bCatchFence) + GrandstandSetback;
+
+			return Ring.RoadCentre
+				+ Ring.Right * (Landmark.Side * (HalfWidth + Bands[Index].Total() + Setback))
+				- Ring.Up * VergeFall;
+		};
+
+		const int32 FirstRing = FMath::CeilToInt32(From / Spacing) % Count;
+		double Travelled = 0.0;
+		double NextModule = GrandstandModuleSpacing * 0.5;
+		FVector Previous = StandFront(FirstRing);
+
+		for (int32 Step = 0; Step < Count; ++Step)
+		{
+			const int32 Index = (FirstRing + Step) % Count;
+
+			if (!IsWithin(Rings[Index].Distance, From, To))
+			{
+				break;
+			}
+
+			const FVector Front = StandFront(Index);
+			Travelled += FVector::DistXY(Previous, Front);
+			Previous = Front;
+
+			if (Travelled >= NextModule)
+			{
+				const FVector AwayFromTheTrack = (Rings[Index].Right * Landmark.Side).GetSafeNormal2D();
+				Placed.Emplace(FRotationMatrix::MakeFromXZ(AwayFromTheTrack, FVector::UpVector).ToQuat(), Front);
+				NextModule += GrandstandModuleSpacing;
+			}
+		}
+	}
+
+	OpenGrandstands->SetStaticMesh(OpenGrandstandMesh);
+	OpenGrandstands->AddInstances(OpenTransforms, false, true);
+
+	CoveredGrandstands->SetStaticMesh(CoveredGrandstandMesh);
+	CoveredGrandstands->AddInstances(CoveredTransforms, false, true);
+
+	UE_LOG(LogTracksideScenery, Log,
+		TEXT("%s placed %d open and %d covered grandstand modules at %d landmarks"),
+		*GetName(),
+		OpenTransforms.Num(),
+		CoveredTransforms.Num(),
+		static_cast<int32>(UE_ARRAY_COUNT(GrandstandLandmarks)));
 }
