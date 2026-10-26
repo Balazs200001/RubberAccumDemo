@@ -632,7 +632,7 @@ private:
 
 	ESurfaceDebugView DebugView = ESurfaceDebugView::AllChannels;
 
-	ESurfaceLook SurfaceLook = ESurfaceLook::Debug;
+	ESurfaceLook SurfaceLook = ESurfaceLook::Asphalt;
 
 	ESceneLighting SceneLighting = ESceneLighting::MapSun;
 

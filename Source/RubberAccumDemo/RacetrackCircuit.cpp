@@ -2740,6 +2740,11 @@ void ARacetrackCircuit::BindAccumulationTargetToRoad()
 			Target);
 	}
 
+	if (AsphaltSurfaceMaterial == nullptr)
+	{
+		SurfaceLook = ESurfaceLook::Debug;
+	}
+
 	ApplySurfaceLookToRoad();
 }
 
