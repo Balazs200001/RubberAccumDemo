@@ -2387,7 +2387,7 @@ void ARacetrackCircuit::CaptureMapLighting()
 
 	const ADirectionalLight* FoundSun = Sun.Get();
 
-	if (FoundSun == nullptr || FoundSun->GetComponent() == nullptr)
+	if (FoundSun == nullptr || FoundSun->GetLightComponent() == nullptr)
 	{
 		UE_LOG(LogRacetrackSurface, Warning,
 			TEXT("%s found no directional light, so the Lighting setting has no sun to move"),
@@ -2401,7 +2401,7 @@ void ARacetrackCircuit::CaptureMapLighting()
 
 	FMapLighting Captured;
 	Captured.SunRotation = FoundSun->GetActorRotation();
-	Captured.SunIntensity = FoundSun->GetComponent()->Intensity;
+	Captured.SunIntensity = FoundSun->GetLightComponent()->Intensity;
 	Captured.SkyLightIntensity = SkyLightComponent != nullptr ? SkyLightComponent->Intensity : 0.0f;
 
 	MapLighting = Captured;
@@ -2446,7 +2446,7 @@ void ARacetrackCircuit::SetSceneLighting(ESceneLighting Lighting)
 {
 	ADirectionalLight* FoundSun = Sun.Get();
 
-	if (!MapLighting.IsSet() || FoundSun == nullptr || FoundSun->GetComponent() == nullptr)
+	if (!MapLighting.IsSet() || FoundSun == nullptr || FoundSun->GetLightComponent() == nullptr)
 	{
 		RacetrackCircuitDisplay::AnnounceOnScreen(
 			this,
@@ -2474,7 +2474,7 @@ void ARacetrackCircuit::SetSceneLighting(ESceneLighting Lighting)
 	SceneLighting = Lighting;
 
 	FoundSun->SetActorRotation(SunRotation);
-	FoundSun->GetComponent()->SetIntensity(SunIntensity);
+	FoundSun->GetLightComponent()->SetIntensity(SunIntensity);
 
 	ASkyLight* FoundSkyLight = SkyLight.Get();
 	USkyLightComponent* SkyLightComponent = FoundSkyLight != nullptr ? FoundSkyLight->GetLightComponent() : nullptr;
