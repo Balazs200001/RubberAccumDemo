@@ -40,7 +40,7 @@
 			"Enabled": true
 		},
 		{
-			"Name": "GameInput",
+			"Name": "RawInput",
 			"Enabled": true
 		}
 	]
