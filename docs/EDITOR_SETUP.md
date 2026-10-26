@@ -3101,3 +3101,60 @@ its reasons are on [#129](https://github.com/Balazs200001/RubberAccumDemo/issues
     default `ADefaultPawn`.
 - **Captures with on-screen announcements now show the window.** Add `RacetrackDemo.Panel 0` to
   `-ExecCmds` to hide it. `DisableAllScreenMessages` hides it along with the announcements.
+
+## 2026-10-26 — C11.9: a PS5 DualSense drives the car through RawInput (no asset change)
+
+**No asset was changed.** The work and its reasons are on
+[#138](https://github.com/Balazs200001/RubberAccumDemo/issues/138).
+
+- **`RubberAccumDemo.uproject` enables the engine's `RawInput` plugin** (host `640260d`).
+  - The plugin is marked deprecated in 5.8. The log prints "The Plugin RawInput has been marked
+    deprecated for 5.8 and will be removed soon".
+  - `GameInput` was enabled first (`5ce9551`) and swapped out in `640260d`. It needs Microsoft's
+    GameInput redistributable installed on every machine that runs the demo, and the user decided
+    against that.
+  - `XInputDevice` is unchanged.
+- **`Config/DefaultInput.ini` gains a `[/Script/RawInput.RawInputSettings]` section** (host
+  `c487587`). It holds one device configuration, for vendor `0x054C` and product `0x0CE6`, the
+  DualSense. Its six axis entries follow the pad's HID value-caps order, which is measured in
+  `MEASUREMENTS.md` under the same date:
+
+| Index | HID axis | Pad control | Emits |
+|---|---|---|---|
+| 0 | Ry | R2 | `Gamepad_RightTriggerAxis` |
+| 1 | Rx | L2 | `Gamepad_LeftTriggerAxis` |
+| 2 | Rz | right stick Y | off |
+| 3 | Z | right stick X | off |
+| 4 | Y | left stick Y | off |
+| 5 | X | left stick X | `Gamepad_LeftX`, as a stick, −1 to 1 |
+
+  - No buttons are configured. The RawInput debug view lists 96 `GenericUSBController_ButtonN`
+    keys for the pad, and nothing binds them.
+- **`IMC_Vehicle_Default`'s gamepad rows**, read back with `showdebug EnhancedInput` in a `-game`
+  run after `RacetrackDemo.Drive`. MCP was not reachable, so this is not an MCP readback. Capture:
+  `2627-Y3A-PR-243663/assets/media/c11-9-imc-vehicle-default-bindings-while-driving.png`.
+
+| Action | Gamepad keys |
+|---|---|
+| `IA_Throttle` | Gamepad Right Trigger Axis, Gamepad Face Button Left |
+| `IA_Brake` | Gamepad Left Trigger Axis, Gamepad Face Button Bottom |
+| `IA_Steering` | Gamepad Left Thumbstick X-Axis |
+| `IA_Handbrake` | Gamepad Left Shoulder |
+| `IA_LookAround` | Gamepad Right Thumbstick X-Axis |
+| `IA_Reset` | Gamepad Special Right |
+| `IA_ToggleCamera` | Gamepad Special Left |
+| `IA_Headlights` | none |
+
+  The other rows are keyboard and VR controllers.
+- **To use it, plug the pad in before starting the game or the editor.**
+  - RawInput binds the devices present when it starts (`RawInputWindows.cpp:95-111`).
+  - Its default registration asks for HID joysticks (usage 4) first, and for gamepads (usage 5) only
+    when no joystick is connected. A DualSense is a gamepad, so a joystick-class device plugged in
+    alongside it, such as a wheel or a flight stick, stops it being picked up.
+  - It registers without `RIDEV_INPUTSINK` (`RawInputWindows.cpp:100`, `154`), so the pad only
+    reaches the game while its window is in front.
+  - `showdebug RawInput` shows each mapped axis's value.
+- **Not verified:** driving with the pad. Both `-game` runs were started from a background shell.
+  Windows kept the window out of the foreground in both: sampled once a second with
+  `GetForegroundWindow`, it was in front for one sample, before the map loaded. No pad report
+  reached RawInput, and the three axes read `--`.

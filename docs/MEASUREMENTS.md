@@ -5911,3 +5911,39 @@ though the variable already read 3. The test's restore uses `Unset(ECVF_SetByCon
   and from the source, not from a `-game` run.
 - **A Blueprint graph calling the new nodes.** The test calls the library from C++.
 - **The rest of the suite.** Only the three groups above were run.
+
+## 2026-10-26 — C11.9: the DualSense's HID axes, read from Windows
+
+**Conditions.**
+- The pad was a DualSense (vendor `054C`, product `0CE6`) on USB, interface `MI_03`, at rest with
+  nothing pressed.
+- It was read through `hid.dll`, with `HidP_GetValueCaps` and `HidP_GetUsageValue` on one input
+  report, by a PowerShell probe in the session scratchpad. The engine did not take this reading.
+- RawInput numbers the axes in this same value-caps order (`RawInputWindows.cpp:703-739`), which
+  is what the `DefaultInput.ini` mapping indexes.
+
+**The device.** Its top collection is usage page 1, usage 5 (gamepad), with a 64-byte input report.
+It has two button caps: page 9 usages 1 to 15, and one vendor-page button.
+
+| Value-caps index | Usage | Bits | Logical range | At rest |
+|---|---|---|---|---|
+| 0 | Ry | 8 | 0 to 255 | 0 |
+| 1 | Rx | 8 | 0 to 255 | 0 |
+| 2 | Rz | 8 | 0 to 255 | 124 |
+| 3 | Z | 8 | 0 to 255 | 130 |
+| 4 | Y | 8 | 0 to 255 | 129 |
+| 5 | X | 8 | 0 to 255 | 126 |
+| 6 | vendor page `0xFF00`, usage `0x20` | 8 | 0 to 255 | 142 |
+| 7 | hat switch | 4 | 0 to 7 | 8, out of range, so centred |
+| 8 | vendor page `0xFF00`, usage `0x22` | 8 | 0 to 255 | 169 |
+
+The axes resting at 0 are the triggers, and the ones resting near 128 are the sticks.
+
+### Not verified
+
+- **Which control is which axis.** No control was moved. Ry as R2, Rx as L2, and which stick is
+  which all follow the usual DualSense layout.
+- **The steering at rest.** Left stick X resting at 126 reaches RawInput as about −0.012
+  (`(126 / 255 − 0.5) × 2`). Unless `IA_Steering` has a dead zone, the car steers very slightly
+  left at rest. Whether it has one was not read.
+- **Bluetooth.** Over Bluetooth the pad's product ID and reports may differ. Only USB was read.
