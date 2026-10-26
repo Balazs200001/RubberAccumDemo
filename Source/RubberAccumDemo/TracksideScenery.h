@@ -94,6 +94,23 @@ public:
 	UFUNCTION(CallInEditor, Category = "Trackside Scenery")
 	void Rebuild();
 
+	void SetCircuit(ARacetrackCircuit* NewCircuit);
+
+	UProceduralMeshComponent* GetGround() const
+	{
+		return Ground;
+	}
+
+	UProceduralMeshComponent* GetTerrainMesh() const
+	{
+		return TerrainMesh;
+	}
+
+	UProceduralMeshComponent* GetBarriers() const
+	{
+		return Barriers;
+	}
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<ARacetrackCircuit> Circuit;

@@ -587,6 +587,12 @@ void ATracksideScenery::Rebuild()
 
 	ClearScenery();
 
+	if (Circuit == nullptr)
+	{
+		UE_LOG(LogTracksideScenery, Log, TEXT("%s builds nothing until its Circuit is set"), *GetName());
+		return;
+	}
+
 	if (!CanDressTheCircuit())
 	{
 		UE_LOG(LogTracksideScenery, Warning,
@@ -613,6 +619,13 @@ void ATracksideScenery::Rebuild()
 		TEXT("%s rebuilt the scenery in %.1f ms"),
 		*GetName(),
 		(FPlatformTime::Seconds() - StartSeconds) * 1000.0);
+}
+
+void ATracksideScenery::SetCircuit(ARacetrackCircuit* NewCircuit)
+{
+	Circuit = NewCircuit;
+
+	Rebuild();
 }
 
 void ATracksideScenery::ClearScenery()

@@ -4,6 +4,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/Engine.h"
@@ -14,6 +15,7 @@
 #include "SurfaceAccumulationMapping.h"
 #include "../RacetrackCircuit.h"
 #include "../SplineFollowingCar.h"
+#include "../TracksideScenery.h"
 #include "../WheelSurfaceSlip.h"
 
 namespace RubberAccumDemoVehicleTest
@@ -33,6 +35,18 @@ namespace RubberAccumDemoVehicleTest
 	constexpr double FlyCameraDrop = 300.0;
 
 	constexpr int32 CookSamples = 64;
+
+	constexpr double WheelSizedSweepRadius = 35.0;
+
+	constexpr double WheelClearanceAboveRoad = 10.0;
+
+	constexpr double OffRoadSteps[] = { 10.0, 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0 };
+
+	constexpr double OffRoadTraceReach = 6000.0;
+
+	constexpr double SweepBeyondTheRoadEdge = 3000.0;
+
+	constexpr double ClearOfTheRoadEdge = 10.0;
 
 	UWorld* FindVehicleTestWorld()
 	{
@@ -224,6 +238,49 @@ namespace RubberAccumDemoVehicleTest
 				TEXT("Every timed %s section with collision really could be traced, so the cook was not skipped"),
 				SectionName),
 			bProbeAlwaysCollided);
+	}
+
+	ATracksideScenery* SpawnDressedSpa(UWorld& World, ARacetrackCircuit*& OutTrack)
+	{
+		OutTrack = World.SpawnActor<ARacetrackCircuit>(ClearOfTheHarnessTrack, FRotator::ZeroRotator);
+
+		if (OutTrack == nullptr)
+		{
+			return nullptr;
+		}
+
+		OutTrack->SetLayout(ETrackLayout::Spa, DemoLapLength);
+
+		ATracksideScenery* Scenery = World.SpawnActor<ATracksideScenery>(ClearOfTheHarnessTrack, FRotator::ZeroRotator);
+
+		if (Scenery != nullptr)
+		{
+			Scenery->SetCircuit(OutTrack);
+		}
+
+		return Scenery;
+	}
+
+	bool SpawnedADressedSpa(FAutomationTestBase& Test, ARacetrackCircuit* Track, ATracksideScenery* Scenery)
+	{
+		if (Track != nullptr && Scenery != nullptr && Scenery->GetGround()->GetNumSections() > 0)
+		{
+			return true;
+		}
+
+		Test.AddError(TEXT("Failed to spawn a Spa circuit dressed with its trackside scenery."));
+
+		if (Scenery != nullptr)
+		{
+			Scenery->Destroy();
+		}
+
+		if (Track != nullptr)
+		{
+			Track->Destroy();
+		}
+
+		return false;
 	}
 }
 
@@ -425,6 +482,313 @@ bool FVehicleRoadCollisionCook::RunTest(const FString& Parameters)
 	TimeSectionCook(
 		*this, *Track, *Track->GetRoad(), TEXT("road"), OnTheSpline + Up * TraceReach, OnTheSpline - Up * TraceReach);
 
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVehicleSceneryCatchesTheWheelsOffTheRoad,
+	"RubberAccumDemo.Vehicle.SceneryCatchesTheWheelsOffTheRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleSceneryCatchesTheWheelsOffTheRoad::RunTest(const FString& Parameters)
+{
+	using namespace RubberAccumDemoVehicleTest;
+
+	UWorld* World = FindVehicleTestWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = nullptr;
+	ATracksideScenery* Scenery = SpawnDressedSpa(*World, Track);
+
+	if (!SpawnedADressedSpa(*this, Track, Scenery))
+	{
+		return false;
+	}
+
+	const double HalfWidth = Track->GetTrackWidth() * 0.5;
+	const TArray<double> Distances = RoadSampleDistances(Track->GetTrackLength());
+	int32 Traces = 0;
+	int32 Caught = 0;
+	int32 OnTheBands = 0;
+	int32 OnTheTerrain = 0;
+	int32 OnARoad = 0;
+
+	for (const double Distance : Distances)
+	{
+		const FVector Centre = Track->GetWorldPositionAtDistance(Distance, 0.0);
+		const FVector Right = Track->GetWorldRightVectorAtDistance(Distance);
+		const FVector Up = Track->GetWorldUpVectorAtDistance(Distance);
+
+		for (const double Side : { -1.0, 1.0 })
+		{
+			for (const double Step : OffRoadSteps)
+			{
+				const FVector Over = Centre + Right * (Side * (HalfWidth + Step));
+				FHitResult Hit;
+				++Traces;
+
+				const bool bCaught = World->LineTraceSingleByChannel(
+					Hit, Over + Up * OffRoadTraceReach, Over - Up * OffRoadTraceReach, ECC_WorldDynamic);
+
+				if (!bCaught)
+				{
+					AddInfo(FString::Printf(
+						TEXT("Nothing under the wheels %.0f cm beyond the %s edge at %.0f cm"),
+						Step,
+						Side < 0.0 ? TEXT("left") : TEXT("right"),
+						Distance));
+					continue;
+				}
+
+				++Caught;
+
+				const UPrimitiveComponent* Landed = Hit.GetComponent();
+
+				if (Landed == Scenery->GetGround())
+				{
+					++OnTheBands;
+				}
+				else if (Landed == Scenery->GetTerrainMesh())
+				{
+					++OnTheTerrain;
+				}
+				else if (Landed == Track->GetRoad())
+				{
+					++OnARoad;
+				}
+			}
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("%d of %d downward traces on the wheels' WorldDynamic channel, from 10 cm to 32 m beyond either road edge "
+			"at %d places round the lap, landed on something: %d on the ground bands, %d on the terrain and %d on "
+			"another stretch of road"),
+		Caught,
+		Traces,
+		Distances.Num(),
+		OnTheBands,
+		OnTheTerrain,
+		OnARoad));
+
+	TestEqual(
+		TEXT("Every downward trace beyond the road edges lands on something, so a car that leaves the road always has "
+			"ground under its wheels"),
+		Caught,
+		Traces);
+
+	TestTrue(
+		TEXT("The traces nearest the road land on the ground bands, and the furthest on the terrain"),
+		OnTheBands > 0 && OnTheTerrain > 0);
+
+	Scenery->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVehicleSceneryBarriersStopTheCar,
+	"RubberAccumDemo.Vehicle.SceneryBarriersStopTheCar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleSceneryBarriersStopTheCar::RunTest(const FString& Parameters)
+{
+	using namespace RubberAccumDemoVehicleTest;
+
+	UWorld* World = FindVehicleTestWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = nullptr;
+	ATracksideScenery* Scenery = SpawnDressedSpa(*World, Track);
+
+	if (!SpawnedADressedSpa(*this, Track, Scenery))
+	{
+		return false;
+	}
+
+	const double HalfWidth = Track->GetTrackWidth() * 0.5;
+	const FCollisionShape WheelSphere = FCollisionShape::MakeSphere(WheelSizedSweepRadius);
+	int32 Sweeps = 0;
+	int32 StoppedByTheBarriers = 0;
+	int32 StoppedBeyondTheRoadEdge = 0;
+	double NearestStop = TNumericLimits<double>::Max();
+	double FurthestStop = 0.0;
+
+	for (const double Distance : RoadSampleDistances(Track->GetTrackLength()))
+	{
+		const FVector Right = Track->GetWorldRightVectorAtDistance(Distance);
+		const FVector Up = Track->GetWorldUpVectorAtDistance(Distance);
+		const FVector Start = Track->GetWorldPositionAtDistance(Distance, 0.0)
+			+ Up * (Track->GetRoadHeightAboveSpline() + WheelSizedSweepRadius + WheelClearanceAboveRoad);
+
+		for (const double Side : { -1.0, 1.0 })
+		{
+			const FVector End = Start + Right * (Side * (HalfWidth + SweepBeyondTheRoadEdge));
+			FHitResult Hit;
+			++Sweeps;
+
+			const bool bStopped = World->SweepSingleByChannel(
+				Hit, Start, End, FQuat::Identity, ECC_Vehicle, WheelSphere);
+
+			const double SphereOuterEdge =
+				FVector::DotProduct(Hit.Location - Start, Right) * Side + WheelSizedSweepRadius;
+
+			if (bStopped && Hit.GetComponent() == Scenery->GetBarriers())
+			{
+				++StoppedByTheBarriers;
+				NearestStop = FMath::Min(NearestStop, SphereOuterEdge);
+				FurthestStop = FMath::Max(FurthestStop, SphereOuterEdge);
+
+				if (SphereOuterEdge > HalfWidth + ClearOfTheRoadEdge)
+				{
+					++StoppedBeyondTheRoadEdge;
+				}
+
+				continue;
+			}
+
+			const FString Outcome = bStopped
+				? FString::Printf(TEXT("stopped on %s, %.0f cm from the centreline"),
+					*GetNameSafe(Hit.GetComponent()), SphereOuterEdge)
+				: FString(TEXT("was not stopped"));
+
+			AddInfo(FString::Printf(
+				TEXT("The sweep at %.0f cm towards the %s %s"),
+				Distance,
+				Side < 0.0 ? TEXT("left") : TEXT("right"),
+				*Outcome));
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("%d of %d wheel-sized sweeps on the Vehicle channel, outward from the centreline, stopped on the barriers, "
+			"the sphere's outer edge between %.0f and %.0f cm from the centreline against a %.0f cm half width"),
+		StoppedByTheBarriers,
+		Sweeps,
+		NearestStop,
+		FurthestStop,
+		HalfWidth));
+
+	TestEqual(
+		TEXT("Every wheel-sized sweep on the Vehicle channel, outward from the centreline on both sides, is stopped by "
+			"the visible barriers"),
+		StoppedByTheBarriers,
+		Sweeps);
+
+	TestEqual(
+		TEXT("Every one of them stops beyond the road edge, so nothing invisible stands at the edge of the asphalt"),
+		StoppedBeyondTheRoadEdge,
+		Sweeps);
+
+	Scenery->Destroy();
+	Track->Destroy();
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVehicleSceneryCollidesWhereItShould,
+	"RubberAccumDemo.Vehicle.SceneryCollidesWhereItShould",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleSceneryCollidesWhereItShould::RunTest(const FString& Parameters)
+{
+	using namespace RubberAccumDemoVehicleTest;
+
+	UWorld* World = FindVehicleTestWorld();
+
+	if (World == nullptr)
+	{
+		AddError(TEXT("No world available."));
+		return false;
+	}
+
+	ARacetrackCircuit* Track = nullptr;
+	ATracksideScenery* Scenery = SpawnDressedSpa(*World, Track);
+
+	if (!SpawnedADressedSpa(*this, Track, Scenery))
+	{
+		return false;
+	}
+
+	for (const UProceduralMeshComponent* Floor : { Scenery->GetGround(), Scenery->GetTerrainMesh() })
+	{
+		const FString Name = Floor->GetName();
+
+		TestTrue(FString::Printf(TEXT("%s has query and physics collision"), *Name),
+			Floor->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics);
+
+		TestTrue(FString::Printf(TEXT("%s blocks the WorldDynamic channel, so the wheels' traces land on it"), *Name),
+			Floor->GetCollisionResponseToChannel(ECC_WorldDynamic) == ECR_Block);
+
+		TestTrue(FString::Printf(TEXT("%s blocks the Vehicle channel, so the car's body cannot sink into it"), *Name),
+			Floor->GetCollisionResponseToChannel(ECC_Vehicle) == ECR_Block);
+
+		TestTrue(FString::Printf(TEXT("%s blocks the Camera channel, so the chase camera stays above it"), *Name),
+			Floor->GetCollisionResponseToChannel(ECC_Camera) == ECR_Block);
+
+		TestTrue(FString::Printf(TEXT("%s ignores the Pawn channel, so the fly camera passes through it"), *Name),
+			Floor->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Ignore);
+	}
+
+	UProceduralMeshComponent* Barriers = Scenery->GetBarriers();
+
+	TestTrue(TEXT("The barriers have query and physics collision"),
+		Barriers->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics);
+
+	TestTrue(TEXT("The barriers block the Vehicle channel, so the car's body stops at the walls and the Armco"),
+		Barriers->GetCollisionResponseToChannel(ECC_Vehicle) == ECR_Block);
+
+	TestTrue(TEXT("The barriers ignore the WorldDynamic channel, so the wheels' suspension traces do not land on them"),
+		Barriers->GetCollisionResponseToChannel(ECC_WorldDynamic) == ECR_Ignore);
+
+	TestTrue(TEXT("The barriers ignore the Camera channel, so the car's spring arm does not pull in beside them"),
+		Barriers->GetCollisionResponseToChannel(ECC_Camera) == ECR_Ignore);
+
+	TestTrue(TEXT("The barriers ignore the Pawn channel, so the fly camera passes through them"),
+		Barriers->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Ignore);
+
+	const FProcMeshSection* Solid = Barriers->GetProcMeshSection(0);
+	const FProcMeshSection* FenceMesh = Barriers->GetProcMeshSection(1);
+
+	TestTrue(TEXT("The walls and rails collide"), Solid != nullptr && Solid->bEnableCollision);
+
+	TestTrue(TEXT("The fence mesh does not, since it stands behind a barrier"),
+		FenceMesh != nullptr && !FenceMesh->bEnableCollision);
+
+	TArray<UInstancedStaticMeshComponent*> Instanced;
+	Scenery->GetComponents(Instanced);
+
+	TestEqual(TEXT("The scenery instances four meshes: two stands and two posts"), Instanced.Num(), 4);
+
+	for (const UInstancedStaticMeshComponent* Placed : Instanced)
+	{
+		TestTrue(
+			FString::Printf(TEXT("%s collides with nothing, since it stands behind a barrier"), *Placed->GetName()),
+			Placed->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+	}
+
+	TArray<UProceduralMeshComponent*> CircuitMeshes;
+	Track->GetComponents(CircuitMeshes);
+
+	TestTrue(
+		TEXT("The circuit's only mesh is its road, so the invisible edge walls are gone"),
+		CircuitMeshes.Num() == 1 && CircuitMeshes[0] == Track->GetRoad());
+
+	Scenery->Destroy();
 	Track->Destroy();
 
 	return true;
