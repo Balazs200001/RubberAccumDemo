@@ -161,16 +161,6 @@ public:
 		return Road;
 	}
 
-	UProceduralMeshComponent* GetEdgeWalls() const
-	{
-		return EdgeWalls;
-	}
-
-	double GetEdgeWallHeight() const
-	{
-		return EdgeWallHeight;
-	}
-
 	double GetRoadHeightAboveSpline() const
 	{
 		return RoadHeightAboveSpline;
@@ -451,9 +441,6 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	double RoadHeightAboveSpline = 1.0;
 
-	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit", meta = (ClampMin = "10.0"))
-	double EdgeWallHeight = 150.0;
-
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UMaterialInterface> RoadMaterial;
 
@@ -562,11 +549,6 @@ private:
 
 	void GenerateRoadMesh();
 
-	void GenerateEdgeWalls(
-		const TArray<FVector>& LeftEdges,
-		const TArray<FVector>& RightEdges,
-		const TArray<FVector>& EdgeUps);
-
 	void BindAccumulationTargetToRoad();
 
 	void AdvanceSkidMarkPair(float DeltaSeconds);
@@ -594,9 +576,6 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UProceduralMeshComponent> Road;
-
-	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
-	TObjectPtr<UProceduralMeshComponent> EdgeWalls;
 
 	UPROPERTY(VisibleAnywhere, Category = "Racetrack Circuit")
 	TObjectPtr<UPostProcessComponent> PerTexelDebugView;
