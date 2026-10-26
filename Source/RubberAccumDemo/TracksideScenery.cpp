@@ -2,8 +2,10 @@
 
 #include "TracksideScenery.h"
 
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SplineComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "RacetrackCircuit.h"
@@ -25,11 +27,21 @@ namespace TracksideColours
 	const FLinearColor VergeDark(0.07f, 0.20f, 0.03f);
 	const FLinearColor Skirt(0.05f, 0.14f, 0.025f);
 	const FLinearColor TerrainGrass(0.065f, 0.18f, 0.03f);
+	const FLinearColor RedBoards(0.55f, 0.01f, 0.025f);
+	const FLinearColor BlueBoards(0.01f, 0.07f, 0.40f);
+	const FLinearColor BlackBoards(0.012f, 0.012f, 0.014f);
+	const FLinearColor YellowBoards(0.95f, 0.62f, 0.0f);
+	const FLinearColor NavyBoards(0.008f, 0.014f, 0.07f);
+	const FLinearColor MaroonBoards(0.11f, 0.004f, 0.035f);
+	const FLinearColor Concrete(0.32f, 0.32f, 0.31f);
+	const FLinearColor ArmcoSteel(0.30f, 0.31f, 0.32f);
 }
 
 namespace TracksideLayout
 {
 	constexpr int32 AuthoredSpaPointCount = 78;
+
+	constexpr double PostHalfWidth = 4.0;
 
 	constexpr double LeftSide = -1.0;
 
@@ -58,6 +70,97 @@ namespace TracksideLayout
 	bool IsWithin(double Distance, double From, double To)
 	{
 		return From <= To ? (Distance >= From && Distance <= To) : (Distance >= From || Distance <= To);
+	}
+
+	enum class EBarrier : uint8
+	{
+		Wall,
+		Armco
+	};
+
+	struct FSideBarrier
+	{
+		EBarrier Barrier;
+
+		FLinearColor Face;
+
+		bool bCatchFence;
+	};
+
+	struct FBarrierStretch
+	{
+		const TCHAR* Name;
+
+		int32 FirstPoint;
+
+		FSideBarrier Left;
+
+		FSideBarrier Right;
+	};
+
+	FSideBarrier Wall(const FLinearColor& Face)
+	{
+		return { EBarrier::Wall, Face, false };
+	}
+
+	FSideBarrier FencedWall(const FLinearColor& Face)
+	{
+		return { EBarrier::Wall, Face, true };
+	}
+
+	FSideBarrier FencedArmco()
+	{
+		return { EBarrier::Armco, TracksideColours::ArmcoSteel, true };
+	}
+
+	const FBarrierStretch BarrierStretches[] = {
+		{ TEXT("Pit straight"), 74, FencedWall(TracksideColours::RedBoards), FencedWall(TracksideColours::RedBoards) },
+		{ TEXT("La Source"), 4, FencedWall(TracksideColours::RedBoards), Wall(TracksideColours::RedBoards) },
+		{ TEXT("Eau Rouge"), 9, Wall(TracksideColours::RedBoards), FencedWall(TracksideColours::BlueBoards) },
+		{ TEXT("Raidillon"), 15, FencedWall(TracksideColours::RedBoards), Wall(TracksideColours::RedBoards) },
+		{ TEXT("Kemmel"), 18, FencedArmco(), Wall(TracksideColours::RedBoards) },
+		{ TEXT("Les Combes"), 24, Wall(TracksideColours::YellowBoards), Wall(TracksideColours::YellowBoards) },
+		{ TEXT("Bruxelles"), 29, Wall(TracksideColours::BlackBoards), Wall(TracksideColours::BlackBoards) },
+		{ TEXT("No Name and Pouhon"), 36, Wall(TracksideColours::NavyBoards), FencedWall(TracksideColours::RedBoards) },
+		{ TEXT("Fagnes and Campus"), 45, Wall(TracksideColours::BlueBoards), Wall(TracksideColours::BlueBoards) },
+		{ TEXT("Stavelot"), 52, Wall(TracksideColours::NavyBoards), Wall(TracksideColours::MaroonBoards) },
+		{ TEXT("Blanchimont"), 58, Wall(TracksideColours::MaroonBoards), FencedArmco() },
+		{ TEXT("Bus Stop"), 68, FencedWall(TracksideColours::YellowBoards), FencedWall(TracksideColours::YellowBoards) },
+	};
+
+	TArray<const FBarrierStretch*> StretchesAlong(const USplineComponent& Spline, const TArray<FTracksideRing>& Rings)
+	{
+		TArray<TPair<double, const FBarrierStretch*>> Starts;
+
+		for (const FBarrierStretch& Stretch : BarrierStretches)
+		{
+			Starts.Emplace(DistanceAtPoint(Spline, Stretch.FirstPoint), &Stretch);
+		}
+
+		Starts.Sort([](const TPair<double, const FBarrierStretch*>& A, const TPair<double, const FBarrierStretch*>& B)
+		{
+			return A.Key < B.Key;
+		});
+
+		TArray<const FBarrierStretch*> PerRing;
+		PerRing.Reserve(Rings.Num());
+
+		for (const FTracksideRing& Ring : Rings)
+		{
+			const FBarrierStretch* Active = Starts.Last().Value;
+
+			for (const TPair<double, const FBarrierStretch*>& Start : Starts)
+			{
+				if (Start.Key <= Ring.Distance)
+				{
+					Active = Start.Value;
+				}
+			}
+
+			PerRing.Add(Active);
+		}
+
+		return PerRing;
 	}
 }
 
@@ -235,6 +338,22 @@ namespace TracksideMesh
 			}
 		}
 
+		void AddQuadFacing(
+			const FVector& HereInner,
+			const FVector& HereOuter,
+			const FVector& NextInner,
+			const FVector& NextOuter,
+			const FVector& Facing,
+			const FLinearColor& Colour,
+			const FVector2D& HereInnerUV,
+			const FVector2D& HereOuterUV,
+			const FVector2D& NextInnerUV,
+			const FVector2D& NextOuterUV)
+		{
+			AddQuadFacing(HereInner, HereOuter, NextInner, NextOuter, Facing, Colour);
+			UVs.Append({ HereInnerUV, HereOuterUV, NextInnerUV, NextOuterUV });
+		}
+
 		int32 AddVertex(const FVector& Position, const FVector& Normal, const FLinearColor& Colour)
 		{
 			Normals.Add(Normal.GetSafeNormal());
@@ -280,6 +399,8 @@ namespace TracksideMesh
 
 		TArray<FVector> Normals;
 
+		TArray<FVector2D> UVs;
+
 		TArray<FLinearColor> Colours;
 	};
 }
@@ -308,11 +429,25 @@ ATracksideScenery::ATracksideScenery()
 	SceneryRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneryRoot"));
 	SetRootComponent(SceneryRoot);
 
+	const auto AttachWithoutCollision = [this](UPrimitiveComponent* Component)
+	{
+		Component->SetupAttachment(SceneryRoot);
+		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Component->SetCanEverAffectNavigation(false);
+	};
+
 	Ground = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Ground"));
-	Ground->SetupAttachment(SceneryRoot);
-	Ground->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Ground->SetCanEverAffectNavigation(false);
+	AttachWithoutCollision(Ground);
 	Ground->SetCastShadow(false);
+
+	Barriers = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Barriers"));
+	AttachWithoutCollision(Barriers);
+
+	FencePosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("FencePosts"));
+	AttachWithoutCollision(FencePosts);
+
+	ArmcoPosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ArmcoPosts"));
+	AttachWithoutCollision(ArmcoPosts);
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TracksideMaterial(
 		TEXT("/Game/Trackside/M_Trackside.M_Trackside"));
@@ -320,6 +455,28 @@ ATracksideScenery::ATracksideScenery()
 	if (TracksideMaterial.Succeeded())
 	{
 		SceneryMaterial = TracksideMaterial.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TracksideFenceMaterial(
+		TEXT("/Game/Trackside/M_TracksideFence.M_TracksideFence"));
+
+	if (TracksideFenceMaterial.Succeeded())
+	{
+		FenceMaterial = TracksideFenceMaterial.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> FencePost(TEXT("/Game/Trackside/SM_FencePost.SM_FencePost"));
+
+	if (FencePost.Succeeded())
+	{
+		FencePostMesh = FencePost.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> ArmcoPost(TEXT("/Game/Trackside/SM_ArmcoPost.SM_ArmcoPost"));
+
+	if (ArmcoPost.Succeeded())
+	{
+		ArmcoPostMesh = ArmcoPost.Object;
 	}
 }
 
@@ -352,19 +509,32 @@ void ATracksideScenery::Rebuild()
 	const FTracksideTerrain Terrain = ShapeTerrain(Rings, Left, Right);
 	BuildGround(Rings, Left, Right, Terrain);
 	BuildTerrain(Terrain);
+	BuildBarriers(Rings, Left, Right);
 }
 
 void ATracksideScenery::ClearScenery()
 {
-	if (Ground != nullptr)
+	for (UProceduralMeshComponent* Mesh : { Ground.Get(), Barriers.Get() })
 	{
-		Ground->ClearAllMeshSections();
+		if (Mesh != nullptr)
+		{
+			Mesh->ClearAllMeshSections();
+		}
+	}
+
+	for (UInstancedStaticMeshComponent* Instances : { FencePosts.Get(), ArmcoPosts.Get() })
+	{
+		if (Instances != nullptr)
+		{
+			Instances->ClearInstances();
+		}
 	}
 }
 
 bool ATracksideScenery::CanDressTheCircuit() const
 {
-	if (Circuit == nullptr || Ground == nullptr || Circuit->GetLayout() != ETrackLayout::Spa)
+	if (Circuit == nullptr || Ground == nullptr || Barriers == nullptr || FencePosts == nullptr || ArmcoPosts == nullptr
+		|| Circuit->GetLayout() != ETrackLayout::Spa)
 	{
 		return false;
 	}
@@ -902,4 +1072,212 @@ void ATracksideScenery::BuildTerrain(const FTracksideTerrain& Terrain)
 	}
 
 	UE_LOG(LogTracksideScenery, Log, TEXT("%s built its terrain: %d triangles"), *GetName(), Section.TriangleCount());
+}
+
+void ATracksideScenery::BuildBarriers(
+	const TArray<FTracksideRing>& Rings,
+	const TArray<FTracksideBands>& Left,
+	const TArray<FTracksideBands>& Right)
+{
+	using TracksideLayout::EBarrier;
+	using TracksideLayout::FSideBarrier;
+
+	const int32 Count = Rings.Num();
+	const double HalfWidth = Circuit->GetTrackWidth() * 0.5;
+	const TArray<const TracksideLayout::FBarrierStretch*> Stretches =
+		TracksideLayout::StretchesAlong(*Circuit->GetCentreline(), Rings);
+	const double ArmcoTop = ArmcoLowestRail + 2.0 * ArmcoRailPitch + ArmcoRailHeight;
+
+	TracksideMesh::FSection Solid;
+	TracksideMesh::FSection FencePanels;
+	TArray<FTransform> FencePostTransforms;
+	TArray<FTransform> ArmcoPostTransforms;
+
+	const auto BuildSide = [&](double Side, const TArray<FTracksideBands>& Bands)
+	{
+		const auto BarrierAt = [&](int32 Index) -> const FSideBarrier&
+		{
+			return Side < 0.0 ? Stretches[Index]->Left : Stretches[Index]->Right;
+		};
+
+		const auto DepthOf = [&](const FSideBarrier& Barrier)
+		{
+			return Barrier.Barrier == EBarrier::Wall
+				? WallThickness
+				: ArmcoSetback + 1.0 + 2.0 * TracksideLayout::PostHalfWidth;
+		};
+
+		const auto AtBarrier = [&](int32 Index, double Offset, double Lift)
+		{
+			const FTracksideRing& Ring = Rings[Index];
+
+			return Ring.RoadCentre
+				+ Ring.Right * (Side * (HalfWidth + Bands[Index].Total() + Offset))
+				+ Ring.Up * (Lift - VergeFall);
+		};
+
+		double FenceTravelled = 0.0;
+
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const int32 Next = (Index + 1) % Count;
+			const FSideBarrier& Barrier = BarrierAt(Index);
+			const FVector TowardTheTrack = Rings[Index].Right * -Side;
+
+			const auto AddFace = [&](double Offset, double Bottom, double Top, const FVector& Facing, const FLinearColor& Colour)
+			{
+				Solid.AddQuadFacing(
+					AtBarrier(Index, Offset, Bottom),
+					AtBarrier(Index, Offset, Top),
+					AtBarrier(Next, Offset, Bottom),
+					AtBarrier(Next, Offset, Top),
+					Facing,
+					Colour);
+			};
+
+			if (Barrier.Barrier == EBarrier::Wall)
+			{
+				AddFace(0.0, -BarrierFootDepth, WallHeight, TowardTheTrack, Barrier.Face);
+				AddFace(WallThickness, -BarrierFootDepth, WallHeight, -TowardTheTrack, TracksideColours::Concrete);
+
+				Solid.AddQuadFacing(
+					AtBarrier(Index, 0.0, WallHeight),
+					AtBarrier(Index, WallThickness, WallHeight),
+					AtBarrier(Next, 0.0, WallHeight),
+					AtBarrier(Next, WallThickness, WallHeight),
+					Rings[Index].Up,
+					TracksideColours::Concrete);
+			}
+			else
+			{
+				for (int32 Rail = 0; Rail < 3; ++Rail)
+				{
+					const double Bottom = ArmcoLowestRail + Rail * ArmcoRailPitch;
+
+					AddFace(ArmcoSetback, Bottom, Bottom + ArmcoRailHeight, TowardTheTrack, TracksideColours::ArmcoSteel);
+					AddFace(ArmcoSetback + 1.0, Bottom, Bottom + ArmcoRailHeight, -TowardTheTrack, TracksideColours::ArmcoSteel);
+				}
+			}
+
+			if (Barrier.bCatchFence)
+			{
+				const double Offset = DepthOf(Barrier) + FenceSetback;
+				const double Bottom = Barrier.Barrier == EBarrier::Wall ? WallHeight : ArmcoTop;
+				const FVector HereBottom = AtBarrier(Index, Offset, Bottom);
+				const FVector NextBottom = AtBarrier(Next, Offset, Bottom);
+				const double Run = FVector::Dist(HereBottom, NextBottom);
+				const double Along = FenceTravelled / 100.0;
+				const double AlongNext = (FenceTravelled + Run) / 100.0;
+
+				FencePanels.AddQuadFacing(
+					HereBottom,
+					AtBarrier(Index, Offset, FenceHeight),
+					NextBottom,
+					AtBarrier(Next, Offset, FenceHeight),
+					TowardTheTrack,
+					FLinearColor::White,
+					FVector2D(Along, Bottom / 100.0),
+					FVector2D(Along, FenceHeight / 100.0),
+					FVector2D(AlongNext, Bottom / 100.0),
+					FVector2D(AlongNext, FenceHeight / 100.0));
+
+				FenceTravelled += Run;
+			}
+		}
+
+		const auto PlacePosts = [&](double Spacing, const auto& OffsetFor, TArray<FTransform>& OutTransforms)
+		{
+			double Travelled = 0.0;
+			double NextPost = 0.0;
+
+			for (int32 Index = 0; Index < Count; ++Index)
+			{
+				const int32 Next = (Index + 1) % Count;
+				const TOptional<double> Offset = OffsetFor(BarrierAt(Index));
+				const FVector From = AtBarrier(Index, Offset.Get(0.0), 0.0);
+				const FVector To = AtBarrier(Next, Offset.Get(0.0), 0.0);
+				const double Step = FVector::DistXY(From, To);
+
+				for (; NextPost <= Travelled + Step; NextPost += Spacing)
+				{
+					if (Offset.IsSet())
+					{
+						const double Alpha = Step > UE_DOUBLE_SMALL_NUMBER ? (NextPost - Travelled) / Step : 0.0;
+						const FVector AwayFromTheTrack = (Rings[Index].Right * Side).GetSafeNormal2D();
+
+						OutTransforms.Emplace(
+							FRotationMatrix::MakeFromXZ(AwayFromTheTrack, FVector::UpVector).ToQuat(),
+							FMath::Lerp(From, To, Alpha));
+					}
+				}
+
+				Travelled += Step;
+			}
+		};
+
+		PlacePosts(FencePostSpacing, [&](const FSideBarrier& Barrier)
+		{
+			return Barrier.bCatchFence
+				? TOptional<double>(DepthOf(Barrier) + FenceSetback + TracksideLayout::PostHalfWidth)
+				: TOptional<double>();
+		}, FencePostTransforms);
+
+		PlacePosts(ArmcoPostSpacing, [&](const FSideBarrier& Barrier)
+		{
+			return Barrier.Barrier == EBarrier::Armco
+				? TOptional<double>(ArmcoSetback + 1.0 + TracksideLayout::PostHalfWidth)
+				: TOptional<double>();
+		}, ArmcoPostTransforms);
+	};
+
+	BuildSide(LeftSide, Left);
+	BuildSide(RightSide, Right);
+
+	const FTransform WorldToLocal = Barriers->GetComponentTransform().Inverse();
+	Solid.MoveIntoLocalSpace(WorldToLocal);
+	FencePanels.MoveIntoLocalSpace(WorldToLocal);
+
+	Barriers->CreateMeshSection_LinearColor(
+		0,
+		Solid.Vertices,
+		Solid.Triangles,
+		Solid.Normals,
+		TArray<FVector2D>(),
+		Solid.Colours,
+		TArray<FProcMeshTangent>(),
+		false);
+
+	Barriers->CreateMeshSection_LinearColor(
+		1,
+		FencePanels.Vertices,
+		FencePanels.Triangles,
+		FencePanels.Normals,
+		FencePanels.UVs,
+		FencePanels.Colours,
+		TArray<FProcMeshTangent>(),
+		false);
+
+	if (SceneryMaterial != nullptr)
+	{
+		Barriers->SetMaterial(0, SceneryMaterial);
+	}
+
+	if (FenceMaterial != nullptr)
+	{
+		Barriers->SetMaterial(1, FenceMaterial);
+	}
+
+	FencePosts->SetStaticMesh(FencePostMesh);
+	FencePosts->AddInstances(FencePostTransforms, false, true);
+
+	ArmcoPosts->SetStaticMesh(ArmcoPostMesh);
+	ArmcoPosts->AddInstances(ArmcoPostTransforms, false, true);
+
+	UE_LOG(LogTracksideScenery, Log,
+		TEXT("%s built its barriers: %d triangles of walls and rails, %d of fence mesh, %d fence posts, %d Armco posts"),
+		*GetName(),
+		Solid.TriangleCount(),
+		FencePanels.TriangleCount(),
+		FencePostTransforms.Num(),
+		ArmcoPostTransforms.Num());
 }

@@ -7,8 +7,10 @@
 #include "TracksideScenery.generated.h"
 
 class ARacetrackCircuit;
+class UInstancedStaticMeshComponent;
 class UMaterialInterface;
 class UProceduralMeshComponent;
+class UStaticMesh;
 
 struct FTracksideRing
 {
@@ -89,6 +91,15 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<UMaterialInterface> SceneryMaterial;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UMaterialInterface> FenceMaterial;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UStaticMesh> FencePostMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UStaticMesh> ArmcoPostMesh;
 
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Bands", meta = (ClampMin = "0.0"))
 	double WhiteLineWidth = 15.0;
@@ -189,6 +200,39 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Terrain", meta = (ClampMin = "0.0"))
 	double FarPlaneExtent = 2000000.0;
 
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "0.0"))
+	double WallHeight = 80.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "1.0"))
+	double WallThickness = 25.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "0.0"))
+	double BarrierFootDepth = 40.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "0.0"))
+	double ArmcoSetback = 10.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "0.0"))
+	double ArmcoLowestRail = 18.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "1.0"))
+	double ArmcoRailHeight = 12.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "1.0"))
+	double ArmcoRailPitch = 16.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "10.0"))
+	double ArmcoPostSpacing = 200.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "0.0"))
+	double FenceSetback = 15.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "0.0"))
+	double FenceHeight = 220.0;
+
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Barriers", meta = (ClampMin = "10.0"))
+	double FencePostSpacing = 350.0;
+
 private:
 	void ClearScenery();
 
@@ -214,9 +258,23 @@ private:
 
 	void BuildTerrain(const FTracksideTerrain& Terrain);
 
+	void BuildBarriers(
+		const TArray<FTracksideRing>& Rings,
+		const TArray<FTracksideBands>& Left,
+		const TArray<FTracksideBands>& Right);
+
 	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<USceneComponent> SceneryRoot;
 
 	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
 	TObjectPtr<UProceduralMeshComponent> Ground;
+
+	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UProceduralMeshComponent> Barriers;
+
+	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UInstancedStaticMeshComponent> FencePosts;
+
+	UPROPERTY(VisibleAnywhere, Category = "Trackside Scenery")
+	TObjectPtr<UInstancedStaticMeshComponent> ArmcoPosts;
 };
