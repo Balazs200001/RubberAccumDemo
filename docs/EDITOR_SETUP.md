@@ -3348,9 +3348,10 @@ and load times are in `MEASUREMENTS.md`, *S10*.
     `TRASH_` component.
   - **The editor may open the map as modified.** The same code marks the package dirty when it
     destroys such a component. Saving the map drops the walls from the file.
-  - **A cooked build needs that save.** The load-time rerun is `WITH_EDITOR` only (`Level.cpp:1908`),
-    so nothing destroys the walls in a cooked game. The map was not re-saved: the editor was closed
-    and no MCP session ran.
+  - **A cooked build may need that save.** The load-time rerun is `WITH_EDITOR` only
+    (`Level.cpp:1908`). If the cooker carries the walls into the cooked map, nothing destroys them
+    there. Whether it does, and what collision they would load with, was not checked. The map was not
+    re-saved, because the editor was closed and no MCP session ran.
 - **`TracksideScenery_1` has a new component, `TerrainMesh`.** Host `c10bea4` moved the terrain out of
   `Ground`'s section 1 into a transient component of its own. That way the bands and the terrain each
   cook their collision once. Nothing in the map changes, because the scenery's components are
