@@ -585,11 +585,12 @@ void ATracksideScenery::Rebuild()
 	TArray<FTracksideBands> Right;
 	LayOutBands(Rings, Left, Right);
 
-	const FTracksideTerrain Terrain = ShapeTerrain(Rings, Left, Right);
+	const FTracksideStands Stands = PlanGrandstands(Rings, Left, Right);
+	const FTracksideTerrain Terrain = ShapeTerrain(Rings, Left, Right, Stands);
 	BuildGround(Rings, Left, Right, Terrain);
 	BuildTerrain(Terrain);
 	BuildBarriers(Rings, Left, Right);
-	PlaceGrandstands(Rings, Left, Right);
+	PlaceGrandstands(Stands);
 
 	UE_LOG(LogTracksideScenery, Log,
 		TEXT("%s rebuilt the scenery in %.1f ms"),
@@ -968,7 +969,8 @@ void ATracksideScenery::BuildGround(
 FTracksideTerrain ATracksideScenery::ShapeTerrain(
 	const TArray<FTracksideRing>& Rings,
 	const TArray<FTracksideBands>& Left,
-	const TArray<FTracksideBands>& Right) const
+	const TArray<FTracksideBands>& Right,
+	const FTracksideStands& Stands) const
 {
 	using namespace TracksideRings;
 
@@ -1013,6 +1015,41 @@ FTracksideTerrain ATracksideScenery::ShapeTerrain(
 	double Lowest = TNumericLimits<double>::Max();
 	double Highest = TNumericLimits<double>::Lowest();
 	int32 PushedUnderTheBands = 0;
+	int32 LevelledUnderTheStands = 0;
+
+	const auto PadUnder = [&](const TArray<FTransform>& Placed, const UStaticMesh* Mesh, const FVector& Location)
+	{
+		TOptional<double> Pad;
+
+		if (Mesh == nullptr)
+		{
+			return Pad;
+		}
+
+		const FBox Footprint = Mesh->GetBoundingBox().ExpandBy(FVector(GrandstandPadMargin, GrandstandPadMargin, 0.0));
+		const double Reach = FMath::Sqrt(
+			FMath::Square(FMath::Max(-Footprint.Min.X, Footprint.Max.X))
+			+ FMath::Square(FMath::Max(-Footprint.Min.Y, Footprint.Max.Y)));
+
+		for (const FTransform& Stand : Placed)
+		{
+			if (FVector::DistSquaredXY(Stand.GetLocation(), Location) > FMath::Square(Reach))
+			{
+				continue;
+			}
+
+			const FVector Local = Stand.InverseTransformPosition(FVector(Location.X, Location.Y, Stand.GetLocation().Z));
+
+			if (Local.X >= Footprint.Min.X && Local.X <= Footprint.Max.X
+				&& Local.Y >= Footprint.Min.Y && Local.Y <= Footprint.Max.Y)
+			{
+				Pad = Stand.GetLocation().Z - TerrainDrop;
+				break;
+			}
+		}
+
+		return Pad;
+	};
 
 	for (int32 IndexY = 0; IndexY < Terrain.CountY; ++IndexY)
 	{
@@ -1047,6 +1084,19 @@ FTracksideTerrain ATracksideScenery::ShapeTerrain(
 			double Height = FMath::Lerp(
 				Terrain.BorderHeight, NearSum / NearWeight, FMath::SmoothStep(0.0, 1.0, BorderDistance / TerrainBorderBlend));
 
+			TOptional<double> Pad = PadUnder(Stands.Open, OpenGrandstandMesh, Location);
+
+			if (!Pad.IsSet())
+			{
+				Pad = PadUnder(Stands.Covered, CoveredGrandstandMesh, Location);
+			}
+
+			if (Pad.IsSet())
+			{
+				Height = Pad.GetValue();
+				++LevelledUnderTheStands;
+			}
+
 			const int32 Nearest = Footprints.NearestRing(Location, FootprintReach);
 
 			if (Nearest != INDEX_NONE)
@@ -1072,7 +1122,7 @@ FTracksideTerrain ATracksideScenery::ShapeTerrain(
 
 	UE_LOG(LogTracksideScenery, Log,
 		TEXT("%s shaped its terrain: %d x %d points %.0f cm apart, heights %.0f to %.0f cm, border at %.0f cm, %d points "
-			"pushed under the bands"),
+			"pushed under the bands, %d levelled under the grandstands"),
 		*GetName(),
 		Terrain.CountX,
 		Terrain.CountY,
@@ -1080,7 +1130,8 @@ FTracksideTerrain ATracksideScenery::ShapeTerrain(
 		Lowest,
 		Highest,
 		Terrain.BorderHeight,
-		PushedUnderTheBands);
+		PushedUnderTheBands,
+		LevelledUnderTheStands);
 
 	return Terrain;
 }
@@ -1383,10 +1434,10 @@ double ATracksideScenery::BarrierDepth(bool bWall, bool bCatchFence) const
 	return bCatchFence ? Barrier + FenceSetback + 2.0 * TracksideLayout::PostHalfWidth : Barrier;
 }
 
-void ATracksideScenery::PlaceGrandstands(
+FTracksideStands ATracksideScenery::PlanGrandstands(
 	const TArray<FTracksideRing>& Rings,
 	const TArray<FTracksideBands>& Left,
-	const TArray<FTracksideBands>& Right)
+	const TArray<FTracksideBands>& Right) const
 {
 	using namespace TracksideLayout;
 
@@ -1396,15 +1447,14 @@ void ATracksideScenery::PlaceGrandstands(
 	const USplineComponent& Spline = *Circuit->GetCentreline();
 	const TArray<const FBarrierStretch*> Stretches = StretchesAlong(Spline, Rings);
 
-	TArray<FTransform> OpenTransforms;
-	TArray<FTransform> CoveredTransforms;
+	FTracksideStands Stands;
 
 	for (const FGrandstandLandmark& Landmark : GrandstandLandmarks)
 	{
 		const double From = DistanceAtPoint(Spline, Landmark.FirstPoint);
 		const double To = DistanceAtPoint(Spline, Landmark.LastPoint);
 		const TArray<FTracksideBands>& Bands = Landmark.Side < 0.0 ? Left : Right;
-		TArray<FTransform>& Placed = Landmark.bCovered ? CoveredTransforms : OpenTransforms;
+		TArray<FTransform>& Placed = Landmark.bCovered ? Stands.Covered : Stands.Open;
 
 		const auto StandFront = [&](int32 Index)
 		{
@@ -1444,16 +1494,21 @@ void ATracksideScenery::PlaceGrandstands(
 		}
 	}
 
+	return Stands;
+}
+
+void ATracksideScenery::PlaceGrandstands(const FTracksideStands& Stands)
+{
 	OpenGrandstands->SetStaticMesh(OpenGrandstandMesh);
-	OpenGrandstands->AddInstances(OpenTransforms, false, true);
+	OpenGrandstands->AddInstances(Stands.Open, false, true);
 
 	CoveredGrandstands->SetStaticMesh(CoveredGrandstandMesh);
-	CoveredGrandstands->AddInstances(CoveredTransforms, false, true);
+	CoveredGrandstands->AddInstances(Stands.Covered, false, true);
 
 	UE_LOG(LogTracksideScenery, Log,
 		TEXT("%s placed %d open and %d covered grandstand modules at %d landmarks"),
 		*GetName(),
-		OpenTransforms.Num(),
-		CoveredTransforms.Num(),
-		static_cast<int32>(UE_ARRAY_COUNT(GrandstandLandmarks)));
+		Stands.Open.Num(),
+		Stands.Covered.Num(),
+		static_cast<int32>(UE_ARRAY_COUNT(TracksideLayout::GrandstandLandmarks)));
 }

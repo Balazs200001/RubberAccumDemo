@@ -45,6 +45,13 @@ struct FTracksideBands
 	}
 };
 
+struct FTracksideStands
+{
+	TArray<FTransform> Open;
+
+	TArray<FTransform> Covered;
+};
+
 struct FTracksideTerrain
 {
 	FVector2D Origin = FVector2D::ZeroVector;
@@ -247,6 +254,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Grandstands", meta = (ClampMin = "100.0"))
 	double GrandstandModuleSpacing = 1250.0;
 
+	UPROPERTY(EditAnywhere, Category = "Trackside Scenery|Grandstands", meta = (ClampMin = "0.0"))
+	double GrandstandPadMargin = 300.0;
+
 private:
 	void ClearScenery();
 
@@ -262,7 +272,8 @@ private:
 	FTracksideTerrain ShapeTerrain(
 		const TArray<FTracksideRing>& Rings,
 		const TArray<FTracksideBands>& Left,
-		const TArray<FTracksideBands>& Right) const;
+		const TArray<FTracksideBands>& Right,
+		const FTracksideStands& Stands) const;
 
 	void BuildGround(
 		const TArray<FTracksideRing>& Rings,
@@ -277,10 +288,12 @@ private:
 		const TArray<FTracksideBands>& Left,
 		const TArray<FTracksideBands>& Right);
 
-	void PlaceGrandstands(
+	FTracksideStands PlanGrandstands(
 		const TArray<FTracksideRing>& Rings,
 		const TArray<FTracksideBands>& Left,
-		const TArray<FTracksideBands>& Right);
+		const TArray<FTracksideBands>& Right) const;
+
+	void PlaceGrandstands(const FTracksideStands& Stands);
 
 	double BarrierDepth(bool bWall, bool bCatchFence) const;
 
