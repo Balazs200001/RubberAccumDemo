@@ -3198,3 +3198,85 @@ stayed slightly on. Pressing S on the keyboard cleared it, and the next L2 press
 **Verified later the same day, by the user driving in PIE with the DualSense on USB.** Throttle,
 brake and steering all worked from the pad, and the brake let go fully after L2. Bluetooth was not
 tried.
+
+## 2026-10-26 — S2 and S3: the trackside meshes and materials, in `/Game/Trackside/`
+
+**Assets created, all new and all saved.** No existing asset was changed. Afterwards `git status`
+showed only `Content/Trackside/` under `Content/`.
+
+| Asset | What it is |
+|---|---|
+| `SM_GrandstandOpen` | An open stand: 7 tiers and blue seat blocks. 328 triangles, slots `Concrete` and `OpenStandSeats` |
+| `SM_GrandstandCovered` | The same stand with a back wall up to a roof, and red seat blocks. 340 triangles, slots `Concrete`, `CoveredStandSeats` and `Roof` |
+| `SM_FencePost` | A catch-fence post, 2.6 m, with its top 40 cm leaning 20 cm toward the track. 24 triangles, slot `FenceSteel` |
+| `SM_ArmcoPost` | An Armco post from 25 cm below the ground to 62 cm above it. 12 triangles, slot `ArmcoSteel` |
+| `M_Trackside` | Opaque. Base colour = `VertexColor` × `Colour`, default white. Roughness = `Roughness`, default 0.85 |
+| `M_TracksideFence` | Masked and two-sided. `Colour` (0.03, 0.035, 0.035) to base colour, and `Roughness` 0.6. Its opacity mask is described below |
+| `MI_TracksideConcrete` | `M_Trackside`, `Colour` (0.32, 0.32, 0.31) |
+| `MI_TracksideOpenStandSeats` | `M_Trackside`, `Colour` (0.015, 0.07, 0.30) |
+| `MI_TracksideCoveredStandSeats` | `M_Trackside`, `Colour` (0.45, 0.015, 0.02) |
+| `MI_TracksideRoof` | `M_Trackside`, `Colour` (0.55, 0.56, 0.57) |
+| `MI_TracksideFenceSteel` | `M_Trackside`, `Colour` (0.06, 0.07, 0.065) |
+| `MI_TracksideArmcoSteel` | `M_Trackside`, `Colour` (0.22, 0.23, 0.24), `Roughness` 0.45 |
+
+The colours are linear. Each mesh slot has the instance of the same name assigned
+(`StaticMeshTools.set_material`).
+
+**Why.** Phase S (#139) dresses `L_SpaHarness` as Spa. Everything that follows the track is generated
+in C++. These are the separate objects that are placed many times, and the materials everything uses.
+
+**The meshes come from a script, not from hand modelling.** `RawContent/Trackside/MakeTracksideMeshes.py`
+builds all four with `bmesh` in Blender 4.3.2, in a scene of its own called `TracksideMeshes`. It
+exports each one to FBX next to itself. To rebuild them, run it inside Blender, for example
+`exec(compile(open(path).read(), path, "exec"), {"__file__": path, "__name__": "__main__"})`, then
+reimport the four FBX files.
+- **Units and axes carry through unchanged.** Blender is in metres and the importer converts to
+  centimetres. Blender's +X is the engine's +X, read back with `StaticMeshTools.get_bounds`.
+  - `SM_GrandstandOpen` runs from X 0 to 705, Y ±600 and Z −400 to 525.
+  - `SM_GrandstandCovered` runs from X −60 to 705, because its roof overhangs the front, and up to
+    Z 678.
+  - `SM_FencePost` runs from X −24 to 4, leaning toward −X.
+- **So every mesh faces the track along −X.** A stand's front is at X = 0, and it rises away from
+  the track toward +X. The C++ turns each instance so that its +X points away from the track.
+- **Each stand has a plinth down to 4 m below its origin**, so it does not float where the ground
+  falls away behind a barrier.
+
+**Imported over MCP** with `StaticMeshTools.import_file`, without materials or textures, and with
+combined meshes. Then:
+- `remove_collisions` on all four, because the legacy FBX import's `bAutoGenerateCollision`
+  defaults to true. The scenery has no collision.
+- `is_nanite_enabled` read false on all four, and left that way, since they are a few hundred
+  triangles each.
+
+**Why slots and instances rather than vertex colours.**
+- **The MCP import goes through the legacy `FbxFactory`.** It refuses `.glb`, with *"FbxFactory does
+  not support ".glb" files. Allowed: ['fbx', 'obj']"*.
+- **The legacy FBX path ignores vertex colours by default**, with
+  `VertexColorImportOption=EVertexColorImportOption::Ignore`
+  (`Engine/Config/BaseEditorPerProjectUserSettings.ini:677`). `import_file` does not expose the
+  option.
+- **So each part of a mesh is its own material slot**, and each slot gets an instance of
+  `M_Trackside` with its colour. That is one draw per slot, seven over the four meshes.
+- **The procedural meshes still use vertex colours.** `M_Trackside` multiplies `VertexColor` by
+  `Colour`, and each path leaves the other at white:
+  - An imported mesh without colours has white vertex colours.
+  - The procedural meshes keep `Colour` at its white default.
+- **The vertex colours are linear.** The procedural mesh writes them without conversion when
+  `CreateMeshSection_LinearColor`'s `bSRGBConversion` is false (`ProceduralMeshComponent.cpp:541`).
+  `M_Trackside` reads `VertexColor` directly.
+
+**`M_TracksideFence`'s opacity mask** is a wire grid, cut from UV0:
+- `TexCoord` × `CellsPerMetre` (8) → `Frac` → its R and G, each through `ComponentMask`.
+- Each goes to `Step`, with Y the component and X `WireWidth` (0.14).
+- `Max` of the two → Opacity Mask.
+
+`Step` compiles to `step(Y, X)`, which is 1 where X ≥ Y (`MaterialExpressions.cpp:4796-4803`). So the
+mask is 1 within 14 % of a cell edge in either direction. The C++ gives the fence panel UVs in metres,
+so a cell is 12.5 cm. `BlendMode` `BLEND_Masked`, `TwoSided` true and `OpacityMaskClipValue` 0.3333
+were read back.
+
+**Shown:** `CaptureAssetImage` of `SM_GrandstandCovered` drew the concrete stand, the red seat rows
+and the roof.
+
+**Not verified:** any of it in the level, which comes with S4 to S8. Also not verified is whether
+the colours look right, which is the user's call.
