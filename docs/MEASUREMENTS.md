@@ -6122,3 +6122,52 @@ of the ground bands, the terrain and the barriers, synchronously.
 - The frame cost of the new collision. The bodies are static, and no frame was profiled.
 - The cook time of each component, and the memory the collision data takes.
 - PIE, and a cooked build.
+
+## 2026-10-28 — the surface system's share of the S9 frames, for the Show & Tell chart
+
+**Question.** With the scenery in and the AI cars on track-space contacts, how much of each thread is
+the surface system? S9 published the frame totals but not the plugin's own stats or passes. This
+reads them from S9's recorded runs. No new run was taken: the editor and a Standalone game were open.
+
+```
+Source:   C:/RSBuild/s9-with-scenery-a.csv and .log, s9-with-scenery-b.csv and .log (S9, 2026-10-26)
+Frames:   1x segment, 9300 to 14400, as H4 and S9. Medians in ms, p90 in brackets
+GPU:      ProfileGPU frames 14501 and 14701, graphics pipe, inclusive time of the four
+          DrawCanvasToTarget passes, as H4 read them
+Parser:   parse_s9.py in the session scratchpad. It reproduces S9's published 1x medians for run a
+Chart:    2627-Y3A-PR-243663/assets/media/show-and-tell-frame-time-per-thread.svg and .png, run a
+```
+
+| Stat, 1x | Run a | Run b |
+|---|---|---|
+| `FrameTime` | 7.080 (7.815) | 9.810 (10.709) |
+| `RenderThreadTime` | 7.055 (7.759) | 9.787 (10.643) |
+| `GameThreadTime` | 2.789 (3.301) | 3.498 (4.158) |
+| `GPUTime` | 5.496 (5.865) | 5.561 (5.936) |
+| `SubsystemTick` | 0.279 (0.424) | 0.367 (0.540) |
+| inside it, `Paint` | 0.246 (0.377) | 0.325 (0.483) |
+| inside it, `ResolveQueries` | 0.028 (0.044) | 0.035 (0.054) |
+| `QuerySurfaceState`, the leader's 4 wheels | 0.076 (0.106) | 0.106 (0.147) |
+| **Surface system on the game thread**, tick plus queries | **0.355** | **0.473** |
+| Canvas passes on the GPU, frame 14501 | 0.085 | 0.170 |
+| Canvas passes on the GPU, frame 14701 | 0.095 | 0.126 |
+
+- **The surface system is 0.36 to 0.47 ms of game thread, 13 to 14 %.** H4 measured 1.2 to 1.3 ms
+  before H4.1. The difference is `RegisterContact`: no world-space contact is registered in these runs,
+  so the column is absent.
+- **The track-space registration has no stat.** `RegisterSurfaceContactInTrackSpace` is not timed, and
+  neither is the cars' own coordinate refinement, which H4.1 inferred at 0.1 to 0.16 ms. Both are
+  outside the 0.36 to 0.47 ms.
+- **On the GPU it is 0.09 to 0.17 ms, about 2 to 3 %.** Run b's frame 14501 has a two-draw first pass at
+  0.083 ms against 0.022 in run a. That is not explained.
+- **The plugin's two game-thread stats are summed as medians.** They do not nest, as in H4, but the sum
+  of two medians is not the median of their sum.
+- Run b is 2.7 ms slower on the render thread than run a, the drift S9 already recorded. The chart uses
+  run a.
+
+### Not verified
+
+- Anything after 2026-10-26: TSR turned on by default (host `8a542b0`) and the 128x decay ceiling
+  (`93ae9db`) are not in these runs. TSR's own GPU cost was measured at about 1.5 ms in H2.
+- The render thread's share. No surface work is timed on it.
+- The decay pass in these runs. The chart's 1.4 to 1.6 ms is H4 run D.
