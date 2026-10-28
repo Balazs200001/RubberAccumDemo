@@ -1015,7 +1015,7 @@ bool FRacetrackCircuitDecayRateReachesZeroAndTheCeiling::RunTest(const FString& 
 			Ascending[0],
 			0.25f);
 
-		TestEqual(TEXT("Pressing faster stops at the twenty times ceiling"), Ascending.Last(), 20.0f);
+		TestEqual(TEXT("Pressing faster stops at the 128 times ceiling"), Ascending.Last(), 128.0f);
 	}
 
 	TestTrue(TEXT("Pressing slower walks back down"), Descending.Num() > 0);

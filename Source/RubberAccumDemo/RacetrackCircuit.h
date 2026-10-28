@@ -409,7 +409,7 @@ protected:
 	float SlowestDecayRate = 0.25f;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Decay", meta = (ClampMin = "1.0"))
-	float FastestDecayRate = 20.0f;
+	float FastestDecayRate = 128.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Racetrack Circuit|Decay", meta = (ClampMin = "0.1"))
 	double DecayHalfLifeInLaps = 56.0;
